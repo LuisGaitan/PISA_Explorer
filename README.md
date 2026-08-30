@@ -28,7 +28,7 @@ Raw data stays where it is, read-only, and is never committed:
 
 ```
 pip install -r requirements.txt
-python pipeline/convert.py       # ~43 GB SAS -> Parquet; hours for the big files
+python pipeline/convert.py       # ~43 GB SAS -> ~3.7 GB Parquet, ~25 min total
 python pipeline/build_db.py
 python pipeline/validate.py
 ```
