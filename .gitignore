@@ -1,6 +1,9 @@
 # Rebuildable data outputs — never commit data
 data/
 
+# Secrets — never commit keys
+.env
+
 # Python
 __pycache__/
 *.pyc

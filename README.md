@@ -22,6 +22,9 @@ explorer/
   estimator.py     PV x Fay-BRR replicate engine (the survey-methodology core)
   analysis.py      templates: weighted_mean, weighted_proportion, gap, trend
   demo.py          end-to-end demo:  python -m explorer.demo
+  llm.py           Gemini API client (key from GEMINI_API_KEY env var or .env file)
+  agent.py         question -> retrieval -> plan -> validated execution -> provenance
+  chat.py          terminal chat:  python -m explorer.chat ["question"]
 data/              (gitignored) parquet/, metadata/, catalog/, pisa.duckdb — fully rebuildable
 ```
 
@@ -40,6 +43,29 @@ python pipeline/build_catalog.py
 python pipeline/validate.py
 python -m explorer.demo          # end-to-end check (~1 s)
 ```
+
+## Chat with the data
+
+Put your Gemini key in a `.env` file at the repo root (gitignored):
+
+```
+GEMINI_API_KEY=your-key-here
+```
+
+Then:
+
+```
+python -m explorer.chat "How did reading scores change in Finland between 2018 and 2022?"
+python -m explorer.chat            # interactive; /export file.csv saves the last table
+```
+
+Every answer prints its provenance: source tables, the variables used with
+their codebook labels, the filter, the number of students behind each number
+(and the population they represent), and the exact statistical method. The
+LLM only fills in validated analysis templates — retrieval feeds it ~40
+catalog cards, never a schema dump; raw SQL (the escape hatch) is read-only,
+SELECT-only, and always displayed. Variable substitutions are always stated,
+never silent.
 
 `convert.py` is idempotent (skips finished files; `--force` to redo,
 `--only 2022` / `--only stu_qqq_2018` to filter). Every Parquet file is written
