@@ -1,0 +1,11 @@
+# Rebuildable data outputs — never commit data
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS / editor
+Thumbs.db
+.DS_Store
