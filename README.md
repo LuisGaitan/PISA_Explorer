@@ -12,11 +12,17 @@ Full background, audit findings, and the agreed architecture live in
 
 ```
 pipeline/
-  sources.py    registry of raw SAS files + official row counts
-  convert.py    SAS7BDAT -> Parquet (chunked, atomic writes, self-validating)
-  build_db.py   builds data/pisa.duckdb (views over Parquet + escs_trend table)
-  validate.py   checks row counts, key columns, economy counts
-data/           (gitignored) parquet/, metadata/, pisa.duckdb — fully rebuildable
+  sources.py       registry of raw SAS files + official row counts
+  convert.py       SAS7BDAT -> Parquet (chunked, atomic writes, self-validating)
+  build_db.py      builds data/pisa.duckdb (views over Parquet + escs_trend table)
+  build_catalog.py variable catalog + value labels + cross-cycle comparability map
+  validate.py      checks row counts, key columns, economy counts
+explorer/
+  catalog.py       keyword retrieval over the 23k-variable catalog (search/describe/comparability)
+  estimator.py     PV x Fay-BRR replicate engine (the survey-methodology core)
+  analysis.py      templates: weighted_mean, weighted_proportion, gap, trend
+  demo.py          end-to-end demo:  python -m explorer.demo
+data/              (gitignored) parquet/, metadata/, catalog/, pisa.duckdb — fully rebuildable
 ```
 
 Raw data stays where it is, read-only, and is never committed:
@@ -30,7 +36,9 @@ Raw data stays where it is, read-only, and is never committed:
 pip install -r requirements.txt
 python pipeline/convert.py       # ~43 GB SAS -> ~3.7 GB Parquet, ~25 min total
 python pipeline/build_db.py
+python pipeline/build_catalog.py
 python pipeline/validate.py
+python -m explorer.demo          # end-to-end check (~1 s)
 ```
 
 `convert.py` is idempotent (skips finished files; `--force` to redo,
@@ -56,12 +64,28 @@ The two cycles deliberately keep separate tables: questionnaires overlap but
 are not identical across cycles (variables added/dropped/renamed), so
 cross-cycle comparability is a per-variable decision made at query time.
 
-## Methodology rules (for everything built on top)
+## Catalog and statistics layer
+
+`catalog_variables` (23,307 rows, one per variable per table, ~95% with value
+labels) and `catalog_comparability` (cross-cycle availability of 16,233
+variables in the 8 shared instruments) live both as DuckDB tables and as
+Parquet under `data/catalog/`. `explorer.catalog.search()` is the retrieval
+function the AI layer will call — only the ~15 relevant variables ever reach
+a prompt. 2018 value labels are recovered by combining each instrument's
+`.FORMAT.SAS` (variable -> format name) with its `.SAS7BCAT` catalog
+(format -> labels, latin1); 2022 labels come from the SPSS files.
+
+## Methodology rules (implemented in `explorer/estimator.py`)
 
 - Population statistics always use the final student weight `W_FSTUWT`.
 - Point estimates for achievement average over all 10 plausible values.
 - Standard errors: Fay's BRR (k = 0.5) over `W_FSTURWT1`–`W_FSTURWT80`,
-  combined with between-PV imputation variance.
-- Codes stay in the data; labels come from `data/metadata/*.json`
-  (column + value labels captured at conversion time) and are applied at
+  combined with between-PV imputation variance (Rubin's rules).
+- Group gaps are differenced replicate-wise (correct covariance handling);
+  cross-cycle trends add variances (independent samples; OECD link error not
+  yet included — flagged in `analysis.trend`).
+- **Validated:** country means AND standard errors reproduce the published
+  PISA 2018/2022 figures (e.g. USA 2022 math 465 SE 4.0, FIN 484 SE 1.9,
+  KOR 527 SE 3.9).
+- Codes stay in the data; labels come from the catalog and are applied at
   display time.
