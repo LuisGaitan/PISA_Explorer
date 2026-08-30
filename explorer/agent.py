@@ -73,6 +73,9 @@ Reply with ONLY this JSON:
  "where": SQL boolean filter or null, e.g. "CNT IN ('USA','KOR')",
  "sql": str|null  (raw_sql only: one read-only SELECT; use this ONLY when no
         template fits — raw SQL gets no automatic weighting/PV/BRR treatment),
+ "sort_by": "estimate"|"change"|null, "sort_desc": bool, "top_n": int|null
+        (for ranking/top-N/bottom-N questions: the system sorts the result and
+        keeps top_n rows, so the reported rows ARE the answer),
  "substitution_note": str|null,
  "explanation": one sentence of what will be computed
 }}
@@ -169,6 +172,16 @@ class Agent:
                           by=[c for c in by] + (["contrast"] if template == "gap" else []))
         else:
             table = per_cycle[cycles[0]].assign(cycle=cycles[0])
+
+        sort_by = plan.get("sort_by")
+        if sort_by:
+            candidates = [sort_by, "estimate_2022" if sort_by == "estimate" else sort_by]
+            col = next((c for c in candidates if c in table.columns), None)
+            if col:
+                table = table.sort_values(col, ascending=not plan.get("sort_desc", True))
+        if plan.get("top_n"):
+            table = table.head(int(plan["top_n"]))
+        table = table.reset_index(drop=True)
 
         prov = self._provenance(plan, tables)
         return table, prov
@@ -287,11 +300,18 @@ class Agent:
                                plan=plan, retrieved=hits, error=str(e))
 
         shown = table.head(30).round(2)
+        truncation = (
+            f"WARNING: the table has {len(table)} rows but only the first 30 are "
+            f"shown below. If the question needs rows beyond these (rankings, "
+            f"extremes, totals), say the full table is in the result — NEVER "
+            f"answer it from this partial view.\n"
+        ) if len(table) > 30 else ""
         summary_prompt = (
             f"QUESTION: {question}\n"
             f"PLANNED: {plan.get('explanation')}\n"
             f"METHOD: {provenance['method']}\n"
             f"NOTES: {'; '.join(provenance['notes']) or 'none'}\n"
+            f"{truncation}"
             f"RESULT TABLE (CSV):\n{shown.to_csv(index=False)}"
         )
         answer = generate(summary_prompt, system=SUMMARY_SYSTEM)
