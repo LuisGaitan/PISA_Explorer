@@ -80,12 +80,14 @@
     position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface);
     border-top: 1px solid var(--border); padding: 14px 20px;
   }
-  form.askbar .inner { max-width: 900px; margin: 0 auto; display: flex; gap: 10px; }
-  form.askbar input {
+  form.askbar .inner { max-width: 900px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+  form.askbar textarea {
     flex: 1; background: var(--page); color: var(--ink);
-    border: 1px solid var(--baseline); border-radius: 8px; padding: 10px 14px; font-size: 14px;
+    border: 1px solid var(--baseline); border-radius: 8px; padding: 10px 14px;
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    resize: none; max-height: 180px; overflow-y: auto;
   }
-  form.askbar input:focus { outline: 2px solid var(--series1); border-color: transparent; }
+  form.askbar textarea:focus { outline: 2px solid var(--series1); border-color: transparent; }
   form.askbar button {
     background: var(--series1); color: #fff; border: 0; border-radius: 8px;
     padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
@@ -112,7 +114,9 @@
 </main>
 <form class="askbar" id="askform">
   <div class="inner">
-    <input id="qbox" autocomplete="off" placeholder="Ask a question about PISA 2018 / 2022…" maxlength="2000">
+    <textarea id="qbox" rows="1" autocomplete="off"
+      placeholder="Ask a question about PISA 2018 / 2022…  (Enter to send, Shift+Enter for a new line)"
+      maxlength="2000"></textarea>
     <button id="askbtn" type="submit">Ask</button>
   </div>
 </form>
@@ -451,11 +455,23 @@ const $form = document.getElementById("askform");
 const $q = document.getElementById("qbox");
 const $btn = document.getElementById("askbtn");
 
+function autosize() {                    // grow with content, capped by CSS max-height
+  $q.style.height = "auto";
+  $q.style.height = $q.scrollHeight + "px";
+}
+$q.addEventListener("input", autosize);
+$q.addEventListener("keydown", e => {    // Enter sends, Shift+Enter = newline
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    $form.requestSubmit();
+  }
+});
+
 $form.addEventListener("submit", async e => {
   e.preventDefault();
   const question = $q.value.trim();
   if (!question) return;
-  $q.value = ""; $btn.disabled = true;
+  $q.value = ""; autosize(); $btn.disabled = true;
   const hint = document.querySelector(".hint"); if (hint) hint.remove();
 
   const qEl = el("div", "q"); qEl.appendChild(el("span", null, question));

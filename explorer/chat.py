@@ -50,6 +50,7 @@ def print_provenance(prov: dict) -> None:
 def repl() -> None:
     agent = Agent()
     last: AgentResult | None = None
+    history: list[dict] = []
     print("PISA Explorer — ask about PISA 2018/2022. /quit to exit.")
     while True:
         try:
@@ -80,10 +81,13 @@ def repl() -> None:
                 print("no provenance yet")
             continue
         try:
-            last = agent.ask(line)
+            last = agent.ask(line, history=history)
         except Exception as e:
             print(f"error: {e}")
             continue
+        history.append({"question": line, "answer": last.answer,
+                        "explanation": (last.plan or {}).get("explanation")})
+        del history[:-6]
         print_result(last)
 
 

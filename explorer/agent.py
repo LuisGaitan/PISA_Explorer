@@ -35,12 +35,40 @@ FORBIDDEN_SQL = re.compile(
     r"\b(copy|attach|detach|install|load|pragma|export|import|create|insert|"
     r"update|delete|alter|drop|call|set|reset)\b", re.IGNORECASE)
 
-TERMS_SYSTEM = """You route questions about PISA 2018/2022 data.
+TERMS_SYSTEM = """You are the router inside PISA Explorer, a local app where a
+user chats with the OECD PISA 2018/2022 databases. How the app works (answer
+questions about it truthfully): the user's question becomes an analysis plan;
+validated survey statistics run locally; the app itself then AUTOMATICALLY
+renders a chart when the result has a chartable shape (group comparisons ->
+bar chart with 95% CI whiskers; 2018-vs-2022 -> dumbbell chart; group gaps ->
+diverging bars), plus the data table, a CSV export button, and a provenance
+card. Single-number results and raw-SQL results get a table but no chart — to
+get a chart, the user should ask for a comparison across groups, countries, or
+cycles. Never claim "I cannot visualize data": charts appear automatically for
+comparison-shaped results.
+
 Reply with JSON: {"data_question": bool, "search_terms": [str, ...], "direct_answer": str|null}.
-If the question needs data, give 2-6 short catalog search terms (constructs,
-topics, variable ideas — e.g. "gender", "mathematics", "socioeconomic status",
-"bullying", "immigrant"). If it is conversational or about PISA in general
-(no data needed), set data_question=false and write direct_answer."""
+If the question needs data — including a follow-up that continues or answers a
+clarification from the conversation context — set data_question=true and give
+2-6 short catalog search terms (constructs, topics, variable ideas — e.g.
+"gender", "mathematics", "socioeconomic status", "bullying", "immigrant").
+If it is conversational, about PISA in general, or about this app's abilities
+(no data needed), set data_question=false and write direct_answer.
+
+direct_answer speaks AS the app ("PISA Explorer"), never as a language model:
+never say "I am an AI / text-based model", never mention routing or search
+terms. Example:
+  User: "can you show me a visualization / chart of that?"
+  -> {"data_question": false, "search_terms": [],
+      "direct_answer": "Charts appear automatically when a result compares
+      groups: country or group comparisons draw bars with confidence whiskers,
+      2018-vs-2022 questions draw dumbbells, and gaps draw diverging bars.
+      The last result was a single number, which has no chart form — ask for a
+      comparison instead (for example: 'compare reading scores for students
+      with high vs low ICT autonomy, top vs bottom quartile, by country') and
+      the chart will render with it."}
+A follow-up like "yes, top vs bottom quartile" that answers a clarifying
+question IS a data question — combine it with the context and route it to data."""
 
 PLAN_SYSTEM = """You plan analyses of the OECD PISA 2018 and 2022 databases.
 
@@ -277,15 +305,48 @@ class Agent:
 
     # ---------- the full loop ----------
 
-    def ask(self, question: str) -> AgentResult:
-        route = generate_json(f"Question: {question}", system=TERMS_SYSTEM)
+    @staticmethod
+    def _transcript(history) -> str:
+        """Compact conversation context: last few exchanges, truncated."""
+        if not history:
+            return ""
+        lines = []
+        for h in history[-4:]:
+            lines.append(f"User: {h['question'][:400]}")
+            lines.append(f"Assistant: {(h.get('answer') or '')[:400]}")
+            if h.get("explanation"):
+                lines.append(f"  (analysis run: {h['explanation'][:200]})")
+        return "CONVERSATION SO FAR (use it to resolve follow-ups and answers " \
+               "to clarifying questions):\n" + "\n".join(lines) + "\n\n"
+
+    # Deterministic, honest answer for "can you chart/visualize that?" —
+    # the router LLM cannot be trusted to describe the app's own abilities
+    # (it reverts to "I am a text-based AI"), so the app answers this itself.
+    VIZ_WORDS = re.compile(r"\b(visuali[sz]|chart|graph|plot|diagram|draw)", re.IGNORECASE)
+    VIZ_ANSWER = (
+        "Charts render automatically whenever a result compares things: country "
+        "or group comparisons draw bar charts with 95%-confidence whiskers, "
+        "2018-vs-2022 questions draw dumbbell charts, and group gaps draw "
+        "diverging bars. A single-number result (like a lone correlation or one "
+        "average) has no chart form, so only its table is shown. To get a chart, "
+        "ask for a comparison — across countries, groups (gender, immigrant "
+        "background, grade repetition…), or the two cycles. For example: "
+        "“compare reading scores for boys and girls in Spain, France and "
+        "Germany in 2022”."
+    )
+
+    def ask(self, question: str, history: list | None = None) -> AgentResult:
+        context = self._transcript(history)
+        route = generate_json(f"{context}Question: {question}", system=TERMS_SYSTEM)
         if not route.get("data_question"):
+            if self.VIZ_WORDS.search(question):
+                return AgentResult(question, self.VIZ_ANSWER)
             return AgentResult(question, route.get("direct_answer")
                                or "Could you rephrase that?")
 
         hits = self._retrieve(route.get("search_terms") or [])
         plan = generate_json(
-            f"QUESTION: {question}\n\nVARIABLE CARDS:\n{self._cards(hits)}",
+            f"{context}QUESTION: {question}\n\nVARIABLE CARDS:\n{self._cards(hits)}",
             system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS)),
         )
         if plan.get("action") == "clarify":

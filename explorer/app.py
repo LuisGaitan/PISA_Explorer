@@ -20,6 +20,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 _agent: Agent | None = None
 _agent_lock = threading.Lock()
+_history: list[dict] = []   # last few exchanges, for follow-up questions
 
 
 def get_agent() -> Agent:
@@ -81,7 +82,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "question too long"})
                 return
             with _agent_lock:
-                result = get_agent().ask(question)
+                result = get_agent().ask(question, history=_history)
+                _history.append({
+                    "question": question,
+                    "answer": result.answer,
+                    "explanation": (result.plan or {}).get("explanation"),
+                })
+                del _history[:-6]
             self._send_json(200, result_payload(result))
         except Exception as e:
             self._send_json(500, {"error": str(e)})
