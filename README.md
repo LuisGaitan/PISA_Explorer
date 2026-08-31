@@ -20,7 +20,9 @@ pipeline/
 explorer/
   catalog.py       keyword retrieval over the 23k-variable catalog (search/describe/comparability)
   estimator.py     PV x Fay-BRR replicate engine (the survey-methodology core)
-  analysis.py      templates: weighted_mean, weighted_proportion, gap, trend
+  analysis.py      templates: weighted_mean, weighted_proportion, gap, trend,
+                   quartile_means, quartile_gap (weighted within-group quartiles),
+                   correlation (weighted, PV-aware, BRR SE)
   demo.py          end-to-end demo:  python -m explorer.demo
   llm.py           Gemini API client (key from GEMINI_API_KEY env var or .env file)
   agent.py         question -> retrieval -> plan -> validated execution -> provenance

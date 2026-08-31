@@ -21,7 +21,15 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from . import catalog
-from .analysis import gap, trend, weighted_mean, weighted_proportion
+from .analysis import (
+    correlation,
+    gap,
+    quartile_gap,
+    quartile_means,
+    trend,
+    weighted_mean,
+    weighted_proportion,
+)
 from .db import connect
 from .llm import generate, generate_json
 
@@ -88,7 +96,8 @@ Reply with ONLY this JSON:
 {{
  "action": "analyze" | "clarify",
  "clarify": str|null,
- "template": "weighted_mean"|"weighted_proportion"|"gap"|"raw_sql",
+ "template": "weighted_mean"|"weighted_proportion"|"gap"|"quartile_means"|
+             "quartile_gap"|"correlation"|"raw_sql",
  "cycles": ["2018","2022"] or ["2022"] or ["2018"],
  "instrument": "stu_qqq" etc.,
  "measure": SQL expression; write {{pv}} for the plausible-value slot, e.g. "PV{{pv}}MATH",
@@ -97,6 +106,14 @@ Reply with ONLY this JSON:
             % of valid respondents with variable=value; valid_values = the non-missing codes),
  "group_col": str|null, "minuend": num|null, "subtrahend": num|null     (gap: mean of
             minuend group minus subtrahend group),
+ "quart_variable": str|null   (quartile_means / quartile_gap: the CONTINUOUS
+            variable whose weighted within-group quartiles define the groups,
+            e.g. "ESCS"; quartile_means returns the mean of `measure` in each
+            quarter 1..4, quartile_gap returns top minus bottom quarter),
+ "x": str|null, "y": str|null   (correlation: the two variables/expressions;
+            {{pv}} allowed, e.g. x="AUTICT", y="PV{{pv}}READ" — this is the
+            WEIGHTED correlation with a proper BRR standard error; always
+            prefer it over raw_sql corr()),
  "by": [grouping columns, usually ["CNT"]],
  "where": SQL boolean filter or null, e.g. "CNT IN ('USA','KOR')",
  "sql": str|null  (raw_sql only: one read-only SELECT; use this ONLY when no
@@ -112,7 +129,13 @@ Rules: comparisons across cycles => cycles=["2018","2022"] (the system runs the
 template per cycle and differences them). Achievement questions always use the
 PV{{pv}} form. Filter to the countries the user names; if none named, ask
 yourself whether all 80 economies is really wanted — for rankings it is.
-Percentages of a category => weighted_proportion with valid_values listed."""
+Percentages of a category => weighted_proportion with valid_values listed.
+"High vs low X" for a continuous X => quartile_gap (never invent thresholds).
+Share below/above a PISA proficiency level => weighted_mean with a threshold
+measure, e.g. "% below Level 2 in math" => measure =
+"CASE WHEN PV{{pv}}MATH < 420.07 THEN 100.0 ELSE 0.0 END"
+(Level 2 lower bounds — math 420.07, reading 407.47, science 409.54;
+ Level 5 lower bounds — math 606.99, reading 625.61, science 633.33)."""
 
 SUMMARY_SYSTEM = """You summarize PISA analysis results for a general audience.
 Write 2-5 sentences. Cite the key numbers with their standard errors like
@@ -191,13 +214,28 @@ class Agent:
             elif template == "gap":
                 res = gap(self.con, tbl, plan["measure"], plan["group_col"],
                           plan["minuend"], plan["subtrahend"], by=by, where=where)
+            elif template == "quartile_means":
+                self._check_fragment(plan["quart_variable"])
+                res = quartile_means(self.con, tbl, plan["measure"],
+                                     plan["quart_variable"], by=by, where=where)
+            elif template == "quartile_gap":
+                self._check_fragment(plan["quart_variable"])
+                res = quartile_gap(self.con, tbl, plan["measure"],
+                                   plan["quart_variable"], by=by, where=where)
+            elif template == "correlation":
+                self._check_fragment(plan["x"])
+                self._check_fragment(plan["y"])
+                res = correlation(self.con, tbl, plan["x"], plan["y"],
+                                  by=by, where=where)
             else:
                 raise ValueError(f"unknown template {template!r}")
             per_cycle[cycle] = res
 
+        extra_keys = {"gap": ["contrast"], "quartile_gap": ["contrast"],
+                      "quartile_means": ["quarter"]}.get(template, [])
         if len(cycles) == 2:
             table = trend(per_cycle["2018"], per_cycle["2022"],
-                          by=[c for c in by] + (["contrast"] if template == "gap" else []))
+                          by=[c for c in by] + extra_keys)
         else:
             table = per_cycle[cycles[0]].assign(cycle=cycles[0])
 
@@ -240,7 +278,8 @@ class Agent:
 
     def _referenced_variables(self, plan: dict, tables: list[str]) -> list[dict]:
         text = " ".join(str(plan.get(k) or "") for k in
-                        ("measure", "variable", "group_col", "where", "by"))
+                        ("measure", "variable", "group_col", "where", "by",
+                         "quart_variable", "x", "y"))
         text = text.replace("{pv}", "1")  # PV{pv}MATH -> PV1MATH (stands for all 10)
         tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text))
         tokens |= {"W_FSTUWT"}
@@ -266,11 +305,22 @@ class Agent:
                                    "(W_FSTUWT). SE: Fay's BRR, k=0.5, 80 replicates.",
             "gap": "Group difference computed replicate-wise (correct covariance). "
                    "Weighted by W_FSTUWT; SE: Fay's BRR, k=0.5, 80 replicates.",
+            "quartile_means": "Weighted mean per weighted quarter of "
+                              f"{plan.get('quart_variable')} (quartiles computed with "
+                              "W_FSTUWT within each group, OECD convention; 1=bottom, "
+                              "4=top). SE: Fay's BRR, k=0.5, 80 replicates.",
+            "quartile_gap": "Top minus bottom weighted quarter of "
+                            f"{plan.get('quart_variable')} (quartiles computed with "
+                            "W_FSTUWT within each group), differenced replicate-wise. "
+                            "SE: Fay's BRR, k=0.5, 80 replicates.",
+            "correlation": "Weighted Pearson correlation (W_FSTUWT). "
+                           "SE: Fay's BRR, k=0.5, 80 replicates.",
             "raw_sql": "Direct SQL — NO automatic weighting/PV/BRR treatment; "
                        "results are not population estimates unless the query weights them.",
         }
         method = methods.get(template, "")
-        if "{pv}" in str(plan.get("measure") or ""):
+        pv_fields = " ".join(str(plan.get(k) or "") for k in ("measure", "x", "y"))
+        if "{pv}" in pv_fields:
             method += " Point estimate averaged over 10 plausible values (Rubin's rules)."
         notes = []
         if plan.get("substitution_note"):

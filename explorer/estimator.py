@@ -56,17 +56,34 @@ def replicate_estimates(
     """
     exprs = _pv_list(measure)
     measure_cols = [f"m_{i}" for i in range(1, len(exprs) + 1)]
+    df = fetch_frame(con, table, exprs, by=by, where=where)
+    return replicates_from_frame(df, measure_cols, by=by)
+
+
+def fetch_frame(
+    con, table: str, exprs: list[str], by=(), where: str | None = None,
+    extra: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    """Project just what the estimator needs: group columns, each measure
+    expression as m_1..m_k, optional named extra expressions, all 81 weights."""
     select = (
         list(by)
         + [f"({e}) AS m_{i}" for i, e in enumerate(exprs, start=1)]
+        + [f"({e}) AS {name}" for name, e in (extra or {}).items()]
         + ALL_WEIGHTS
     )
     sql = f"SELECT {', '.join(select)} FROM {table}"
     if where:
         sql += f" WHERE {where}"
-    df = con.sql(sql).df()
+    return con.sql(sql).df()
 
-    n_pv, n_w = len(exprs), len(ALL_WEIGHTS)
+
+def replicates_from_frame(
+    df: pd.DataFrame, measure_cols: list[str], by=()
+) -> pd.DataFrame:
+    """The estimation core, on an already-fetched frame (which may carry
+    derived columns, e.g. a weighted-quartile assignment)."""
+    n_pv, n_w = len(measure_cols), len(ALL_WEIGHTS)
     groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
 
     key_rows, blocks = [], []
