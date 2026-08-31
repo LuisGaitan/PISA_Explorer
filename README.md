@@ -25,6 +25,8 @@ explorer/
   llm.py           Gemini API client (key from GEMINI_API_KEY env var or .env file)
   agent.py         question -> retrieval -> plan -> validated execution -> provenance
   chat.py          terminal chat:  python -m explorer.chat ["question"]
+  app.py           local web app:  python -m explorer.app  ->  http://127.0.0.1:8765
+  static/index.html  the web UI (chat, charts with 95% CI, tables, provenance, CSV export)
 data/              (gitignored) parquet/, metadata/, catalog/, pisa.duckdb — fully rebuildable
 ```
 
@@ -66,6 +68,19 @@ LLM only fills in validated analysis templates — retrieval feeds it ~40
 catalog cards, never a schema dump; raw SQL (the escape hatch) is read-only,
 SELECT-only, and always displayed. Variable substitutions are always stated,
 never silent.
+
+## Web app
+
+```
+python -m explorer.app           # opens on http://127.0.0.1:8765 (local only)
+```
+
+Same engine as the CLI, plus charts: country comparisons render as bars with
+95%-confidence whiskers, 2018→2022 questions as dumbbells (2018 → 2022 dots),
+gaps as diverging bars around zero. Every chart has hover tooltips (value, SE,
+CI, significance), sits above its full data table (Export CSV button), and
+carries the same provenance card. Light/dark follows the OS. `?demo=1` renders
+sample charts offline for a quick look without spending API calls.
 
 `convert.py` is idempotent (skips finished files; `--force` to redo,
 `--only 2022` / `--only stu_qqq_2018` to filter). Every Parquet file is written

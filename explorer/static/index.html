@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PISA Explorer</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb;
+    --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --series1: #2a78d6; --series1-soft: #86b6ef; --neg: #e34948;
+    --accent-wash: rgba(42,120,214,0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19;
+      --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+      --series1: #3987e5; --series1-soft: #86b6ef; --neg: #e66767;
+      --accent-wash: rgba(57,135,229,0.12);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    padding: 20px 24px 14px; border-bottom: 1px solid var(--border);
+    background: var(--surface); position: sticky; top: 0; z-index: 5;
+  }
+  header h1 { margin: 0; font-size: 17px; font-weight: 650; }
+  header p  { margin: 2px 0 0; color: var(--ink2); font-size: 12.5px; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px 20px 120px; }
+  .q {
+    margin: 26px 0 10px; display: flex; justify-content: flex-end;
+  }
+  .q span {
+    background: var(--accent-wash); border: 1px solid var(--border);
+    padding: 8px 14px; border-radius: 14px 14px 3px 14px; max-width: 75%;
+  }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin: 10px 0;
+  }
+  .card.answer { font-size: 14.5px; }
+  .card.error { border-color: var(--neg); color: var(--ink2); }
+  .thinking { color: var(--muted); font-style: italic; }
+  .chart-title { font-size: 12.5px; color: var(--ink2); margin: 0 0 10px; font-weight: 600; }
+  .legend { display: flex; gap: 16px; margin: 0 0 8px; font-size: 12px; color: var(--ink2); }
+  .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { font: 11.5px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .ticktext { font-variant-numeric: tabular-nums; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th { text-align: left; color: var(--ink2); font-weight: 600; border-bottom: 1px solid var(--baseline); padding: 5px 10px 5px 0; }
+  td { border-bottom: 1px solid var(--grid); padding: 4px 10px 4px 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tablebar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .tablebar span { font-size: 12.5px; color: var(--ink2); font-weight: 600; }
+  button.export {
+    background: none; border: 1px solid var(--border); color: var(--ink2);
+    border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  }
+  button.export:hover { background: var(--accent-wash); }
+  .prov { font-size: 12.5px; color: var(--ink2); }
+  .prov .lead { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+  .prov b { color: var(--ink); font-weight: 600; }
+  .prov details { margin-top: 8px; }
+  .prov summary { cursor: pointer; color: var(--muted); }
+  .prov ul { margin: 6px 0 0; padding-left: 18px; }
+  .prov .note { margin-top: 8px; color: var(--ink2); }
+  .prov .note::before { content: "⚠ "; }
+  details.plan { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+  details.plan pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-x: auto; color: var(--ink2); }
+  form.askbar {
+    position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface);
+    border-top: 1px solid var(--border); padding: 14px 20px;
+  }
+  form.askbar .inner { max-width: 900px; margin: 0 auto; display: flex; gap: 10px; }
+  form.askbar input {
+    flex: 1; background: var(--page); color: var(--ink);
+    border: 1px solid var(--baseline); border-radius: 8px; padding: 10px 14px; font-size: 14px;
+  }
+  form.askbar input:focus { outline: 2px solid var(--series1); border-color: transparent; }
+  form.askbar button {
+    background: var(--series1); color: #fff; border: 0; border-radius: 8px;
+    padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  form.askbar button:disabled { opacity: .5; cursor: default; }
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 20; display: none;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 11px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.12); max-width: 300px;
+  }
+  #tooltip .val { font-size: 14px; font-weight: 650; color: var(--ink); }
+  #tooltip .lab { color: var(--ink2); }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PISA Explorer</h1>
+  <p>Ask about the OECD PISA 2018 &amp; 2022 databases — survey-weighted, plausible-value-correct, with full provenance.</p>
+</header>
+<main id="log">
+  <p class="hint">Try: “How did the math gender gap change in the US between 2018 and 2022?”<br>
+  “Which 5 countries had the highest reading scores in 2022?” · “What share of students in Brazil repeated a grade?”</p>
+</main>
+<form class="askbar" id="askform">
+  <div class="inner">
+    <input id="qbox" autocomplete="off" placeholder="Ask a question about PISA 2018 / 2022…" maxlength="2000">
+    <button id="askbtn" type="submit">Ask</button>
+  </div>
+</form>
+<div id="tooltip"></div>
+
+<script>
+"use strict";
+const $log = document.getElementById("log");
+const $tip = document.getElementById("tooltip");
+const METRICS = new Set(["estimate","se","n_pv","estimate_2018","se_2018",
+                         "estimate_2022","se_2022","change","se_change","cycle"]);
+const css = name => getComputedStyle(document.body).getPropertyValue(name);
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+const svgNS = "http://www.w3.org/2000/svg";
+function sv(tag, attrs) {
+  const node = document.createElementNS(svgNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  return node;
+}
+const fmt = (x, d = 1) => (x === null || x === undefined || Number.isNaN(+x))
+  ? "–" : (+x).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: 0 });
+
+/* ---------- tooltip ---------- */
+function showTip(evt, valueText, labelText, extraLines) {
+  $tip.replaceChildren();
+  $tip.appendChild(el("div", "val", valueText));
+  $tip.appendChild(el("div", "lab", labelText));
+  for (const line of extraLines || []) $tip.appendChild(el("div", "lab", line));
+  $tip.style.display = "block";
+  const pad = 14, w = $tip.offsetWidth;
+  let x = evt.clientX + pad;
+  if (x + w > window.innerWidth - 8) x = evt.clientX - w - pad;
+  $tip.style.left = x + "px";
+  $tip.style.top = Math.max(8, evt.clientY - 10) + "px";
+}
+function hideTip() { $tip.style.display = "none"; }
+
+/* ---------- scales & ticks ---------- */
+function niceTicks(lo, hi, n = 5) {
+  const span = hi - lo || 1;
+  const step0 = span / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => span / s <= n) || mag * 10;
+  const start = Math.ceil(lo / step) * step;
+  const ticks = [];
+  for (let t = start; t <= hi + 1e-9; t += step) ticks.push(+t.toFixed(10));
+  return ticks;
+}
+
+/* ---------- chart: horizontal bars with 95% CI whiskers ---------- */
+function roundedBar(x0, x1, y, h) {   // square at baseline x0, 4px-round data end
+  const r = Math.min(4, Math.abs(x1 - x0), h / 2), right = x1 > x0;
+  if (Math.abs(x1 - x0) < 0.5) return "";
+  return right
+    ? `M${x0},${y} H${x1 - r} A${r},${r} 0 0 1 ${x1},${y + r} V${y + h - r} A${r},${r} 0 0 1 ${x1 - r},${y + h} H${x0} Z`
+    : `M${x0},${y} H${x1 + r} A${r},${r} 0 0 0 ${x1},${y + r} V${y + h - r} A${r},${r} 0 0 0 ${x1 + r},${y + h} H${x0} Z`;
+}
+
+function barChart(rows, catCols, valueKey, seKey, title) {
+  const cats = rows.map(r => catCols.map(c => r[c]).join(" · "));
+  const vals = rows.map(r => +r[valueKey]);
+  const ses  = rows.map(r => seKey ? +r[seKey] || 0 : 0);
+  let lo = Math.min(0, ...vals.map((v, i) => v - 1.96 * ses[i]));
+  let hi = Math.max(0, ...vals.map((v, i) => v + 1.96 * ses[i]));
+  if (lo < 0) lo -= (hi - lo) * 0.09;   // room for value labels beyond left whiskers
+  const diverging = vals.some(v => v < 0) && vals.some(v => v > 0) || vals.every(v => v < 0);
+
+  const W = 860, labelW = 150, padR = 60, rowH = 30, barH = 20, axisH = 26, padT = 6;
+  const H = padT + rows.length * rowH + axisH;
+  const x = v => labelW + (v - lo) / (hi - lo || 1) * (W - labelW - padR);
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}` });
+  svg.setAttribute("role", "img");
+
+  for (const t of niceTicks(lo, hi)) {
+    const g = sv("line", { x1: x(t), x2: x(t), y1: padT, y2: H - axisH, "stroke-width": 1 });
+    g.style.stroke = "var(--grid)";
+    svg.appendChild(g);
+    const tt = sv("text", { x: x(t), y: H - axisH + 16, "text-anchor": "middle", class: "ticktext" });
+    tt.style.fill = "var(--muted)"; tt.textContent = fmt(t, 2);
+    svg.appendChild(tt);
+  }
+  const zero = sv("line", { x1: x(0), x2: x(0), y1: padT, y2: H - axisH, "stroke-width": 1 });
+  zero.style.stroke = "var(--baseline)";
+  svg.appendChild(zero);
+
+  rows.forEach((r, i) => {
+    const y = padT + i * rowH + (rowH - barH) / 2;
+    const v = vals[i], se = ses[i];
+    const color = diverging ? (v >= 0 ? "var(--series1)" : "var(--neg)") : "var(--series1)";
+
+    const label = sv("text", { x: labelW - 8, y: y + barH / 2 + 4, "text-anchor": "end" });
+    label.style.fill = "var(--ink2)"; label.textContent = cats[i];
+    svg.appendChild(label);
+
+    const bar = sv("path", { d: roundedBar(x(0), x(v), y, barH) });
+    bar.style.fill = color;
+    svg.appendChild(bar);
+
+    if (se > 0) {
+      const a = x(v - 1.96 * se), b = x(v + 1.96 * se), cy = y + barH / 2;
+      for (const [x1, x2, y1, y2] of [[a, b, cy, cy], [a, a, cy - 4, cy + 4], [b, b, cy - 4, cy + 4]]) {
+        const wline = sv("line", { x1, x2, y1, y2, "stroke-width": 1.5 });
+        wline.style.stroke = "var(--ink2)";
+        svg.appendChild(wline);
+      }
+    }
+    if (rows.length <= 12) {
+      const outward = v >= 0;   // label beyond the whisker, on the bar's own side
+      const tipX = outward ? Math.max(x(v), x(v + 1.96 * se)) + 6
+                           : Math.min(x(v), x(v - 1.96 * se)) - 6;
+      const fits = outward ? tipX <= W - 4 : tipX >= labelW + 36;
+      if (fits) {   // otherwise the tooltip + table carry the value
+        const vt = sv("text", { x: tipX, y: y + barH / 2 + 4, class: "ticktext",
+                                "text-anchor": outward ? "start" : "end" });
+        vt.style.fill = "var(--ink2)"; vt.textContent = fmt(v);
+        svg.appendChild(vt);
+      }
+    }
+    const hit = sv("rect", { x: 0, y: padT + i * rowH, width: W, height: rowH, fill: "transparent" });
+    hit.addEventListener("pointermove", e => {
+      bar.style.filter = "brightness(1.12)";
+      showTip(e, fmt(v, 2), cats[i],
+        se > 0 ? [`SE ${fmt(se, 2)} · 95% CI [${fmt(v - 1.96 * se)}, ${fmt(v + 1.96 * se)}]`] : []);
+    });
+    hit.addEventListener("pointerleave", () => { bar.style.filter = ""; hideTip(); });
+    svg.appendChild(hit);
+  });
+
+  return wrapChart(svg, title);
+}
+
+/* ---------- chart: dumbbell for 2018 -> 2022 ---------- */
+function dumbbellChart(rows, catCols, k18, k22, se18k, se22k, title) {
+  const cats = rows.map(r => catCols.map(c => r[c]).join(" · "));
+  const v18 = rows.map(r => +r[k18]), v22 = rows.map(r => +r[k22]);
+  const s18 = rows.map(r => +r[se18k] || 0), s22 = rows.map(r => +r[se22k] || 0);
+  const all = [...v18.map((v, i) => v - 1.96 * s18[i]), ...v18.map((v, i) => v + 1.96 * s18[i]),
+               ...v22.map((v, i) => v - 1.96 * s22[i]), ...v22.map((v, i) => v + 1.96 * s22[i])];
+  const lo = Math.min(...all), hi = Math.max(...all);
+  const pad = (hi - lo) * 0.06 || 1;
+
+  const W = 860, labelW = 150, padR = 56, rowH = 32, axisH = 26, padT = 6;
+  const H = padT + rows.length * rowH + axisH;
+  const x = v => labelW + (v - (lo - pad)) / ((hi + pad) - (lo - pad)) * (W - labelW - padR);
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}` });
+
+  for (const t of niceTicks(lo - pad, hi + pad)) {
+    const g = sv("line", { x1: x(t), x2: x(t), y1: padT, y2: H - axisH, "stroke-width": 1 });
+    g.style.stroke = "var(--grid)"; svg.appendChild(g);
+    const tt = sv("text", { x: x(t), y: H - axisH + 16, "text-anchor": "middle", class: "ticktext" });
+    tt.style.fill = "var(--muted)"; tt.textContent = fmt(t, 0);
+    svg.appendChild(tt);
+  }
+
+  rows.forEach((r, i) => {
+    const cy = padT + i * rowH + rowH / 2;
+    const label = sv("text", { x: labelW - 8, y: cy + 4, "text-anchor": "end" });
+    label.style.fill = "var(--ink2)"; label.textContent = cats[i];
+    svg.appendChild(label);
+
+    const conn = sv("line", { x1: x(v18[i]), x2: x(v22[i]), y1: cy, y2: cy, "stroke-width": 1.5 });
+    conn.style.stroke = "var(--baseline)";
+    svg.appendChild(conn);
+
+    for (const [v, colorVar] of [[v18[i], "var(--series1-soft)"], [v22[i], "var(--series1)"]]) {
+      const dot = sv("circle", { cx: x(v), cy, r: 5.5, "stroke-width": 2 });
+      dot.style.fill = colorVar; dot.style.stroke = "var(--surface)";
+      svg.appendChild(dot);
+    }
+    if (rows.length <= 8) {
+      const outer = v22[i] >= v18[i];
+      const vt = sv("text", { x: x(v22[i]) + (outer ? 10 : -10), y: cy + 4,
+                              "text-anchor": outer ? "start" : "end", class: "ticktext" });
+      vt.style.fill = "var(--ink2)"; vt.textContent = fmt(v22[i]);
+      svg.appendChild(vt);
+    }
+    const change = r.change, seCh = r.se_change;
+    const hit = sv("rect", { x: 0, y: padT + i * rowH, width: W, height: rowH, fill: "transparent" });
+    hit.addEventListener("pointermove", e => {
+      const lines = [`2018: ${fmt(v18[i], 2)} (SE ${fmt(s18[i], 2)})`,
+                     `2022: ${fmt(v22[i], 2)} (SE ${fmt(s22[i], 2)})`];
+      if (change !== undefined && change !== null) {
+        const sig = Math.abs(+change) > 1.96 * (+seCh || 0) ? "significant" : "not significant";
+        lines.push(`change ${(+change >= 0 ? "+" : "") + fmt(change, 2)} (SE ${fmt(seCh, 2)}) — ${sig}`);
+      }
+      showTip(e, cats[i], "2018 → 2022", lines);
+    });
+    hit.addEventListener("pointerleave", hideTip);
+    svg.appendChild(hit);
+  });
+
+  const wrap = wrapChart(svg, title);
+  const legend = el("div", "legend");
+  for (const [name, colorVar] of [["PISA 2018", "var(--series1-soft)"], ["PISA 2022", "var(--series1)"]]) {
+    const item = el("span");
+    const dot = el("span", "dot"); dot.style.background = colorVar;
+    item.appendChild(dot); item.appendChild(document.createTextNode(name));
+    legend.appendChild(item);
+  }
+  wrap.insertBefore(legend, wrap.querySelector("svg"));
+  return wrap;
+}
+
+function wrapChart(svg, title) {
+  const card = el("div", "card chart");
+  if (title) card.appendChild(el("p", "chart-title", title));
+  card.appendChild(svg);
+  return card;
+}
+
+function buildChart(table, plan) {
+  if (!table || !table.rows.length || table.rows.length > 40) return null;
+  const cols = table.columns;
+  const catCols = cols.filter(c => !METRICS.has(c));
+  if (!catCols.length && table.rows.length > 1) return null;
+  const explain = (plan && plan.explanation) || "";
+  if (cols.includes("estimate_2018") && cols.includes("estimate_2022")) {
+    return dumbbellChart(table.rows, catCols.length ? catCols : cols.slice(0, 1),
+                         "estimate_2018", "estimate_2022", "se_2018", "se_2022", explain);
+  }
+  if (cols.includes("estimate")) {
+    if (!catCols.length) return null; // single number: the answer text is the chart
+    return barChart(table.rows, catCols, "estimate", "se",
+                    explain + "  (whiskers: 95% confidence interval)");
+  }
+  return null;
+}
+
+/* ---------- table & export ---------- */
+function buildTable(table) {
+  const card = el("div", "card");
+  const bar = el("div", "tablebar");
+  bar.appendChild(el("span", null, `Result table (${table.rows.length} rows)`));
+  const btn = el("button", "export", "Export CSV");
+  btn.type = "button";
+  btn.addEventListener("click", () => exportCSV(table));
+  bar.appendChild(btn);
+  card.appendChild(bar);
+  const wrap = el("div", "tablewrap");
+  const tbl = el("table");
+  const thead = el("thead"), hr = el("tr");
+  for (const c of table.columns) hr.appendChild(el("th", null, c));
+  thead.appendChild(hr); tbl.appendChild(thead);
+  const tbody = el("tbody");
+  for (const row of table.rows) {
+    const tr = el("tr");
+    for (const c of table.columns) {
+      const v = row[c];
+      tr.appendChild(el("td", null, typeof v === "number" ? fmt(v, 2) : (v ?? "–")));
+    }
+    tbody.appendChild(tr);
+  }
+  tbl.appendChild(tbody); wrap.appendChild(tbl); card.appendChild(wrap);
+  return card;
+}
+
+function exportCSV(table) {
+  const esc = v => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [table.columns.map(esc).join(",")];
+  for (const row of table.rows) lines.push(table.columns.map(c => esc(row[c])).join(","));
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "pisa_result.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ---------- provenance ---------- */
+function buildProvenance(prov) {
+  const card = el("div", "card prov");
+  const lead = el("div", "lead");
+  const add = (k, v) => { const s = el("span"); s.appendChild(el("b", null, k + " ")); s.appendChild(document.createTextNode(v)); lead.appendChild(s); };
+  add("Source:", prov.source);
+  add("Tables:", (prov.tables || []).join(", "));
+  add("Filter:", prov.filter);
+  for (const s of prov.sample || []) {
+    if (s.students) add("Sample:", `${s.table}: ${s.students.toLocaleString()} students` +
+      (s.weighted_students ? ` (≈${s.weighted_students.toLocaleString()} represented)` : ""));
+  }
+  card.appendChild(lead);
+  const method = el("div", null); method.style.marginTop = "6px";
+  method.appendChild(el("b", null, "Method: "));
+  method.appendChild(document.createTextNode(prov.method));
+  card.appendChild(method);
+  if (prov.sql) {
+    const sqlLine = el("div"); sqlLine.style.marginTop = "6px";
+    sqlLine.appendChild(el("b", null, "SQL: "));
+    const code = el("code", null, prov.sql); code.style.fontSize = "11.5px";
+    sqlLine.appendChild(code); card.appendChild(sqlLine);
+  }
+  if ((prov.variables || []).length) {
+    const det = el("details");
+    det.appendChild(el("summary", null, `Variables used (${prov.variables.length})`));
+    const ul = el("ul");
+    for (const v of prov.variables) ul.appendChild(el("li", null, `${v.variable} (${v.table}): ${v.label}`));
+    det.appendChild(ul); card.appendChild(det);
+  }
+  for (const n of prov.notes || []) card.appendChild(el("div", "note", n));
+  return card;
+}
+
+/* ---------- main flow ---------- */
+function renderResult(data, host) {
+  host.replaceChildren();
+  if (data.error && !data.answer) {
+    host.appendChild(el("div", "card error", "Error: " + data.error));
+    return;
+  }
+  host.appendChild(el("div", "card answer", data.answer));
+  if (data.table && data.table.rows.length) {
+    const chart = buildChart(data.table, data.plan);
+    if (chart) host.appendChild(chart);
+    host.appendChild(buildTable(data.table));
+  }
+  if (data.provenance) host.appendChild(buildProvenance(data.provenance));
+  if (data.plan) {
+    const det = el("details", "plan");
+    det.appendChild(el("summary", null, "Analysis plan (what the AI filled in)"));
+    const pre = el("pre", null, JSON.stringify(data.plan, null, 1));
+    det.appendChild(pre);
+    host.appendChild(det);
+  }
+}
+
+const $form = document.getElementById("askform");
+const $q = document.getElementById("qbox");
+const $btn = document.getElementById("askbtn");
+
+$form.addEventListener("submit", async e => {
+  e.preventDefault();
+  const question = $q.value.trim();
+  if (!question) return;
+  $q.value = ""; $btn.disabled = true;
+  const hint = document.querySelector(".hint"); if (hint) hint.remove();
+
+  const qEl = el("div", "q"); qEl.appendChild(el("span", null, question));
+  $log.appendChild(qEl);
+  const host = el("div");
+  host.appendChild(el("div", "card thinking", "Analyzing — retrieving variables, planning, running the statistics…"));
+  $log.appendChild(host);
+  host.scrollIntoView({ behavior: "smooth", block: "end" });
+
+  try {
+    const resp = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    const data = await resp.json();
+    renderResult(data, host);
+  } catch (err) {
+    host.replaceChildren(el("div", "card error", "Request failed: " + err.message));
+  } finally {
+    $btn.disabled = false; $q.focus();
+    host.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+});
+
+/* ---------- demo mode (?demo=1): renders sample results offline ---------- */
+if (new URLSearchParams(location.search).get("demo")) {
+  document.querySelector(".hint")?.remove();
+  const demo1 = {
+    answer: "Demo: mean mathematics scores, PISA 2022 (top 5).",
+    plan: { explanation: "Top 5 economies by weighted mean math score, PISA 2022" },
+    table: { columns: ["CNT", "estimate", "se", "cycle"], rows: [
+      { CNT: "SGP", estimate: 574.66, se: 1.23, cycle: "2022" },
+      { CNT: "MAC", estimate: 551.92, se: 1.10, cycle: "2022" },
+      { CNT: "TAP", estimate: 547.09, se: 3.78, cycle: "2022" },
+      { CNT: "HKG", estimate: 540.35, se: 2.99, cycle: "2022" },
+      { CNT: "JPN", estimate: 535.58, se: 2.93, cycle: "2022" }]},
+    provenance: { source: "OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP)",
+      tables: ["stu_qqq_2022"], filter: "none (all rows)",
+      sample: [{ table: "stu_qqq_2022", students: 613744, weighted_students: 28255206 }],
+      method: "Weighted mean (W_FSTUWT). SE: Fay's BRR, k=0.5, 80 replicates. 10 PVs (Rubin's rules).",
+      variables: [{ variable: "PV1MATH", table: "stu_qqq_2022", label: "Plausible Value 1 in Mathematics" }],
+      notes: [] } };
+  const demo2 = {
+    answer: "Demo: mean reading score 2018 → 2022 (dumbbell).",
+    plan: { explanation: "Mean reading score by country, 2018 vs 2022" },
+    table: { columns: ["CNT", "estimate_2018", "se_2018", "estimate_2022", "se_2022", "change", "se_change"], rows: [
+      { CNT: "FIN", estimate_2018: 520.08, se_2018: 2.31, estimate_2022: 490.22, se_2022: 2.26, change: -29.86, se_change: 3.23 },
+      { CNT: "USA", estimate_2018: 505.35, se_2018: 3.57, estimate_2022: 503.94, se_2022: 4.33, change: -1.42, se_change: 5.61 },
+      { CNT: "KOR", estimate_2018: 514.05, se_2018: 2.94, estimate_2022: 515.23, se_2022: 3.65, change: 1.18, se_change: 4.69 }]},
+    provenance: { source: "OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP)",
+      tables: ["stu_qqq_2018", "stu_qqq_2022"], filter: "CNT IN ('FIN','USA','KOR')",
+      sample: [{ table: "stu_qqq_2018", students: 17141 }, { table: "stu_qqq_2022", students: 21360 }],
+      method: "Weighted mean; Fay's BRR; 10 PVs; cross-cycle SE = sqrt(SE18²+SE22²).",
+      variables: [{ variable: "PV1READ", table: "stu_qqq_2018", label: "Plausible Value 1 in Reading" }],
+      notes: ["Trend SEs exclude the OECD link error (scale equating uncertainty); they are slightly understated."] } };
+  const demo3 = {
+    answer: "Demo: gender gap in math (boys − girls), 2022 — a diverging example.",
+    plan: { explanation: "Math gender gap (male − female), PISA 2022" },
+    table: { columns: ["CNT", "contrast", "estimate", "se", "cycle"], rows: [
+      { CNT: "USA", contrast: "M − F", estimate: 13.27, se: 3.19, cycle: "2022" },
+      { CNT: "BRA", contrast: "M − F", estimate: 8.06, se: 1.85, cycle: "2022" },
+      { CNT: "KOR", contrast: "M − F", estimate: 5.13, se: 5.57, cycle: "2022" },
+      { CNT: "FIN", contrast: "M − F", estimate: -5.13, se: 2.33, cycle: "2022" }]},
+    provenance: { source: "OECD PISA public-use databases", tables: ["stu_qqq_2022"],
+      filter: "CNT IN ('USA','BRA','KOR','FIN')", sample: [],
+      method: "Group difference replicate-wise; Fay's BRR; 10 PVs.", variables: [], notes: [] } };
+  for (const d of [demo1, demo2, demo3]) {
+    const host = el("div");
+    $log.appendChild(host);
+    renderResult(d, host);
+  }
+}
+</script>
+</body>
+</html>
