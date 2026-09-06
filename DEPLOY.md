@@ -21,9 +21,36 @@ echo <YOUR_GEMINI_KEY> | gcloud secrets create gemini-api-key --data-file=-
 
 ## Deploy (from the repo root)
 
+`gcloud run deploy --source .` does NOT work for this repo: the ~3.4 GB
+source context exceeds gcloud's single-request upload window (it dies with
+`ReadTimeout` after uploading for ~20 minutes). Use the three-step route
+instead — archive, resumable upload, build from the bucket — which is what
+produced the live deployment:
+
 ```powershell
+# 0. one-time: a staging bucket and access for Cloud Run to the secret
+gcloud storage buckets create gs://<PROJECT_ID>-build --location=us-central1 --uniform-bucket-level-access
+$pn = gcloud projects describe <PROJECT_ID> --format="value(projectNumber)"
+gcloud secrets add-iam-policy-binding gemini-api-key `
+  --member="serviceAccount:$pn-compute@developer.gserviceaccount.com" `
+  --role="roles/secretmanager.secretAccessor"
+
+# 1. archive the source (same exclusions as .gcloudignore; ~3.4 GB)
+tar -cf $env:TEMP\pisa-source.tgz -z --options gzip:compression-level=1 `
+  --exclude=./.git --exclude=./.env --exclude=__pycache__ --exclude=*.pyc `
+  --exclude=./data/pisa.duckdb --exclude=./data/pisa.duckdb.wal `
+  --exclude=./data/metadata --exclude=*.log -C . .
+
+# 2. resumable upload
+gcloud storage cp $env:TEMP\pisa-source.tgz gs://<PROJECT_ID>-build/pisa-source.tgz
+
+# 3. build the image from the bucket, then deploy it
+gcloud builds submit gs://<PROJECT_ID>-build/pisa-source.tgz `
+  --tag us-central1-docker.pkg.dev/<PROJECT_ID>/cloud-run-source-deploy/pisa-explorer:v1 `
+  --region us-central1 --machine-type e2-highcpu-8 --timeout 2400s
+
 gcloud run deploy pisa-explorer `
-  --source . `
+  --image us-central1-docker.pkg.dev/<PROJECT_ID>/cloud-run-source-deploy/pisa-explorer:v1 `
   --region us-central1 `
   --memory 2Gi --cpu 2 `
   --concurrency 4 `
@@ -34,11 +61,18 @@ gcloud run deploy pisa-explorer `
   --set-env-vars PISA_ACCESS_CODE=<pick-a-code>,PISA_RATE_LIMIT=20,PISA_GLOBAL_RATE=200
 ```
 
-Cloud Build builds the Dockerfile (the 3.7 GB context upload takes a while
-the first time), and the command prints the public URL when done. Share the
-URL + access code with testers; the UI asks for the code once and remembers it.
+(The Artifact Registry repo `cloud-run-source-deploy` is created automatically
+by a first `gcloud run deploy --source` attempt; otherwise create it with
+`gcloud artifacts repositories create cloud-run-source-deploy --repository-format=docker --location=us-central1`.)
 
-To update after code changes: rerun the same `gcloud run deploy` command.
+The deploy command prints the public URL. Share the URL + access code with
+testers; the UI asks for the code once and remembers it.
+
+To update after code changes: bump the image tag (`:v2`, …) and repeat
+steps 1–3. Code-only changes still re-upload the data (it is baked into the
+image); that is the price of a self-contained, zero-dependency service.
+To change the access code or limits without a rebuild:
+`gcloud run services update pisa-explorer --region us-central1 --update-env-vars PISA_ACCESS_CODE=newcode`.
 
 ## Cost & protection model
 
