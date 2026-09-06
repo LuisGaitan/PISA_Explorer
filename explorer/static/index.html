@@ -411,7 +411,9 @@ function buildChart(table, plan) {
   const explain = (plan && plan.explanation) || "";
   // Rows with a missing value cannot be drawn (e.g. a construct not
   // administered in some countries) — they stay in the table as "–".
-  const finite = keys => table.rows.filter(r => keys.every(k => Number.isFinite(+r[k])));
+  // note: +null coerces to 0, so a null check must come first
+  const finite = keys => table.rows.filter(
+    r => keys.every(k => r[k] !== null && r[k] !== undefined && Number.isFinite(+r[k])));
   if (cols.includes("row") && cols.includes("col") && cols.includes("estimate")) {
     const rows = finite(["estimate"]);
     return rows.length && rows.length <= 40
