@@ -18,6 +18,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 
 from . import catalog
@@ -139,6 +140,10 @@ Reply with ONLY this JSON:
             positive coefficient means — e.g. ["ESCS (socioeconomic index)",
             "male (1) vs female (0)"]; these become the term names everyone
             reads, so make the direction unambiguous),
+ "include_oecd_average": bool|null   (when the user wants per-country results
+            PLUS the OECD average: the system appends a CNT = "OECD avg" row —
+            the official convention, the unweighted mean of OECD member
+            countries' estimates; requires "CNT" in by),
  "by": [grouping columns, usually ["CNT"]],
  "where": SQL boolean filter or null, e.g. "CNT IN ('USA','KOR')",
  "sql": str|null  (raw_sql only: one read-only SELECT; use this ONLY when no
@@ -233,53 +238,11 @@ class Agent:
         tables = [f"{instrument}_{c}" for c in cycles]
         per_cycle: dict[str, pd.DataFrame] = {}
         for cycle, tbl in zip(cycles, tables):
-            if template == "weighted_mean":
-                res = weighted_mean(self.con, tbl, plan["measure"], by=by, where=where)
-            elif template == "weighted_proportion":
-                res = weighted_proportion(
-                    self.con, tbl, plan["variable"], plan["value"], by=by,
-                    where=where, valid_values=plan.get("valid_values"))
-            elif template == "gap":
-                res = gap(self.con, tbl, plan["measure"], plan["group_col"],
-                          plan["minuend"], plan["subtrahend"], by=by, where=where)
-            elif template == "quartile_means":
-                self._check_fragment(plan["quart_variable"])
-                res = quartile_means(self.con, tbl, plan["measure"],
-                                     plan["quart_variable"], by=by, where=where)
-            elif template == "quartile_gap":
-                self._check_fragment(plan["quart_variable"])
-                res = quartile_gap(self.con, tbl, plan["measure"],
-                                   plan["quart_variable"], by=by, where=where)
-            elif template == "correlation":
-                self._check_fragment(plan["x"])
-                self._check_fragment(plan["y"])
-                res = correlation(self.con, tbl, plan["x"], plan["y"],
-                                  by=by, where=where)
-            elif template == "percentiles":
-                ps = tuple(int(p) for p in plan.get("ps") or (10, 25, 50, 75, 90))
-                res = percentiles(self.con, tbl, plan["measure"], by=by,
-                                  where=where, ps=ps)
-            elif template == "percentile_spread":
-                res = percentile_spread(
-                    self.con, tbl, plan["measure"], by=by, where=where,
-                    upper=int(plan.get("upper") or 90),
-                    lower=int(plan.get("lower") or 10))
-            elif template == "crosstab":
-                self._check_identifier(plan["row_var"])
-                self._check_identifier(plan["col_var"])
-                res = crosstab(self.con, tbl, plan["row_var"], plan["col_var"],
-                               by=by, where=where,
-                               valid_rows=plan.get("valid_rows"),
-                               valid_cols=plan.get("valid_cols"))
-                res = self._label_crosstab(res, plan, tbl)
-            elif template == "regression":
-                for x in plan["predictors"]:
-                    self._check_fragment(x)
-                res = regression(self.con, tbl, plan["measure"],
-                                 plan["predictors"], by=by, where=where,
-                                 names=plan.get("predictor_names"))
-            else:
-                raise ValueError(f"unknown template {template!r}")
+            res = self._run_template(template, plan, tbl, by, where)
+            if plan.get("include_oecd_average") and "CNT" in by:
+                avg = self._oecd_average_rows(res, tbl)
+                if avg is not None:
+                    res = pd.concat([res, avg], ignore_index=True)
             per_cycle[cycle] = res
 
         extra_keys = {"gap": ["contrast"], "quartile_gap": ["contrast"],
@@ -309,6 +272,85 @@ class Agent:
 
         prov = self._provenance(plan, tables)
         return table, prov
+
+    def _oecd_average_rows(self, res: pd.DataFrame, tbl: str) -> pd.DataFrame | None:
+        """Official OECD-average convention: the UNWEIGHTED mean of member
+        countries' estimates (each country counts equally — not a pooled
+        student-weighted mean, which would overweight populous countries).
+        Countries are independent samples, so SE = sqrt(sum SE_i^2) / N."""
+        members = {r[0] for r in self.con.sql(
+            f"SELECT DISTINCT CNT FROM {tbl} WHERE OECD = 1").fetchall()}
+        sub = res[res["CNT"].isin(members)]
+        if sub.empty:
+            return None
+        id_cols = [c for c in res.columns
+                   if c not in ("CNT", "estimate", "se", "n_pv")]
+
+        def agg(group: pd.DataFrame) -> pd.Series:
+            return pd.Series({
+                "estimate": group["estimate"].mean(),
+                "se": float(np.sqrt((group["se"] ** 2).sum()) / len(group)),
+                "n_pv": int(group["n_pv"].iloc[0]),
+            })
+
+        if id_cols:
+            avg = (sub.groupby(id_cols, dropna=False, observed=True)
+                   .apply(agg, include_groups=False).reset_index())
+        else:
+            avg = agg(sub).to_frame().T
+        avg["n_pv"] = avg["n_pv"].astype(int)
+        avg.insert(0, "CNT", "OECD avg")
+        return avg
+
+    def _run_template(self, template: str, plan: dict, tbl: str,
+                      by: tuple, where: str | None) -> pd.DataFrame:
+        """One template invocation against one cycle table."""
+        if template == "weighted_mean":
+            return weighted_mean(self.con, tbl, plan["measure"], by=by, where=where)
+        if template == "weighted_proportion":
+            return weighted_proportion(
+                self.con, tbl, plan["variable"], plan["value"], by=by,
+                where=where, valid_values=plan.get("valid_values"))
+        if template == "gap":
+            return gap(self.con, tbl, plan["measure"], plan["group_col"],
+                       plan["minuend"], plan["subtrahend"], by=by, where=where)
+        if template == "quartile_means":
+            self._check_fragment(plan["quart_variable"])
+            return quartile_means(self.con, tbl, plan["measure"],
+                                  plan["quart_variable"], by=by, where=where)
+        if template == "quartile_gap":
+            self._check_fragment(plan["quart_variable"])
+            return quartile_gap(self.con, tbl, plan["measure"],
+                                plan["quart_variable"], by=by, where=where)
+        if template == "correlation":
+            self._check_fragment(plan["x"])
+            self._check_fragment(plan["y"])
+            return correlation(self.con, tbl, plan["x"], plan["y"],
+                               by=by, where=where)
+        if template == "percentiles":
+            ps = tuple(int(p) for p in plan.get("ps") or (10, 25, 50, 75, 90))
+            return percentiles(self.con, tbl, plan["measure"], by=by,
+                               where=where, ps=ps)
+        if template == "percentile_spread":
+            return percentile_spread(
+                self.con, tbl, plan["measure"], by=by, where=where,
+                upper=int(plan.get("upper") or 90),
+                lower=int(plan.get("lower") or 10))
+        if template == "crosstab":
+            self._check_identifier(plan["row_var"])
+            self._check_identifier(plan["col_var"])
+            res = crosstab(self.con, tbl, plan["row_var"], plan["col_var"],
+                           by=by, where=where,
+                           valid_rows=plan.get("valid_rows"),
+                           valid_cols=plan.get("valid_cols"))
+            return self._label_crosstab(res, plan, tbl)
+        if template == "regression":
+            for x in plan["predictors"]:
+                self._check_fragment(x)
+            return regression(self.con, tbl, plan["measure"],
+                              plan["predictors"], by=by, where=where,
+                              names=plan.get("predictor_names"))
+        raise ValueError(f"unknown template {template!r}")
 
     @staticmethod
     def _label_crosstab(res: pd.DataFrame, plan: dict, table: str) -> pd.DataFrame:
@@ -411,6 +453,10 @@ class Agent:
         if "{pv}" in pv_fields:
             method += " Point estimate averaged over 10 plausible values (Rubin's rules)."
         notes = []
+        if plan.get("include_oecd_average"):
+            notes.append('The "OECD avg" row follows the official convention: '
+                         "the unweighted mean of OECD member countries' "
+                         "estimates (SE = sqrt(sum of country SEs squared) / N).")
         if plan.get("substitution_note"):
             notes.append(f"VARIABLE SUBSTITUTION: {plan['substitution_note']}")
         if len(plan.get("cycles") or []) == 2:

@@ -182,6 +182,10 @@ function roundedBar(x0, x1, y, h) {   // square at baseline x0, 4px-round data e
 }
 
 function barChart(rows, catCols, valueKey, seKey, title) {
+  // League-table mode: many rows render ranked (a presentation copy — the
+  // data table below keeps the original order), tighter, without tip labels.
+  const league = rows.length > 12;
+  if (league) rows = [...rows].sort((a, b) => (+b[valueKey]) - (+a[valueKey]));
   const cats = rows.map(r => catCols.map(c => r[c]).join(" · "));
   const vals = rows.map(r => +r[valueKey]);
   const ses  = rows.map(r => seKey ? +r[seKey] || 0 : 0);
@@ -190,7 +194,8 @@ function barChart(rows, catCols, valueKey, seKey, title) {
   if (lo < 0) lo -= (hi - lo) * 0.09;   // room for value labels beyond left whiskers
   const diverging = vals.some(v => v < 0) && vals.some(v => v > 0) || vals.every(v => v < 0);
 
-  const W = 860, labelW = 150, padR = 60, rowH = 30, barH = 20, axisH = 26, padT = 6;
+  const W = 860, labelW = 150, padR = 60, axisH = 26, padT = 6;
+  const rowH = league ? 22 : 30, barH = league ? 15 : 20;
   const H = padT + rows.length * rowH + axisH;
   const x = v => labelW + (v - lo) / (hi - lo || 1) * (W - labelW - padR);
   const svg = sv("svg", { viewBox: `0 0 ${W} ${H}` });
@@ -211,10 +216,14 @@ function barChart(rows, catCols, valueKey, seKey, title) {
   rows.forEach((r, i) => {
     const y = padT + i * rowH + (rowH - barH) / 2;
     const v = vals[i], se = ses[i];
-    const color = diverging ? (v >= 0 ? "var(--series1)" : "var(--neg)") : "var(--series1)";
+    const isRef = cats[i] === "OECD avg";   // reference row, not a country
+    const color = isRef ? "var(--muted)"
+      : diverging ? (v >= 0 ? "var(--series1)" : "var(--neg)") : "var(--series1)";
 
     const label = sv("text", { x: labelW - 8, y: y + barH / 2 + 4, "text-anchor": "end" });
-    label.style.fill = "var(--ink2)"; label.textContent = cats[i];
+    label.style.fill = "var(--ink2)";
+    if (isRef) label.style.fontWeight = "650";
+    label.textContent = cats[i];
     svg.appendChild(label);
 
     const bar = sv("path", { d: roundedBar(x(0), x(v), y, barH) });
@@ -395,20 +404,25 @@ function wrapChart(svg, title) {
 }
 
 function buildChart(table, plan) {
-  if (!table || !table.rows.length || table.rows.length > 40) return null;
+  if (!table || !table.rows.length) return null;
+  const n = table.rows.length;
   const cols = table.columns;
   const catCols = cols.filter(c => !METRICS.has(c));
-  if (!catCols.length && table.rows.length > 1) return null;
+  if (!catCols.length && n > 1) return null;
   const explain = (plan && plan.explanation) || "";
   if (cols.includes("row") && cols.includes("col") && cols.includes("estimate")) {
-    return heatmapChart(table.rows, explain + "  (row percentages; hover for SE)");
+    return n <= 40
+      ? heatmapChart(table.rows, explain + "  (row percentages; hover for SE)")
+      : null;
   }
   if (cols.includes("estimate_2018") && cols.includes("estimate_2022")) {
-    return dumbbellChart(table.rows, catCols.length ? catCols : cols.slice(0, 1),
-                         "estimate_2018", "estimate_2022", "se_2018", "se_2022", explain);
+    return n <= 40
+      ? dumbbellChart(table.rows, catCols.length ? catCols : cols.slice(0, 1),
+                      "estimate_2018", "estimate_2022", "se_2018", "se_2022", explain)
+      : null;
   }
   if (cols.includes("estimate")) {
-    if (!catCols.length) return null; // single number: the answer text is the chart
+    if (!catCols.length || n > 90) return null;
     return barChart(table.rows, catCols, "estimate", "se",
                     explain + "  (whiskers: 95% confidence interval)");
   }
