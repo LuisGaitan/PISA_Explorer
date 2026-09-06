@@ -12,12 +12,26 @@ gcloud config set project <YOUR_PROJECT_ID>       # a NEW project is cleanest
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
 ```
 
-Store the Gemini key as a secret (never as a plain env var in scripts):
+Store the Gemini key as a secret (never as a plain env var in scripts).
+**Do not pipe it from PowerShell** (`echo key | gcloud ...`): PowerShell 5.1
+prepends a UTF-8 BOM and appends CRLF, and the corrupted key then breaks the
+HTTP header at runtime (`'latin-1' codec can't encode character '﻿'`).
+Write it to a BOM-free file instead:
 
 ```powershell
 gcloud services enable secretmanager.googleapis.com
-echo <YOUR_GEMINI_KEY> | gcloud secrets create gemini-api-key --data-file=-
+$tmp = Join-Path $env:TEMP "gk.txt"
+[IO.File]::WriteAllText($tmp, "<YOUR_GEMINI_KEY>", [Text.UTF8Encoding]::new($false))
+gcloud secrets create gemini-api-key --data-file=$tmp      # or: versions add
+Remove-Item $tmp -Force
+# verify the bytes (no EF BB BF prefix, no 0D 0A suffix):
+gcloud secrets versions access latest --secret=gemini-api-key --out-file=$tmp
+[IO.File]::ReadAllBytes($tmp)[0..2] | ForEach-Object { $_.ToString('X2') }
+Remove-Item $tmp -Force
 ```
+
+(The app also strips a BOM/whitespace from the key defensively since v2 of
+the code, but a clean secret is still the right fix.)
 
 ## Deploy (from the repo root)
 
