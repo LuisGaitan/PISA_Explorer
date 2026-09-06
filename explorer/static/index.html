@@ -326,6 +326,67 @@ function dumbbellChart(rows, catCols, k18, k22, se18k, se22k, title) {
   return wrap;
 }
 
+/* ---------- chart: heatmap for weighted crosstabs ---------- */
+const RAMP_LO = [0xcd, 0xe2, 0xfb], RAMP_HI = [0x10, 0x42, 0x81];  // sequential blue
+function rampColor(t) {
+  const c = RAMP_LO.map((lo, i) => Math.round(lo + (RAMP_HI[i] - lo) * t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function heatmapChart(rows, title) {
+  const rlab = r => String(r.row_label ?? r.row);
+  const clab = r => String(r.col_label ?? r.col);
+  const rowCats = [...new Set(rows.map(rlab))];
+  const colCats = [...new Set(rows.map(clab))];
+  const vals = rows.map(r => +r.estimate);
+  const vmin = Math.min(...vals), vmax = Math.max(...vals);
+
+  const W = 860, labelW = 190, headH = 26, cellH = 34, axisPad = 6;
+  const cellW = (W - labelW - 10) / colCats.length;
+  const H = headH + rowCats.length * cellH + axisPad;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}` });
+
+  colCats.forEach((c, j) => {
+    const t = sv("text", { x: labelW + j * cellW + cellW / 2, y: headH - 8,
+                           "text-anchor": "middle" });
+    t.style.fill = "var(--ink2)";
+    t.textContent = c.length > 22 ? c.slice(0, 21) + "…" : c;
+    svg.appendChild(t);
+  });
+  rowCats.forEach((r, i) => {
+    const t = sv("text", { x: labelW - 8, y: headH + i * cellH + cellH / 2 + 4,
+                           "text-anchor": "end" });
+    t.style.fill = "var(--ink2)";
+    t.textContent = r.length > 28 ? r.slice(0, 27) + "…" : r;
+    svg.appendChild(t);
+  });
+
+  for (const cell of rows) {
+    const i = rowCats.indexOf(rlab(cell)), j = colCats.indexOf(clab(cell));
+    if (i < 0 || j < 0) continue;
+    const v = +cell.estimate;
+    const t = vmax > vmin ? (v - vmin) / (vmax - vmin) : 0.5;
+    const x = labelW + j * cellW, y = headH + i * cellH;
+    const rect = sv("rect", { x: x + 1, y: y + 1, width: cellW - 2,
+                              height: cellH - 2, rx: 3, fill: rampColor(t) });
+    svg.appendChild(rect);
+    const label = sv("text", { x: x + cellW / 2, y: y + cellH / 2 + 4,
+                               "text-anchor": "middle", class: "ticktext" });
+    label.setAttribute("fill", t > 0.55 ? "#ffffff" : "#0b0b0b");
+    label.textContent = fmt(v);
+    svg.appendChild(label);
+    const hit = sv("rect", { x, y, width: cellW, height: cellH, fill: "transparent" });
+    hit.addEventListener("pointermove", e => {
+      rect.style.filter = "brightness(1.12)";
+      showTip(e, fmt(v, 2) + "%", `${rlab(cell)} × ${clab(cell)}`,
+              cell.se != null ? [`SE ${fmt(+cell.se, 2)}`] : []);
+    });
+    hit.addEventListener("pointerleave", () => { rect.style.filter = ""; hideTip(); });
+    svg.appendChild(hit);
+  }
+  return wrapChart(svg, title);
+}
+
 function wrapChart(svg, title) {
   const card = el("div", "card chart");
   if (title) card.appendChild(el("p", "chart-title", title));
@@ -339,6 +400,9 @@ function buildChart(table, plan) {
   const catCols = cols.filter(c => !METRICS.has(c));
   if (!catCols.length && table.rows.length > 1) return null;
   const explain = (plan && plan.explanation) || "";
+  if (cols.includes("row") && cols.includes("col") && cols.includes("estimate")) {
+    return heatmapChart(table.rows, explain + "  (row percentages; hover for SE)");
+  }
   if (cols.includes("estimate_2018") && cols.includes("estimate_2022")) {
     return dumbbellChart(table.rows, catCols.length ? catCols : cols.slice(0, 1),
                          "estimate_2018", "estimate_2022", "se_2018", "se_2022", explain);
@@ -455,6 +519,28 @@ const $form = document.getElementById("askform");
 const $q = document.getElementById("qbox");
 const $btn = document.getElementById("askbtn");
 
+/* Access code: sent when the server requires one; asked for once, remembered. */
+function getCode() { try { return localStorage.getItem("pisa_code") || ""; } catch { return ""; } }
+function setCode(c) { try { localStorage.setItem("pisa_code", c); } catch {} }
+
+async function askApi(question) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const headers = { "Content-Type": "application/json" };
+    const code = getCode();
+    if (code) headers["X-Access-Code"] = code;
+    const resp = await fetch("/api/ask", {
+      method: "POST", headers, body: JSON.stringify({ question }),
+    });
+    if (resp.status === 401 && attempt === 0) {
+      const entered = prompt("This PISA Explorer requires an access code:");
+      if (!entered) throw new Error("access code required");
+      setCode(entered.trim());
+      continue;
+    }
+    return await resp.json();
+  }
+}
+
 function autosize() {                    // grow with content, capped by CSS max-height
   $q.style.height = "auto";
   $q.style.height = $q.scrollHeight + "px";
@@ -482,12 +568,7 @@ $form.addEventListener("submit", async e => {
   host.scrollIntoView({ behavior: "smooth", block: "end" });
 
   try {
-    const resp = await fetch("/api/ask", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
-    });
-    const data = await resp.json();
+    const data = await askApi(question);
     renderResult(data, host);
   } catch (err) {
     host.replaceChildren(el("div", "card error", "Request failed: " + err.message));
@@ -539,7 +620,21 @@ if (new URLSearchParams(location.search).get("demo")) {
     provenance: { source: "OECD PISA public-use databases", tables: ["stu_qqq_2022"],
       filter: "CNT IN ('USA','BRA','KOR','FIN')", sample: [],
       method: "Group difference replicate-wise; Fay's BRR; 10 PVs.", variables: [], notes: [] } };
-  for (const d of [demo1, demo2, demo3]) {
+  const demo4 = {
+    answer: "Demo: grade repetition by immigrant background, Brazil 2022 (weighted crosstab).",
+    plan: { template: "crosstab", explanation: "Grade repetition by immigrant background, Brazil 2022" },
+    table: { columns: ["row", "row_label", "col", "col_label", "estimate", "se", "cycle"], rows: [
+      { row: 1, row_label: "Native student", col: 0, col_label: "Never repeated", estimate: 79.35, se: 0.71, cycle: "2022" },
+      { row: 1, row_label: "Native student", col: 1, col_label: "Repeated at least once", estimate: 20.65, se: 0.71, cycle: "2022" },
+      { row: 2, row_label: "Second-generation student", col: 0, col_label: "Never repeated", estimate: 52.74, se: 11.61, cycle: "2022" },
+      { row: 2, row_label: "Second-generation student", col: 1, col_label: "Repeated at least once", estimate: 47.26, se: 11.61, cycle: "2022" },
+      { row: 3, row_label: "First-generation student", col: 0, col_label: "Never repeated", estimate: 79.38, se: 7.62, cycle: "2022" },
+      { row: 3, row_label: "First-generation student", col: 1, col_label: "Repeated at least once", estimate: 20.62, se: 7.62, cycle: "2022" }]},
+    provenance: { source: "OECD PISA public-use databases", tables: ["stu_qqq_2022"],
+      filter: "CNT = 'BRA'", sample: [],
+      method: "Weighted two-way table: row percentages, each cell with its own Fay-BRR SE.",
+      variables: [], notes: [] } };
+  for (const d of [demo1, demo2, demo3, demo4]) {
     const host = el("div");
     $log.appendChild(host);
     renderResult(d, host);

@@ -79,10 +79,39 @@ python -m explorer.app           # opens on http://127.0.0.1:8765 (local only)
 
 Same engine as the CLI, plus charts: country comparisons render as bars with
 95%-confidence whiskers, 2018→2022 questions as dumbbells (2018 → 2022 dots),
-gaps as diverging bars around zero. Every chart has hover tooltips (value, SE,
-CI, significance), sits above its full data table (Export CSV button), and
-carries the same provenance card. Light/dark follows the OS. `?demo=1` renders
-sample charts offline for a quick look without spending API calls.
+gaps as diverging bars around zero, and crosstabs as heatmaps. Every chart has
+hover tooltips (value, SE, CI, significance), sits above its full data table
+(Export CSV button), and carries the same provenance card. Light/dark follows
+the OS. `?demo=1` renders sample charts offline without spending API calls.
+Conversations have memory (follow-ups and clarification answers work), and
+each browser session keeps its own history.
+
+### Analysis templates
+
+All survey-correct (`W_FSTUWT`, 10 PVs via Rubin's rules, Fay-BRR SEs over the
+80 replicate weights); the LLM fills parameters, never derives the statistics:
+
+| Template | Question shape |
+|---|---|
+| `weighted_mean` | averages, shares above/below proficiency cutoffs |
+| `weighted_proportion` | % in a category, missing codes excluded |
+| `gap` | group differences (e.g. gender gap), replicate-wise SE |
+| `quartile_means` / `quartile_gap` | means per weighted quarter of a continuous index; top-vs-bottom equity gaps (ESCS gradient) |
+| `correlation` | weighted Pearson r, PV-aware |
+| `percentiles` / `percentile_spread` | weighted P10…P90; P90−P10 dispersion |
+| `crosstab` | weighted two-way row % with per-cell SEs, value-labeled |
+| `regression` | weighted least squares, readable term names, "controlling for" questions |
+| `raw_sql` | read-only SELECT escape hatch, clearly flagged as unweighted |
+
+Cross-cycle (2018 vs 2022) versions of all of these run automatically when the
+question compares cycles.
+
+## Deployment
+
+The public-sharing setup (Cloud Run, access code, per-session and global rate
+limits, self-contained Docker image) is in [DEPLOY.md](DEPLOY.md). Environment
+knobs: `PISA_ACCESS_CODE`, `PISA_RATE_LIMIT` (default 20/h per session),
+`PISA_GLOBAL_RATE` (default 200/h total), `PORT`, `BIND_HOST`.
 
 `convert.py` is idempotent (skips finished files; `--force` to redo,
 `--only 2022` / `--only stu_qqq_2018` to filter). Every Parquet file is written

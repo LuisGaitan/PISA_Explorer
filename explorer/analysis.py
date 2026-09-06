@@ -159,6 +159,148 @@ def correlation(con, table, x, y, by=(), where=None) -> pd.DataFrame:
     return combine(reps, by=tuple(by))
 
 
+def _percentile_replicates(con, table, measure, by=(), where=None,
+                           ps=(10, 25, 50, 75, 90)) -> pd.DataFrame:
+    """Weighted empirical percentiles (first value whose cumulative weight
+    reaches p) per group, PV, and replicate weight."""
+    exprs = _pv_list(measure)
+    cols = [f"m_{i}" for i in range(1, len(exprs) + 1)]
+    df = fetch_frame(con, table, exprs, by=tuple(by), where=where)
+    groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
+
+    n_w = len(ALL_WEIGHTS)
+    frames = []
+    for key, g in groups:
+        if not isinstance(key, tuple):
+            key = (key,)
+        weights = g[ALL_WEIGHTS].to_numpy(dtype=float)
+        for pv_i, col in enumerate(cols, start=1):
+            v = g[col].to_numpy(dtype=float)
+            mask = ~np.isnan(v)
+            vm, wm = v[mask], weights[mask]
+            order = np.argsort(vm, kind="stable")
+            vs, cum = vm[order], np.cumsum(wm[order], axis=0)   # (n,), (n, 81)
+            totals = cum[-1]
+            for p in ps:
+                idx = np.clip((cum < totals * (p / 100)).sum(axis=0), 0, len(vs) - 1)
+                frame = pd.DataFrame({
+                    "percentile": p, "pv": pv_i,
+                    "rep": np.arange(n_w), "value": vs[idx],
+                })
+                for c, val in zip(by, key):
+                    frame[c] = val
+                frames.append(frame)
+    return pd.concat(frames, ignore_index=True)
+
+
+def percentiles(con, table, measure, by=(), where=None,
+                ps=(10, 25, 50, 75, 90)) -> pd.DataFrame:
+    """Weighted percentiles of a measure per group, with BRR SEs."""
+    reps = _percentile_replicates(con, table, measure, by, where, ps)
+    return combine(reps, by=(*by, "percentile"))
+
+
+def percentile_spread(con, table, measure, by=(), where=None,
+                      upper=90, lower=10) -> pd.DataFrame:
+    """P<upper> minus P<lower> — the within-group dispersion / inequality
+    measure (P90-P10 by default), SE via replicate-wise differencing."""
+    reps = _percentile_replicates(con, table, measure, by, where, (lower, upper))
+    out = contrast(reps, "percentile", upper, lower, by=tuple(by))
+    out.insert(0, "contrast", f"P{upper} - P{lower}")
+    return out
+
+
+MAX_CROSSTAB_CATEGORIES = 12
+
+
+def crosstab(con, table, row_var, col_var, by=(), where=None,
+             valid_rows=None, valid_cols=None) -> pd.DataFrame:
+    """Weighted two-way table: within each category of `row_var`, the
+    percentage of (valid) respondents in each category of `col_var` (row
+    percentages sum to ~100). Each cell carries its own BRR SE."""
+    def observed(var, valid):
+        if valid:
+            return [v for v in valid]
+        vals = [r[0] for r in con.sql(
+            f"SELECT DISTINCT {var} FROM {table} WHERE {var} IS NOT NULL"
+            + (f" AND ({where})" if where else "") + f" ORDER BY {var}").fetchall()]
+        if len(vals) > MAX_CROSSTAB_CATEGORIES:
+            raise ValueError(
+                f"{var} has {len(vals)} categories (max {MAX_CROSSTAB_CATEGORIES}) "
+                "— pass the valid response codes explicitly")
+        return vals
+
+    row_cats = observed(row_var, valid_rows)
+    col_cats = observed(col_var, valid_cols)
+    row_list = ", ".join(str(v) for v in row_cats)
+    where_rows = f"{row_var} IN ({row_list})"
+    full_where = f"({where}) AND {where_rows}" if where else where_rows
+
+    parts = []
+    for c in col_cats:
+        res = weighted_proportion(con, table, col_var, c, by=(*by, row_var),
+                                  where=full_where, valid_values=col_cats)
+        res["col"] = c
+        parts.append(res)
+    out = pd.concat(parts, ignore_index=True).rename(columns={row_var: "row"})
+    return out[list(by) + ["row", "col", "estimate", "se", "n_pv"]]
+
+
+MAX_REGRESSION_PREDICTORS = 6
+
+
+def regression(con, table, y, xs, by=(), where=None,
+               names=None) -> pd.DataFrame:
+    """Weighted least-squares regression of `y` on predictors `xs`
+    (SQL expressions; encode categorical contrasts as 0/1 CASE dummies).
+    PV-aware in y; coefficients averaged over PVs, SEs via BRR + Rubin.
+    Listwise deletion of rows with any missing value. `names` (parallel to
+    `xs`) supplies readable term labels — without them a CASE dummy's raw SQL
+    becomes the term name, which readers (and summarizers) misinterpret."""
+    if len(xs) > MAX_REGRESSION_PREDICTORS:
+        raise ValueError(f"at most {MAX_REGRESSION_PREDICTORS} predictors")
+    if any("{pv}" in x for x in xs):
+        raise ValueError("{pv} is only supported in y")
+    if names is not None and len(names) != len(xs):
+        raise ValueError("predictor_names must match predictors in length")
+    ys_list = _pv_list(y)
+    extra = {f"y_{i}": e for i, e in enumerate(ys_list, start=1)}
+    extra.update({f"x_{j}": e for j, e in enumerate(xs, start=1)})
+    df = fetch_frame(con, table, [], by=tuple(by), where=where, extra=extra)
+
+    terms = ["(intercept)"] + list(names if names is not None else xs)
+    n_w = len(ALL_WEIGHTS)
+    groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
+    frames = []
+    for key, g in groups:
+        if not isinstance(key, tuple):
+            key = (key,)
+        weights = g[ALL_WEIGHTS].to_numpy(dtype=float)
+        x_mat = np.column_stack(
+            [np.ones(len(g))] + [g[f"x_{j}"].to_numpy(dtype=float)
+                                 for j in range(1, len(xs) + 1)])
+        for pv_i in range(1, len(ys_list) + 1):
+            yv = g[f"y_{pv_i}"].to_numpy(dtype=float)
+            mask = ~np.isnan(yv) & ~np.isnan(x_mat).any(axis=1)
+            x_use, y_use, w_use = x_mat[mask], yv[mask], weights[mask]
+            if mask.sum() <= len(terms):
+                raise ValueError("too few complete observations for regression")
+            # 81 weighted normal-equation solves in one einsum each
+            xtwx = np.einsum("nw,ni,nj->wij", w_use, x_use, x_use, optimize=True)
+            xtwy = np.einsum("nw,ni,n->wi", w_use, x_use, y_use, optimize=True)
+            betas = np.linalg.solve(xtwx, xtwy)          # (81, k)
+            for t_i, term in enumerate(terms):
+                frame = pd.DataFrame({
+                    "term": term, "pv": pv_i,
+                    "rep": np.arange(n_w), "value": betas[:, t_i],
+                })
+                for c, val in zip(by, key):
+                    frame[c] = val
+                frames.append(frame)
+    reps = pd.concat(frames, ignore_index=True)
+    return combine(reps, by=(*by, "term"))
+
+
 def trend(result_2018: pd.DataFrame, result_2022: pd.DataFrame,
           by=()) -> pd.DataFrame:
     """2022 minus 2018 for two already-combined results with matching groups.

@@ -23,9 +23,13 @@ import pandas as pd
 from . import catalog
 from .analysis import (
     correlation,
+    crosstab,
     gap,
+    percentile_spread,
+    percentiles,
     quartile_gap,
     quartile_means,
+    regression,
     trend,
     weighted_mean,
     weighted_proportion,
@@ -97,7 +101,8 @@ Reply with ONLY this JSON:
  "action": "analyze" | "clarify",
  "clarify": str|null,
  "template": "weighted_mean"|"weighted_proportion"|"gap"|"quartile_means"|
-             "quartile_gap"|"correlation"|"raw_sql",
+             "quartile_gap"|"correlation"|"percentiles"|"percentile_spread"|
+             "crosstab"|"regression"|"raw_sql",
  "cycles": ["2018","2022"] or ["2022"] or ["2018"],
  "instrument": "stu_qqq" etc.,
  "measure": SQL expression; write {{pv}} for the plausible-value slot, e.g. "PV{{pv}}MATH",
@@ -114,6 +119,26 @@ Reply with ONLY this JSON:
             {{pv}} allowed, e.g. x="AUTICT", y="PV{{pv}}READ" — this is the
             WEIGHTED correlation with a proper BRR standard error; always
             prefer it over raw_sql corr()),
+ "ps": [ints]|null   (percentiles: which weighted percentiles of `measure`,
+            default [10,25,50,75,90]),
+ "upper": int|null, "lower": int|null   (percentile_spread: P<upper> minus
+            P<lower> of `measure`, default 90 and 10 — the standard
+            within-country inequality/dispersion measure),
+ "row_var": str|null, "col_var": str|null, "valid_rows": [nums]|null,
+ "valid_cols": [nums]|null   (crosstab: weighted two-way table — within each
+            row_var category, the % in each col_var category (row % sum to
+            100), each cell with its own SE; list the valid non-missing codes;
+            max 12 categories per side),
+ "predictors": [str, ...]|null   (regression: weighted least squares of
+            `measure` (the outcome, {{pv}} allowed) on up to 6 predictor
+            expressions; encode binary contrasts as 0/1 dummies, e.g.
+            "CASE WHEN ST004D01T = 2 THEN 1 ELSE 0 END" for a male dummy;
+            use for "controlling for" questions),
+ "predictor_names": [str, ...]|null   (regression, REQUIRED with predictors:
+            short readable labels, parallel to predictors, stating what a
+            positive coefficient means — e.g. ["ESCS (socioeconomic index)",
+            "male (1) vs female (0)"]; these become the term names everyone
+            reads, so make the direction unambiguous),
  "by": [grouping columns, usually ["CNT"]],
  "where": SQL boolean filter or null, e.g. "CNT IN ('USA','KOR')",
  "sql": str|null  (raw_sql only: one read-only SELECT; use this ONLY when no
@@ -131,6 +156,9 @@ PV{{pv}} form. Filter to the countries the user names; if none named, ask
 yourself whether all 80 economies is really wanted — for rankings it is.
 Percentages of a category => weighted_proportion with valid_values listed.
 "High vs low X" for a continuous X => quartile_gap (never invent thresholds).
+Distribution / spread / inequality within groups => percentiles or
+percentile_spread. Two categorical variables against each other => crosstab.
+"Controlling for" / "after accounting for" => regression.
 Share below/above a PISA proficiency level => weighted_mean with a threshold
 measure, e.g. "% below Level 2 in math" => measure =
 "CASE WHEN PV{{pv}}MATH < 420.07 THEN 100.0 ELSE 0.0 END"
@@ -227,12 +255,42 @@ class Agent:
                 self._check_fragment(plan["y"])
                 res = correlation(self.con, tbl, plan["x"], plan["y"],
                                   by=by, where=where)
+            elif template == "percentiles":
+                ps = tuple(int(p) for p in plan.get("ps") or (10, 25, 50, 75, 90))
+                res = percentiles(self.con, tbl, plan["measure"], by=by,
+                                  where=where, ps=ps)
+            elif template == "percentile_spread":
+                res = percentile_spread(
+                    self.con, tbl, plan["measure"], by=by, where=where,
+                    upper=int(plan.get("upper") or 90),
+                    lower=int(plan.get("lower") or 10))
+            elif template == "crosstab":
+                self._check_identifier(plan["row_var"])
+                self._check_identifier(plan["col_var"])
+                res = crosstab(self.con, tbl, plan["row_var"], plan["col_var"],
+                               by=by, where=where,
+                               valid_rows=plan.get("valid_rows"),
+                               valid_cols=plan.get("valid_cols"))
+                res = self._label_crosstab(res, plan, tbl)
+            elif template == "regression":
+                for x in plan["predictors"]:
+                    self._check_fragment(x)
+                res = regression(self.con, tbl, plan["measure"],
+                                 plan["predictors"], by=by, where=where,
+                                 names=plan.get("predictor_names"))
             else:
                 raise ValueError(f"unknown template {template!r}")
             per_cycle[cycle] = res
 
         extra_keys = {"gap": ["contrast"], "quartile_gap": ["contrast"],
-                      "quartile_means": ["quarter"]}.get(template, [])
+                      "quartile_means": ["quarter"],
+                      "percentiles": ["percentile"],
+                      "percentile_spread": ["contrast"],
+                      "crosstab": ["row", "col", "row_label", "col_label"],
+                      "regression": ["term"]}.get(template, [])
+        if template == "crosstab":
+            extra_keys = [k for k in extra_keys
+                          if k in per_cycle[cycles[0]].columns]
         if len(cycles) == 2:
             table = trend(per_cycle["2018"], per_cycle["2022"],
                           by=[c for c in by] + extra_keys)
@@ -251,6 +309,24 @@ class Agent:
 
         prov = self._provenance(plan, tables)
         return table, prov
+
+    @staticmethod
+    def _label_crosstab(res: pd.DataFrame, plan: dict, table: str) -> pd.DataFrame:
+        """Attach human-readable value labels to crosstab codes when the
+        catalog has them."""
+        for code_col, var_key, label_col in (("row", "row_var", "row_label"),
+                                             ("col", "col_var", "col_label")):
+            desc = catalog.describe(plan[var_key])
+            desc = desc[desc.table_name == table]
+            if desc.empty or not desc.iloc[0].value_labels:
+                continue
+            labels = json.loads(desc.iloc[0].value_labels)
+            mapped = res[code_col].map(
+                lambda v: labels.get(str(int(v)) if isinstance(v, float)
+                                     and float(v).is_integer() else str(v)))
+            if mapped.notna().any():
+                res.insert(res.columns.get_loc(code_col) + 1, label_col, mapped)
+        return res
 
     def _run_raw_sql(self, sql: str) -> pd.DataFrame:
         if not sql:
@@ -279,7 +355,8 @@ class Agent:
     def _referenced_variables(self, plan: dict, tables: list[str]) -> list[dict]:
         text = " ".join(str(plan.get(k) or "") for k in
                         ("measure", "variable", "group_col", "where", "by",
-                         "quart_variable", "x", "y"))
+                         "quart_variable", "x", "y", "row_var", "col_var",
+                         "predictors"))
         text = text.replace("{pv}", "1")  # PV{pv}MATH -> PV1MATH (stands for all 10)
         tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text))
         tokens |= {"W_FSTUWT"}
@@ -315,6 +392,17 @@ class Agent:
                             "SE: Fay's BRR, k=0.5, 80 replicates.",
             "correlation": "Weighted Pearson correlation (W_FSTUWT). "
                            "SE: Fay's BRR, k=0.5, 80 replicates.",
+            "percentiles": "Weighted empirical percentiles (W_FSTUWT). "
+                           "SE: Fay's BRR, k=0.5, 80 replicates.",
+            "percentile_spread": "Difference of weighted percentiles "
+                                 "(within-group dispersion), differenced "
+                                 "replicate-wise. SE: Fay's BRR, k=0.5, 80 replicates.",
+            "crosstab": "Weighted two-way table: row percentages of valid "
+                        "respondents (W_FSTUWT), each cell with its own "
+                        "Fay-BRR SE (k=0.5, 80 replicates).",
+            "regression": "Weighted least-squares regression (W_FSTUWT), "
+                          "listwise deletion. SE: Fay's BRR, k=0.5, 80 "
+                          "replicates. Association, not causation.",
             "raw_sql": "Direct SQL — NO automatic weighting/PV/BRR treatment; "
                        "results are not population estimates unless the query weights them.",
         }

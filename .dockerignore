@@ -1,0 +1,10 @@
+# Only what the image needs goes into the build context.
+.git/
+.env
+__pycache__/
+*.pyc
+
+# Excluded data (rebuilt or unused in the container):
+data/pisa.duckdb
+data/metadata/
+data/*.log

@@ -40,6 +40,16 @@ def main() -> int:
         )
         built.append(source.name)
 
+    catalog_dir = DB_PATH.parent / "catalog"
+    for table, filename in (("catalog_variables", "variables.parquet"),
+                            ("catalog_comparability", "comparability.parquet")):
+        path = catalog_dir / filename
+        if path.exists():
+            p = str(path).replace("'", "''")
+            con.execute(f"CREATE OR REPLACE TABLE {table} AS "
+                        f"SELECT * FROM read_parquet('{p}')")
+            log.info(f"{table}: registered")
+
     if ESCS_TREND_CSV.exists():
         csv = str(ESCS_TREND_CSV).replace("'", "''")
         con.execute("DROP TABLE IF EXISTS escs_trend")

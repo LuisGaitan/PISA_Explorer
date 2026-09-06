@@ -23,7 +23,11 @@ PARQUET_DIR = DATA_DIR / "parquet"
 METADATA_DIR = DATA_DIR / "metadata"
 DB_PATH = DATA_DIR / "pisa.duckdb"
 
-ESCS_TREND_CSV = DATA_2022 / "ESCS_Trend" / "escs_trend.csv"
+# Prefer the repo-local copy (present in deployment containers, where the
+# raw Desktop folders don't exist); fall back to the raw source.
+_ESCS_LOCAL = DATA_DIR / "escs_trend.csv"
+ESCS_TREND_CSV = _ESCS_LOCAL if _ESCS_LOCAL.exists() else (
+    DATA_2022 / "ESCS_Trend" / "escs_trend.csv")
 
 # Columns that must survive conversion in the student questionnaire files
 STU_QQQ_KEY_COLUMNS = (
