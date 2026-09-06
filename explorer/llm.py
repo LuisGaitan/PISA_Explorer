@@ -80,9 +80,17 @@ def generate(
 
 def generate_json(prompt: str, system: str | None = None,
                   model: str = DEFAULT_MODEL) -> dict:
-    """Generation call that must return a JSON object."""
+    """Generation call that must return a JSON object. Models sometimes emit
+    an ARRAY of objects (e.g. one plan per requested measure) — unwrap to the
+    first object rather than crashing downstream .get() calls."""
     text = generate(prompt, system=system, json_mode=True, model=model)
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError as e:
         raise LLMError(f"Gemini returned invalid JSON: {text[:500]}") from e
+    if isinstance(parsed, list):
+        parsed = next((item for item in parsed if isinstance(item, dict)), None)
+    if not isinstance(parsed, dict):
+        raise LLMError(f"Gemini returned {type(parsed).__name__}, expected a "
+                       f"JSON object: {text[:300]}")
+    return parsed

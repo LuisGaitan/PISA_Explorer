@@ -155,6 +155,13 @@ Reply with ONLY this JSON:
  "explanation": one sentence of what will be computed
 }}
 
+Reply with EXACTLY ONE JSON object — never a JSON array, never multiple plans.
+A request to compare the averages of two DIFFERENT variables side by side has
+no template yet: either action="clarify" asking which variable to analyze
+first, or (if the user insists on both at once) raw_sql computing both
+weighted means per group as sum(W_FSTUWT * var) / sum(W_FSTUWT) — and note in
+the explanation that raw SQL carries no standard errors.
+
 Rules: comparisons across cycles => cycles=["2018","2022"] (the system runs the
 template per cycle and differences them). Achievement questions always use the
 PV{{pv}} form. Filter to the countries the user names; if none named, ask
