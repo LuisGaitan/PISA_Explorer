@@ -1,0 +1,15 @@
+# Upload context for gcloud run deploy --source.
+# NOTE: without this file, gcloud falls back to .gitignore, which excludes
+# data/ entirely — but the image build needs the Parquet data. This mirrors
+# .dockerignore instead.
+.git/
+.gitignore
+.env
+__pycache__/
+*.pyc
+
+# Excluded data (rebuilt in-image or unused there):
+data/pisa.duckdb
+data/pisa.duckdb.wal
+data/metadata/
+data/*.log
