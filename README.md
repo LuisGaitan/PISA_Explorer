@@ -28,7 +28,10 @@ explorer/
   agent.py         question -> retrieval -> plan -> validated execution -> provenance
   chat.py          terminal chat:  python -m explorer.chat ["question"]
   app.py           local web app:  python -m explorer.app  ->  http://127.0.0.1:8765
-  static/index.html  the web UI (chat, charts with 95% CI, tables, provenance, CSV export)
+  events.py        usage analytics store (Firestore on Cloud Run, JSONL locally)
+  static/index.html  the web UI (gate, chat, charts with 95% CI, tables, provenance, feedback, CSV export)
+  static/charts.js   shared SVG chart library (bars/league, dumbbell, diverging, heatmap)
+  static/admin.html  usage dashboard at /admin (PISA_ADMIN_CODE)
 data/              (gitignored) parquet/, metadata/, catalog/, pisa.duckdb — fully rebuildable
 ```
 

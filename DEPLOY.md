@@ -82,11 +82,45 @@ by a first `gcloud run deploy --source` attempt; otherwise create it with
 The deploy command prints the public URL. Share the URL + access code with
 testers; the UI asks for the code once and remembers it.
 
-To update after code changes: bump the image tag (`:v2`, …) and repeat
-steps 1–3. Code-only changes still re-upload the data (it is baked into the
-image); that is the price of a self-contained, zero-dependency service.
-To change the access code or limits without a rebuild:
-`gcloud run services update pisa-explorer --region us-central1 --update-env-vars PISA_ACCESS_CODE=newcode`.
+## Code-only redeploy (the normal case — minutes, no data upload)
+
+`Dockerfile.code` layers the current code onto the existing data image, so a
+code change never re-uploads the 3.4 GB of Parquet:
+
+```powershell
+gcloud builds submit --config cloudbuild.code.yaml --ignore-file .gcloudignore.code `
+  --substitutions _TAG=v3 --region us-central1 .
+gcloud run deploy pisa-explorer `
+  --image us-central1-docker.pkg.dev/<PROJECT_ID>/cloud-run-source-deploy/pisa-explorer:v3 `
+  --region us-central1
+```
+
+(`gcloud run deploy --image` keeps the service's existing env vars, secrets
+and limits.) Repeat the full archive route only when the data or the pipeline
+changes, then point `_DATA_IMAGE` in `cloudbuild.code.yaml` at the new data tag.
+
+## Access codes, admin, analytics
+
+```powershell
+gcloud run services update pisa-explorer --region us-central1 --update-env-vars `
+  "PISA_ACCESS_CODES=penn-2026:University of Pennsylvania,ucla-2026:UCLA,pisa2026:General,PISA_ADMIN_CODE=<secret>"
+```
+
+- One code per institution: the code *is* the attribution (no typos, no
+  extra form field) and any one can be revoked by removing it. The legacy
+  single `PISA_ACCESS_CODE` still works (recorded as "General").
+- `PISA_ADMIN_CODE` unlocks the usage dashboard at `/admin` (enter the code
+  once, or open `/admin?code=<secret>` — it stores the code and scrubs the
+  URL). The dashboard reads `/api/admin/events`; export the raw events as CSV
+  from its header for deeper mining.
+- Events (one Firestore document per question, collection `events`) record:
+  institution, session, question, route (data / clarify / conversational /
+  error), template, instrument, cycles, countries, variables, rows, raw-SQL
+  and substitution flags, latency and LLM-call counts, and — reported by the
+  browser — which chart form rendered, device width / mobile, thumbs up/down
+  with comment, and CSV exports. Firestore is enabled per project:
+  `gcloud firestore databases create --location=us-central1 --type=firestore-native`
+  plus `roles/datastore.user` for the Cloud Run service account.
 
 ## Cost & protection model
 
