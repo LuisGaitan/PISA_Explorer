@@ -96,7 +96,10 @@ def replicates_from_frame(
             m = g[col].to_numpy(dtype=float)                # (n,)
             mask = ~np.isnan(m)
             wm = weights[mask]
-            estimates[i] = (wm.T @ m[mask]) / wm.sum(axis=0)
+            # A group with no observed values yields NaN by design (e.g. a
+            # question not administered there) — suppress the 0/0 warnings.
+            with np.errstate(invalid="ignore", divide="ignore"):
+                estimates[i] = (wm.T @ m[mask]) / wm.sum(axis=0)
         key_rows.append(key)
         blocks.append(estimates)
 

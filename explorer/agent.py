@@ -271,6 +271,15 @@ class Agent:
         table = table.reset_index(drop=True)
 
         prov = self._provenance(plan, tables)
+        estimate_cols = [c for c in ("estimate", "estimate_2018", "estimate_2022")
+                         if c in table.columns]
+        n_missing = int(table[estimate_cols].isna().any(axis=1).sum()) \
+            if estimate_cols else 0
+        if n_missing:
+            prov["notes"].append(
+                f"{n_missing} row(s) have no estimate — the variable was not "
+                "administered (or has no valid responses) for those groups; "
+                "they are listed in the table but excluded from the chart.")
         return table, prov
 
     def _oecd_average_rows(self, res: pd.DataFrame, tbl: str) -> pd.DataFrame | None:

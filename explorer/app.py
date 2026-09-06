@@ -78,10 +78,23 @@ def rate_ok(session: dict) -> tuple[bool, str]:
     return True, ""
 
 
+def _denan(value):
+    """Recursively replace non-finite floats with None (strict-JSON safe)."""
+    if isinstance(value, float):
+        return value if value == value and abs(value) != float("inf") else None
+    if isinstance(value, dict):
+        return {k: _denan(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_denan(v) for v in value]
+    return value
+
+
 def result_payload(result) -> dict:
     table = None
     if result.table is not None:
-        clean = result.table.where(result.table.notna(), None)
+        # astype(object) first — on float columns, .where(..., None) alone
+        # silently turns None back into NaN, which is invalid JSON in browsers
+        clean = result.table.astype(object).where(result.table.notna(), None)
         table = {"columns": list(clean.columns),
                  "rows": clean.to_dict(orient="records")}
     return {"answer": result.answer, "table": table, "plan": result.plan,
@@ -104,7 +117,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_json(self, status: int, payload: dict, **kw) -> None:
-        self._send(status, json.dumps(payload, default=str).encode("utf-8"),
+        try:
+            body = json.dumps(payload, default=str, allow_nan=False)
+        except ValueError:   # a NaN slipped past scrubbing somewhere unusual
+            body = json.dumps(_denan(payload), default=str, allow_nan=False)
+        self._send(status, body.encode("utf-8"),
                    "application/json; charset=utf-8", **kw)
 
     def _sid(self) -> tuple[str, dict | None]:

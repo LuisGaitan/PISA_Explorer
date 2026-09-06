@@ -141,12 +141,15 @@ def correlation(con, table, x, y, by=(), where=None) -> pd.DataFrame:
             yv = g[f"y_{i}"].to_numpy(dtype=float)
             mask = ~(np.isnan(xv) | np.isnan(yv))
             wm, xm, ym = weights[mask], xv[mask], yv[mask]
-            total = wm.sum(axis=0)
-            mx, my = (wm.T @ xm) / total, (wm.T @ ym) / total
-            cov = (wm.T @ (xm * ym)) / total - mx * my
-            vx = (wm.T @ (xm * xm)) / total - mx * mx
-            vy = (wm.T @ (ym * ym)) / total - my * my
-            rs[i - 1] = cov / np.sqrt(vx * vy)
+            # A group with no complete pairs (construct not administered)
+            # yields NaN by design — suppress the expected 0/0 warnings.
+            with np.errstate(invalid="ignore", divide="ignore"):
+                total = wm.sum(axis=0)
+                mx, my = (wm.T @ xm) / total, (wm.T @ ym) / total
+                cov = (wm.T @ (xm * ym)) / total - mx * my
+                vx = (wm.T @ (xm * xm)) / total - mx * mx
+                vy = (wm.T @ (ym * ym)) / total - my * my
+                rs[i - 1] = cov / np.sqrt(vx * vy)
         frame = pd.DataFrame({
             "pv": np.repeat(np.arange(1, n_pv + 1), n_w),
             "rep": np.tile(np.arange(n_w), n_pv),

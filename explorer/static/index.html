@@ -405,25 +405,30 @@ function wrapChart(svg, title) {
 
 function buildChart(table, plan) {
   if (!table || !table.rows.length) return null;
-  const n = table.rows.length;
   const cols = table.columns;
   const catCols = cols.filter(c => !METRICS.has(c));
-  if (!catCols.length && n > 1) return null;
+  if (!catCols.length && table.rows.length > 1) return null;
   const explain = (plan && plan.explanation) || "";
+  // Rows with a missing value cannot be drawn (e.g. a construct not
+  // administered in some countries) — they stay in the table as "–".
+  const finite = keys => table.rows.filter(r => keys.every(k => Number.isFinite(+r[k])));
   if (cols.includes("row") && cols.includes("col") && cols.includes("estimate")) {
-    return n <= 40
-      ? heatmapChart(table.rows, explain + "  (row percentages; hover for SE)")
+    const rows = finite(["estimate"]);
+    return rows.length && rows.length <= 40
+      ? heatmapChart(rows, explain + "  (row percentages; hover for SE)")
       : null;
   }
   if (cols.includes("estimate_2018") && cols.includes("estimate_2022")) {
-    return n <= 40
-      ? dumbbellChart(table.rows, catCols.length ? catCols : cols.slice(0, 1),
+    const rows = finite(["estimate_2018", "estimate_2022"]);
+    return rows.length && rows.length <= 40
+      ? dumbbellChart(rows, catCols.length ? catCols : cols.slice(0, 1),
                       "estimate_2018", "estimate_2022", "se_2018", "se_2022", explain)
       : null;
   }
   if (cols.includes("estimate")) {
-    if (!catCols.length || n > 90) return null;
-    return barChart(table.rows, catCols, "estimate", "se",
+    const rows = finite(["estimate"]);
+    if (!catCols.length || !rows.length || rows.length > 90) return null;
+    return barChart(rows, catCols, "estimate", "se",
                     explain + "  (whiskers: 95% confidence interval)");
   }
   return null;
