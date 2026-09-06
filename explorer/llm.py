@@ -21,16 +21,25 @@ class LLMError(RuntimeError):
     pass
 
 
+def _clean_key(raw: str) -> str:
+    """Strip whitespace, quotes and a UTF-8 BOM. A key that reaches us via a
+    shell pipe or secret manager can carry a leading '\\ufeff' and a trailing
+    newline; either one breaks the latin-1-encoded HTTP header."""
+    return raw.strip().lstrip("﻿").strip().strip("'\"").strip()
+
+
 def _load_key() -> str:
     for name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
         if os.environ.get(name):
-            return os.environ[name]
+            key = _clean_key(os.environ[name])
+            if key:
+                return key
     env_file = REPO_ROOT / ".env"
     if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
+        for line in env_file.read_text(encoding="utf-8-sig").splitlines():
             line = line.strip()
             if line.startswith(("GEMINI_API_KEY=", "GOOGLE_API_KEY=")):
-                key = line.split("=", 1)[1].strip().strip("'\"")
+                key = _clean_key(line.split("=", 1)[1])
                 if key:
                     return key
     raise LLMError(
