@@ -16,12 +16,13 @@ Design rules (each traces to a defect in the old prototype, see handoff §4):
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
-from . import catalog
+from . import catalog, llm
 from .analysis import (
     correlation,
     crosstab,
@@ -194,6 +195,36 @@ class AgentResult:
     retrieved: pd.DataFrame | None = None
     error: str | None = None
     notes: list[str] = field(default_factory=list)
+    route: str = "data"          # conversational | clarify | data | error
+    timing: dict = field(default_factory=dict)   # total_ms, llm_calls, llm_ms
+
+    def analytics(self) -> dict:
+        """The loggable, PII-free summary of this exchange (question text
+        included — testers are told questions are recorded)."""
+        plan = self.plan or {}
+        prov = self.provenance or {}
+        where = str(plan.get("where") or "")
+        countries = sorted(set(re.findall(r"'([A-Z]{3})'", where)))
+        return {
+            "question": self.question,
+            "route": self.route,
+            "template": plan.get("template"),
+            "instrument": plan.get("instrument"),
+            "cycles": plan.get("cycles"),
+            "by": plan.get("by"),
+            "countries": countries,
+            "all_countries": bool(plan.get("by")) and "CNT" in (plan.get("by") or [])
+                             and not countries,
+            "variables": sorted({v["variable"] for v in prov.get("variables", [])}),
+            "rows": int(len(self.table)) if self.table is not None else 0,
+            "raw_sql": plan.get("template") == "raw_sql",
+            "substitution": bool(plan.get("substitution_note")),
+            "oecd_average": bool(plan.get("include_oecd_average")),
+            "missing_rows": any("no estimate" in n for n in prov.get("notes", [])),
+            "error": self.error,
+            "answer_chars": len(self.answer or ""),
+            **self.timing,
+        }
 
 
 class Agent:
@@ -536,13 +567,26 @@ class Agent:
     )
 
     def ask(self, question: str, history: list | None = None) -> AgentResult:
+        """Answer one question; attaches route + timing for analytics."""
+        llm.reset_stats()
+        started = time.time()
+        try:
+            result = self._ask(question, history)
+        except Exception as e:  # noqa: BLE001 — surface as a result, not a crash
+            result = AgentResult(question, f"Something went wrong: {e}",
+                                 error=str(e), route="error")
+        result.timing = {"total_ms": round((time.time() - started) * 1000),
+                         **llm.stats()}
+        return result
+
+    def _ask(self, question: str, history: list | None) -> AgentResult:
         context = self._transcript(history)
         route = generate_json(f"{context}Question: {question}", system=TERMS_SYSTEM)
         if not route.get("data_question"):
             if self.VIZ_WORDS.search(question):
-                return AgentResult(question, self.VIZ_ANSWER)
+                return AgentResult(question, self.VIZ_ANSWER, route="conversational")
             return AgentResult(question, route.get("direct_answer")
-                               or "Could you rephrase that?")
+                               or "Could you rephrase that?", route="conversational")
 
         hits = self._retrieve(route.get("search_terms") or [])
         plan = generate_json(
@@ -552,13 +596,13 @@ class Agent:
         if plan.get("action") == "clarify":
             return AgentResult(question, plan.get("clarify")
                                or "I need more detail to answer that.",
-                               plan=plan, retrieved=hits)
+                               plan=plan, retrieved=hits, route="clarify")
 
         try:
             table, provenance = self.execute(plan)
         except Exception as e:
             return AgentResult(question, f"The analysis failed: {e}",
-                               plan=plan, retrieved=hits, error=str(e))
+                               plan=plan, retrieved=hits, error=str(e), route="error")
 
         shown = table.head(30).round(2)
         truncation = (

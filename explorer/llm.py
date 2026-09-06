@@ -8,6 +8,7 @@ The `.env` file is gitignored; never commit keys.
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -19,6 +20,20 @@ _ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:gen
 
 class LLMError(RuntimeError):
     pass
+
+
+# Per-question call accounting (the agent runs one question at a time under
+# a lock, so a module-level tally is safe). reset_stats() before a question,
+# stats() after.
+_stats = {"calls": 0, "ms": 0.0}
+
+
+def reset_stats() -> None:
+    _stats["calls"], _stats["ms"] = 0, 0.0
+
+
+def stats() -> dict:
+    return {"llm_calls": _stats["calls"], "llm_ms": round(_stats["ms"])}
 
 
 def _clean_key(raw: str) -> str:
@@ -71,6 +86,7 @@ def generate(
         headers={"Content-Type": "application/json", "x-goog-api-key": _load_key()},
         method="POST",
     )
+    started = time.time()
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -79,6 +95,9 @@ def generate(
         raise LLMError(f"Gemini API error {e.code}: {detail}") from e
     except urllib.error.URLError as e:
         raise LLMError(f"Gemini API unreachable: {e.reason}") from e
+    finally:
+        _stats["calls"] += 1
+        _stats["ms"] += (time.time() - started) * 1000
 
     try:
         parts = payload["candidates"][0]["content"]["parts"]

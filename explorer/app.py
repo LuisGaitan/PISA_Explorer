@@ -4,17 +4,21 @@
   python -m explorer.app --port 9000
 
 Environment (all optional locally; set them in production):
-  PORT               listen port (Cloud Run sets this; default 8765)
-  BIND_HOST          0.0.0.0 in containers; default 127.0.0.1 (local only)
-  PISA_ACCESS_CODE   if set, every /api/ask must present it (the UI asks once
-                     and remembers it) — REQUIRED for any public deployment
-  PISA_RATE_LIMIT    questions per session per hour (default 20)
-  PISA_GLOBAL_RATE   questions per hour across ALL users (default 200) —
-                     the hard cap on Gemini spend
-  GEMINI_API_KEY     the LLM key (or .env locally)
+  PORT                listen port (Cloud Run sets this; default 8765)
+  BIND_HOST           0.0.0.0 in containers; default 127.0.0.1 (local only)
+  PISA_ACCESS_CODES   "code:Institution,code2:Institution 2" — each tester
+                      group gets its own code, so attribution is reliable and
+                      any one code can be revoked. REQUIRED for public use.
+  PISA_ACCESS_CODE    legacy single code (institution recorded as "General")
+  PISA_ADMIN_CODE     unlocks /admin and /api/admin/*; if unset, admin is off
+  PISA_RATE_LIMIT     questions per session per hour (default 20)
+  PISA_GLOBAL_RATE    questions per hour across ALL users (default 200) —
+                      the hard cap on Gemini spend
+  PISA_EVENTS_BACKEND firestore | jsonl | auto (default: firestore on Cloud Run)
+  GEMINI_API_KEY      the LLM key (or .env locally)
 
 Protection model (lessons from the old prototype's open endpoint):
-per-session cookies isolate conversation histories; an access code gates the
+per-session cookies isolate conversation histories; access codes gate the
 spending endpoint; per-session and global hourly rate limits bound cost; the
 agent's own guards (read-only DB, SELECT-only SQL) bound what a query can do.
 """
@@ -30,19 +34,41 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .agent import Agent
+from .events import open_store
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_TYPES = {".html": "text/html; charset=utf-8",
+                ".js": "application/javascript; charset=utf-8",
+                ".css": "text/css; charset=utf-8"}
 
-ACCESS_CODE = os.environ.get("PISA_ACCESS_CODE") or None
 RATE_LIMIT = int(os.environ.get("PISA_RATE_LIMIT", "20"))
 GLOBAL_RATE = int(os.environ.get("PISA_GLOBAL_RATE", "200"))
 RATE_WINDOW = 3600.0
 MAX_SESSIONS = 500
+ADMIN_CODE = os.environ.get("PISA_ADMIN_CODE") or None
+
+
+def _parse_access_codes() -> dict[str, str]:
+    """code -> institution label. Empty dict = open (local dev only)."""
+    codes: dict[str, str] = {}
+    for pair in (os.environ.get("PISA_ACCESS_CODES") or "").split(","):
+        if ":" in pair:
+            code, label = pair.split(":", 1)
+            if code.strip():
+                codes[code.strip()] = label.strip() or "Unknown"
+    legacy = os.environ.get("PISA_ACCESS_CODE")
+    if legacy:
+        codes.setdefault(legacy.strip(), "General")
+    return codes
+
+
+ACCESS_CODES = _parse_access_codes()
 
 _agent: Agent | None = None
 _lock = threading.Lock()
 _sessions: OrderedDict[str, dict] = OrderedDict()   # sid -> {history, asks}
 _global_asks: deque = deque()
+_events = open_store()
 
 
 def get_agent() -> Agent:
@@ -50,6 +76,16 @@ def get_agent() -> Agent:
     if _agent is None:
         _agent = Agent()
     return _agent
+
+
+def institution_for(code: str) -> str | None:
+    """Constant-time lookup; None when the code is not accepted."""
+    if not ACCESS_CODES:
+        return "Local"
+    for known, label in ACCESS_CODES.items():
+        if secrets.compare_digest(code, known):
+            return label
+    return None
 
 
 def get_session(sid: str) -> dict:
@@ -89,7 +125,7 @@ def _denan(value):
     return value
 
 
-def result_payload(result) -> dict:
+def result_payload(result, event_id: str | None) -> dict:
     table = None
     if result.table is not None:
         # astype(object) first — on float columns, .where(..., None) alone
@@ -98,11 +134,14 @@ def result_payload(result) -> dict:
         table = {"columns": list(clean.columns),
                  "rows": clean.to_dict(orient="records")}
     return {"answer": result.answer, "table": table, "plan": result.plan,
-            "provenance": result.provenance, "error": result.error}
+            "provenance": result.provenance, "error": result.error,
+            "event_id": event_id}
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+
+    # ---------- plumbing ----------
 
     def _send(self, status: int, body: bytes, content_type: str,
               extra_headers: dict | None = None) -> None:
@@ -133,64 +172,166 @@ class Handler(BaseHTTPRequestHandler):
         sid = secrets.token_urlsafe(24)
         return sid, {"Set-Cookie": f"sid={sid}; Path=/; HttpOnly; SameSite=Lax"}
 
+    def _read_body(self) -> tuple[dict | None, bytes]:
+        """Always consume the request body BEFORE any early response — with
+        HTTP/1.1 keep-alive, unread body bytes corrupt the next request."""
+        length = int(self.headers.get("Content-Length", 0))
+        if length > 100_000:
+            self.close_connection = True
+            return None, b""
+        raw = self.rfile.read(length)
+        try:
+            return json.loads(raw or b"{}"), raw
+        except json.JSONDecodeError:
+            return {}, raw
+
+    def _institution(self) -> str | None:
+        return institution_for(self.headers.get("X-Access-Code", ""))
+
+    def _is_admin(self) -> bool:
+        return bool(ADMIN_CODE) and secrets.compare_digest(
+            self.headers.get("X-Admin-Code", ""), ADMIN_CODE)
+
+    def _serve_static(self, name: str) -> None:
+        path = STATIC_DIR / name
+        if "/" in name or "\\" in name or not path.is_file():
+            self._send(404, b"not found", "text/plain")
+            return
+        ctype = STATIC_TYPES.get(path.suffix, "application/octet-stream")
+        self._send(200, path.read_bytes(), ctype,
+                   extra_headers={"Cache-Control": "no-cache"})
+
+    # ---------- GET ----------
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path in ("/", "/index.html"):
             _, cookie = self._sid()
             html = (STATIC_DIR / "index.html").read_bytes()
-            self._send(200, html, "text/html; charset=utf-8",
-                       extra_headers=cookie)
-        elif path == "/healthz":
+            self._send(200, html, "text/html; charset=utf-8", extra_headers=cookie)
+        elif path == "/admin":
+            self._serve_static("admin.html")
+        elif path.startswith("/static/"):
+            self._serve_static(path[len("/static/"):])
+        elif path == "/api/health":
             self._send(200, b"ok", "text/plain")
+        elif path.startswith("/api/admin/events"):
+            self._admin_events()
         else:
             self._send(404, b"not found", "text/plain")
 
+    def _admin_events(self) -> None:
+        if not self._is_admin():
+            self._send_json(401, {"error": "admin code required"})
+            return
+        query = self.path.partition("?")[2]
+        days = 30
+        for part in query.split("&"):
+            k, _, v = part.partition("=")
+            if k == "days" and v.isdigit():
+                days = max(1, min(int(v), 365))
+        docs = _events.query(days)
+        self._send_json(200, {"days": days, "count": len(docs),
+                              "backend": _events.name, "events": docs})
+
+    # ---------- POST ----------
+
     def do_POST(self):
-        if self.path != "/api/ask":
+        routes = {"/api/ask": self._ask, "/api/whoami": self._whoami,
+                  "/api/event": self._event}
+        handler = routes.get(self.path)
+        if handler is None:
+            self._read_body()
             self._send(404, b"not found", "text/plain")
             return
         try:
-            # Always consume the request body BEFORE any early response —
-            # with HTTP/1.1 keep-alive, unread body bytes corrupt the next
-            # request on the same connection.
-            length = int(self.headers.get("Content-Length", 0))
-            if length > 100_000:
-                self.close_connection = True
+            body, _ = self._read_body()
+            if body is None:
                 self._send_json(413, {"error": "request too large"})
                 return
-            raw = self.rfile.read(length)
-            if ACCESS_CODE and not secrets.compare_digest(
-                    self.headers.get("X-Access-Code", ""), ACCESS_CODE):
-                self._send_json(401, {"error": "access code required"})
-                return
-            body = json.loads(raw or b"{}")
-            question = (body.get("question") or "").strip()
-            if not question:
-                self._send_json(400, {"error": "empty question"})
-                return
-            if len(question) > 2000:
-                self._send_json(400, {"error": "question too long"})
-                return
-
-            sid, cookie = self._sid()
-            with _lock:
-                session = get_session(sid)
-                ok, message = rate_ok(session)
-                if not ok:
-                    self._send_json(429, {"error": message}, extra_headers=cookie)
-                    return
-                result = get_agent().ask(question, history=session["history"])
-                session["history"].append({
-                    "question": question,
-                    "answer": result.answer,
-                    "explanation": (result.plan or {}).get("explanation"),
-                })
-                del session["history"][:-6]
-            self._send_json(200, result_payload(result), extra_headers=cookie)
+            handler(body)
         except BrokenPipeError:
             pass
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self._send_json(500, {"error": str(e)})
+
+    def _whoami(self, body: dict) -> None:
+        """The gate: validates an access code and names its institution."""
+        code = (body.get("code") or self.headers.get("X-Access-Code", "")).strip()
+        institution = institution_for(code)
+        if institution is None:
+            self._send_json(401, {"error": "That access code is not recognized."})
+            return
+        self._send_json(200, {"institution": institution,
+                              "gated": bool(ACCESS_CODES)})
+
+    def _ask(self, body: dict) -> None:
+        institution = self._institution()
+        if institution is None:
+            self._send_json(401, {"error": "access code required"})
+            return
+        question = (body.get("question") or "").strip()
+        if not question:
+            self._send_json(400, {"error": "empty question"})
+            return
+        if len(question) > 2000:
+            self._send_json(400, {"error": "question too long"})
+            return
+
+        sid, cookie = self._sid()
+        with _lock:
+            session = get_session(sid)
+            ok, message = rate_ok(session)
+            if not ok:
+                _events.create({"kind": "rate_limited", "session": sid[:12],
+                                "institution": institution, "question": question})
+                self._send_json(429, {"error": message}, extra_headers=cookie)
+                return
+            result = get_agent().ask(question, history=session["history"])
+            session["history"].append({
+                "question": question,
+                "answer": result.answer,
+                "explanation": (result.plan or {}).get("explanation"),
+            })
+            del session["history"][:-6]
+            event_id = _events.create({
+                "kind": "ask", "session": sid[:12], "institution": institution,
+                "turn": len(session["history"]),
+                **result.analytics(),
+            })
+        self._send_json(200, result_payload(result, event_id), extra_headers=cookie)
+
+    def _event(self, body: dict) -> None:
+        """Browser-side facts about a question: what rendered, feedback,
+        exports, device — merged into that question's event document."""
+        if self._institution() is None:
+            self._send_json(401, {"error": "access code required"})
+            return
+        event_id = str(body.get("event_id") or "")
+        kind = str(body.get("kind") or "")
+        if not (event_id.isalnum() and len(event_id) == 32):
+            self._send_json(400, {"error": "bad event id"})
+            return
+        fields: dict = {}
+        if kind == "render":
+            fields = {"chart": str(body.get("chart") or "none")[:20],
+                      "width": int(body.get("width") or 0),
+                      "mobile": bool(body.get("mobile")),
+                      "ua": str(body.get("ua") or "")[:200]}
+        elif kind == "feedback":
+            vote = body.get("vote")
+            if vote not in ("up", "down"):
+                self._send_json(400, {"error": "vote must be up or down"})
+                return
+            fields = {"vote": vote, "comment": str(body.get("comment") or "")[:1000],
+                      "feedback_ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        elif kind == "export":
+            fields = {"exported": True}
+        else:
+            self._send_json(400, {"error": "unknown event kind"})
+            return
+        _events.update(event_id, fields)
+        self._send_json(200, {"ok": True})
 
     def log_message(self, fmt, *args):
         pass
@@ -203,9 +344,11 @@ def main() -> None:
     parser.add_argument("--host", default=os.environ.get("BIND_HOST", "127.0.0.1"))
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    guard = "access code ON" if ACCESS_CODE else "no access code (local dev)"
+    gate = (f"{len(ACCESS_CODES)} access code(s)" if ACCESS_CODES
+            else "no access code (local dev)")
     print(f"PISA Explorer on http://{args.host}:{args.port}  "
-          f"[{guard}, {RATE_LIMIT}/h per session, {GLOBAL_RATE}/h global]")
+          f"[{gate}, admin {'ON' if ADMIN_CODE else 'off'}, events -> {_events.name}, "
+          f"{RATE_LIMIT}/h per session, {GLOBAL_RATE}/h global]")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

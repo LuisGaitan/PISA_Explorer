@@ -1,0 +1,7 @@
+# Upload context for the code-only build: everything except data and secrets.
+.git/
+.env
+__pycache__/
+*.pyc
+data/
+*.log

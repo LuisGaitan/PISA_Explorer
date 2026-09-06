@@ -23,7 +23,8 @@
       --accent-wash: rgba(57,135,229,0.12);
     }
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; min-width: 0; }
+  html, body { overflow-x: hidden; }
   body {
     margin: 0; background: var(--page); color: var(--ink);
     font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -31,41 +32,50 @@
   header {
     padding: 20px 24px 14px; border-bottom: 1px solid var(--border);
     background: var(--surface); position: sticky; top: 0; z-index: 5;
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
   }
   header h1 { margin: 0; font-size: 17px; font-weight: 650; }
   header p  { margin: 2px 0 0; color: var(--ink2); font-size: 12.5px; }
-  main { max-width: 900px; margin: 0 auto; padding: 20px 20px 120px; }
-  .q {
-    margin: 26px 0 10px; display: flex; justify-content: flex-end;
-  }
+  .chip { font-size: 12px; color: var(--ink2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+  .chip[hidden] { display: none; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px 20px 130px; }
+  .q { margin: 26px 0 10px; display: flex; justify-content: flex-end; }
   .q span {
     background: var(--accent-wash); border: 1px solid var(--border);
-    padding: 8px 14px; border-radius: 14px 14px 3px 14px; max-width: 75%;
+    padding: 8px 14px; border-radius: 14px 14px 3px 14px; max-width: 75%; overflow-wrap: anywhere;
   }
   .card {
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 14px 16px; margin: 10px 0;
+    border-radius: 10px; padding: 14px 16px; margin: 10px 0; max-width: 100%; overflow-wrap: anywhere;
   }
   .card.answer { font-size: 14.5px; }
   .card.error { border-color: var(--neg); color: var(--ink2); }
+  .card.muted { color: var(--muted); }
   .thinking { color: var(--muted); font-style: italic; }
   .chart-title { font-size: 12.5px; color: var(--ink2); margin: 0 0 10px; font-weight: 600; }
   .legend { display: flex; gap: 16px; margin: 0 0 8px; font-size: 12px; color: var(--ink2); }
   .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
-  svg { display: block; width: 100%; height: auto; }
+  .chartwrap { overflow-x: auto; }
+  .chartwrap svg { display: block; width: 100%; min-width: 700px; height: auto; }
   svg text { font: 11.5px system-ui, -apple-system, "Segoe UI", sans-serif; }
   .ticktext { font-variant-numeric: tabular-nums; }
-  .tablewrap { overflow-x: auto; }
+  .tablewrap { overflow-x: auto; max-width: 100%; }
   table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   th { text-align: left; color: var(--ink2); font-weight: 600; border-bottom: 1px solid var(--baseline); padding: 5px 10px 5px 0; }
   td { border-bottom: 1px solid var(--grid); padding: 4px 10px 4px 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .tablebar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .tablebar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px; }
   .tablebar span { font-size: 12.5px; color: var(--ink2); font-weight: 600; }
-  button.export {
+  button.small {
     background: none; border: 1px solid var(--border); color: var(--ink2);
-    border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+    border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; white-space: nowrap;
   }
-  button.export:hover { background: var(--accent-wash); }
+  button.small:hover { background: var(--accent-wash); }
+  button.small.on { border-color: var(--series1); color: var(--ink); }
+  .feedback { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+  .feedback textarea {
+    flex: 1 1 240px; background: var(--page); color: var(--ink); border: 1px solid var(--baseline);
+    border-radius: 6px; padding: 6px 8px; font: 12.5px system-ui, sans-serif; resize: vertical; min-height: 34px;
+  }
   .prov { font-size: 12.5px; color: var(--ink2); }
   .prov .lead { display: flex; flex-wrap: wrap; gap: 4px 18px; }
   .prov b { color: var(--ink); font-weight: 600; }
@@ -101,12 +111,48 @@
   #tooltip .val { font-size: 14px; font-weight: 650; color: var(--ink); }
   #tooltip .lab { color: var(--ink2); }
   .hint { color: var(--muted); font-size: 12.5px; margin-top: 40px; text-align: center; }
+
+  /* gate */
+  #gate { position: fixed; inset: 0; background: var(--page); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  #gate[hidden] { display: none; }
+  #gate .box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 26px 26px 22px; max-width: 420px; width: 100%; }
+  #gate h2 { margin: 0 0 6px; font-size: 18px; }
+  #gate p { margin: 0 0 14px; color: var(--ink2); font-size: 13.5px; }
+  #gate input { width: 100%; padding: 10px 12px; border: 1px solid var(--baseline); border-radius: 8px; background: var(--page); color: var(--ink); font-size: 15px; }
+  #gate input:focus { outline: 2px solid var(--series1); border-color: transparent; }
+  #gate button { margin-top: 12px; width: 100%; background: var(--series1); color: #fff; border: 0; border-radius: 8px; padding: 10px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  #gate .err { color: var(--neg); font-size: 13px; margin-top: 8px; min-height: 18px; }
+  #gate .fine { color: var(--muted); font-size: 12px; margin-top: 14px; }
+
+  @media (max-width: 600px) {
+    header { padding: 12px 14px 10px; }
+    header p { display: none; }
+    main { padding: 12px 10px 140px; }
+    .q span { max-width: 92%; }
+    .card { padding: 12px; }
+    td, th { padding-right: 8px; }
+    form.askbar { padding: 10px; }
+    form.askbar button { padding: 10px 14px; }
+  }
 </style>
 </head>
 <body>
+<div id="gate" hidden>
+  <div class="box">
+    <h2>PISA Explorer</h2>
+    <p>Ask questions about the OECD PISA 2018 &amp; 2022 databases in plain language. Enter the access code you were given — it also tells us which institution you're testing from.</p>
+    <input id="gatecode" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Access code">
+    <button id="gatebtn" type="button">Enter</button>
+    <div class="err" id="gateerr"></div>
+    <div class="fine">Questions and feedback are recorded to improve the tool. No personal information is requested.</div>
+  </div>
+</div>
 <header>
-  <h1>PISA Explorer</h1>
-  <p>Ask about the OECD PISA 2018 &amp; 2022 databases — survey-weighted, plausible-value-correct, with full provenance.</p>
+  <div>
+    <h1>PISA Explorer</h1>
+    <p>Ask about the OECD PISA 2018 &amp; 2022 databases — survey-weighted, plausible-value-correct, with full provenance.</p>
+  </div>
+  <span class="chip" id="chip" hidden></span>
 </header>
 <main id="log">
   <p class="hint">Try: “How did the math gender gap change in the US between 2018 and 2022?”<br>
@@ -120,330 +166,88 @@
     <button id="askbtn" type="submit">Ask</button>
   </div>
 </form>
-<div id="tooltip"></div>
 
+<script src="/static/charts.js"></script>
 <script>
 "use strict";
 const $log = document.getElementById("log");
-const $tip = document.getElementById("tooltip");
-const METRICS = new Set(["estimate","se","n_pv","estimate_2018","se_2018",
-                         "estimate_2022","se_2022","change","se_change","cycle"]);
-const css = name => getComputedStyle(document.body).getPropertyValue(name);
+const $form = document.getElementById("askform");
+const $q = document.getElementById("qbox");
+const $btn = document.getElementById("askbtn");
+const $chip = document.getElementById("chip");
+const isMobile = () => window.matchMedia("(max-width: 600px)").matches;
 
-function el(tag, cls, text) {
-  const node = document.createElement(tag);
-  if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-const svgNS = "http://www.w3.org/2000/svg";
-function sv(tag, attrs) {
-  const node = document.createElementNS(svgNS, tag);
-  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
-  return node;
-}
-const fmt = (x, d = 1) => (x === null || x === undefined || Number.isNaN(+x))
-  ? "–" : (+x).toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: 0 });
+/* ---------- access code (one field; the code identifies the institution) ---------- */
+function getCode() { try { return localStorage.getItem("pisa_code") || ""; } catch { return ""; } }
+function setCode(c) { try { if (c) localStorage.setItem("pisa_code", c); else localStorage.removeItem("pisa_code"); } catch {} }
 
-/* ---------- tooltip ---------- */
-function showTip(evt, valueText, labelText, extraLines) {
-  $tip.replaceChildren();
-  $tip.appendChild(el("div", "val", valueText));
-  $tip.appendChild(el("div", "lab", labelText));
-  for (const line of extraLines || []) $tip.appendChild(el("div", "lab", line));
-  $tip.style.display = "block";
-  const pad = 14, w = $tip.offsetWidth;
-  let x = evt.clientX + pad;
-  if (x + w > window.innerWidth - 8) x = evt.clientX - w - pad;
-  $tip.style.left = x + "px";
-  $tip.style.top = Math.max(8, evt.clientY - 10) + "px";
-}
-function hideTip() { $tip.style.display = "none"; }
+const $gate = document.getElementById("gate");
+const $gatecode = document.getElementById("gatecode");
+const $gateerr = document.getElementById("gateerr");
 
-/* ---------- scales & ticks ---------- */
-function niceTicks(lo, hi, n = 5) {
-  const span = hi - lo || 1;
-  const step0 = span / n;
-  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
-  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => span / s <= n) || mag * 10;
-  const start = Math.ceil(lo / step) * step;
-  const ticks = [];
-  for (let t = start; t <= hi + 1e-9; t += step) ticks.push(+t.toFixed(10));
-  return ticks;
-}
-
-/* ---------- chart: horizontal bars with 95% CI whiskers ---------- */
-function roundedBar(x0, x1, y, h) {   // square at baseline x0, 4px-round data end
-  const r = Math.min(4, Math.abs(x1 - x0), h / 2), right = x1 > x0;
-  if (Math.abs(x1 - x0) < 0.5) return "";
-  return right
-    ? `M${x0},${y} H${x1 - r} A${r},${r} 0 0 1 ${x1},${y + r} V${y + h - r} A${r},${r} 0 0 1 ${x1 - r},${y + h} H${x0} Z`
-    : `M${x0},${y} H${x1 + r} A${r},${r} 0 0 0 ${x1},${y + r} V${y + h - r} A${r},${r} 0 0 0 ${x1 + r},${y + h} H${x0} Z`;
-}
-
-function barChart(rows, catCols, valueKey, seKey, title) {
-  // League-table mode: many rows render ranked (a presentation copy — the
-  // data table below keeps the original order), tighter, without tip labels.
-  const league = rows.length > 12;
-  if (league) rows = [...rows].sort((a, b) => (+b[valueKey]) - (+a[valueKey]));
-  const cats = rows.map(r => catCols.map(c => r[c]).join(" · "));
-  const vals = rows.map(r => +r[valueKey]);
-  const ses  = rows.map(r => seKey ? +r[seKey] || 0 : 0);
-  let lo = Math.min(0, ...vals.map((v, i) => v - 1.96 * ses[i]));
-  let hi = Math.max(0, ...vals.map((v, i) => v + 1.96 * ses[i]));
-  if (lo < 0) lo -= (hi - lo) * 0.09;   // room for value labels beyond left whiskers
-  const diverging = vals.some(v => v < 0) && vals.some(v => v > 0) || vals.every(v => v < 0);
-
-  const W = 860, labelW = 150, padR = 60, axisH = 26, padT = 6;
-  const rowH = league ? 22 : 30, barH = league ? 15 : 20;
-  const H = padT + rows.length * rowH + axisH;
-  const x = v => labelW + (v - lo) / (hi - lo || 1) * (W - labelW - padR);
-  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}` });
-  svg.setAttribute("role", "img");
-
-  for (const t of niceTicks(lo, hi)) {
-    const g = sv("line", { x1: x(t), x2: x(t), y1: padT, y2: H - axisH, "stroke-width": 1 });
-    g.style.stroke = "var(--grid)";
-    svg.appendChild(g);
-    const tt = sv("text", { x: x(t), y: H - axisH + 16, "text-anchor": "middle", class: "ticktext" });
-    tt.style.fill = "var(--muted)"; tt.textContent = fmt(t, 2);
-    svg.appendChild(tt);
-  }
-  const zero = sv("line", { x1: x(0), x2: x(0), y1: padT, y2: H - axisH, "stroke-width": 1 });
-  zero.style.stroke = "var(--baseline)";
-  svg.appendChild(zero);
-
-  rows.forEach((r, i) => {
-    const y = padT + i * rowH + (rowH - barH) / 2;
-    const v = vals[i], se = ses[i];
-    const isRef = cats[i] === "OECD avg";   // reference row, not a country
-    const color = isRef ? "var(--muted)"
-      : diverging ? (v >= 0 ? "var(--series1)" : "var(--neg)") : "var(--series1)";
-
-    const label = sv("text", { x: labelW - 8, y: y + barH / 2 + 4, "text-anchor": "end" });
-    label.style.fill = "var(--ink2)";
-    if (isRef) label.style.fontWeight = "650";
-    label.textContent = cats[i];
-    svg.appendChild(label);
-
-    const bar = sv("path", { d: roundedBar(x(0), x(v), y, barH) });
-    bar.style.fill = color;
-    svg.appendChild(bar);
-
-    if (se > 0) {
-      const a = x(v - 1.96 * se), b = x(v + 1.96 * se), cy = y + barH / 2;
-      for (const [x1, x2, y1, y2] of [[a, b, cy, cy], [a, a, cy - 4, cy + 4], [b, b, cy - 4, cy + 4]]) {
-        const wline = sv("line", { x1, x2, y1, y2, "stroke-width": 1.5 });
-        wline.style.stroke = "var(--ink2)";
-        svg.appendChild(wline);
-      }
-    }
-    if (rows.length <= 12) {
-      const outward = v >= 0;   // label beyond the whisker, on the bar's own side
-      const tipX = outward ? Math.max(x(v), x(v + 1.96 * se)) + 6
-                           : Math.min(x(v), x(v - 1.96 * se)) - 6;
-      const fits = outward ? tipX <= W - 4 : tipX >= labelW + 36;
-      if (fits) {   // otherwise the tooltip + table carry the value
-        const vt = sv("text", { x: tipX, y: y + barH / 2 + 4, class: "ticktext",
-                                "text-anchor": outward ? "start" : "end" });
-        vt.style.fill = "var(--ink2)"; vt.textContent = fmt(v);
-        svg.appendChild(vt);
-      }
-    }
-    const hit = sv("rect", { x: 0, y: padT + i * rowH, width: W, height: rowH, fill: "transparent" });
-    hit.addEventListener("pointermove", e => {
-      bar.style.filter = "brightness(1.12)";
-      showTip(e, fmt(v, 2), cats[i],
-        se > 0 ? [`SE ${fmt(se, 2)} · 95% CI [${fmt(v - 1.96 * se)}, ${fmt(v + 1.96 * se)}]`] : []);
-    });
-    hit.addEventListener("pointerleave", () => { bar.style.filter = ""; hideTip(); });
-    svg.appendChild(hit);
+async function whoami(code) {
+  const resp = await fetch("/api/whoami", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
   });
-
-  return wrapChart(svg, title);
+  return { ok: resp.status === 200, data: await resp.json().catch(() => ({})) };
 }
 
-/* ---------- chart: dumbbell for 2018 -> 2022 ---------- */
-function dumbbellChart(rows, catCols, k18, k22, se18k, se22k, title) {
-  const cats = rows.map(r => catCols.map(c => r[c]).join(" · "));
-  const v18 = rows.map(r => +r[k18]), v22 = rows.map(r => +r[k22]);
-  const s18 = rows.map(r => +r[se18k] || 0), s22 = rows.map(r => +r[se22k] || 0);
-  const all = [...v18.map((v, i) => v - 1.96 * s18[i]), ...v18.map((v, i) => v + 1.96 * s18[i]),
-               ...v22.map((v, i) => v - 1.96 * s22[i]), ...v22.map((v, i) => v + 1.96 * s22[i])];
-  const lo = Math.min(...all), hi = Math.max(...all);
-  const pad = (hi - lo) * 0.06 || 1;
-
-  const W = 860, labelW = 150, padR = 56, rowH = 32, axisH = 26, padT = 6;
-  const H = padT + rows.length * rowH + axisH;
-  const x = v => labelW + (v - (lo - pad)) / ((hi + pad) - (lo - pad)) * (W - labelW - padR);
-  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}` });
-
-  for (const t of niceTicks(lo - pad, hi + pad)) {
-    const g = sv("line", { x1: x(t), x2: x(t), y1: padT, y2: H - axisH, "stroke-width": 1 });
-    g.style.stroke = "var(--grid)"; svg.appendChild(g);
-    const tt = sv("text", { x: x(t), y: H - axisH + 16, "text-anchor": "middle", class: "ticktext" });
-    tt.style.fill = "var(--muted)"; tt.textContent = fmt(t, 0);
-    svg.appendChild(tt);
-  }
-
-  rows.forEach((r, i) => {
-    const cy = padT + i * rowH + rowH / 2;
-    const label = sv("text", { x: labelW - 8, y: cy + 4, "text-anchor": "end" });
-    label.style.fill = "var(--ink2)"; label.textContent = cats[i];
-    svg.appendChild(label);
-
-    const conn = sv("line", { x1: x(v18[i]), x2: x(v22[i]), y1: cy, y2: cy, "stroke-width": 1.5 });
-    conn.style.stroke = "var(--baseline)";
-    svg.appendChild(conn);
-
-    for (const [v, colorVar] of [[v18[i], "var(--series1-soft)"], [v22[i], "var(--series1)"]]) {
-      const dot = sv("circle", { cx: x(v), cy, r: 5.5, "stroke-width": 2 });
-      dot.style.fill = colorVar; dot.style.stroke = "var(--surface)";
-      svg.appendChild(dot);
-    }
-    if (rows.length <= 8) {
-      const outer = v22[i] >= v18[i];
-      const vt = sv("text", { x: x(v22[i]) + (outer ? 10 : -10), y: cy + 4,
-                              "text-anchor": outer ? "start" : "end", class: "ticktext" });
-      vt.style.fill = "var(--ink2)"; vt.textContent = fmt(v22[i]);
-      svg.appendChild(vt);
-    }
-    const change = r.change, seCh = r.se_change;
-    const hit = sv("rect", { x: 0, y: padT + i * rowH, width: W, height: rowH, fill: "transparent" });
-    hit.addEventListener("pointermove", e => {
-      const lines = [`2018: ${fmt(v18[i], 2)} (SE ${fmt(s18[i], 2)})`,
-                     `2022: ${fmt(v22[i], 2)} (SE ${fmt(s22[i], 2)})`];
-      if (change !== undefined && change !== null) {
-        const sig = Math.abs(+change) > 1.96 * (+seCh || 0) ? "significant" : "not significant";
-        lines.push(`change ${(+change >= 0 ? "+" : "") + fmt(change, 2)} (SE ${fmt(seCh, 2)}) — ${sig}`);
-      }
-      showTip(e, cats[i], "2018 → 2022", lines);
-    });
-    hit.addEventListener("pointerleave", hideTip);
-    svg.appendChild(hit);
-  });
-
-  const wrap = wrapChart(svg, title);
-  const legend = el("div", "legend");
-  for (const [name, colorVar] of [["PISA 2018", "var(--series1-soft)"], ["PISA 2022", "var(--series1)"]]) {
-    const item = el("span");
-    const dot = el("span", "dot"); dot.style.background = colorVar;
-    item.appendChild(dot); item.appendChild(document.createTextNode(name));
-    legend.appendChild(item);
-  }
-  wrap.insertBefore(legend, wrap.querySelector("svg"));
-  return wrap;
+function showGate(message) {
+  $gateerr.textContent = message || "";
+  $gate.hidden = false;
+  setTimeout(() => $gatecode.focus(), 50);
 }
 
-/* ---------- chart: heatmap for weighted crosstabs ---------- */
-const RAMP_LO = [0xcd, 0xe2, 0xfb], RAMP_HI = [0x10, 0x42, 0x81];  // sequential blue
-function rampColor(t) {
-  const c = RAMP_LO.map((lo, i) => Math.round(lo + (RAMP_HI[i] - lo) * t));
-  return `rgb(${c[0]},${c[1]},${c[2]})`;
+async function checkGate() {
+  const { ok, data } = await whoami(getCode());
+  if (ok) {
+    $gate.hidden = true;
+    if (data.gated) { $chip.textContent = data.institution; $chip.hidden = false; }
+    return true;
+  }
+  if (getCode()) setCode("");          // a stored code that no longer works
+  showGate("");
+  return false;
 }
 
-function heatmapChart(rows, title) {
-  const rlab = r => String(r.row_label ?? r.row);
-  const clab = r => String(r.col_label ?? r.col);
-  const rowCats = [...new Set(rows.map(rlab))];
-  const colCats = [...new Set(rows.map(clab))];
-  const vals = rows.map(r => +r.estimate);
-  const vmin = Math.min(...vals), vmax = Math.max(...vals);
+document.getElementById("gatebtn").addEventListener("click", async () => {
+  const code = $gatecode.value.trim();
+  if (!code) { $gateerr.textContent = "Please enter your access code."; return; }
+  const { ok, data } = await whoami(code);
+  if (ok) { setCode(code); $gatecode.value = ""; await checkGate(); $q.focus(); }
+  else $gateerr.textContent = data.error || "That code was not accepted.";
+});
+$gatecode.addEventListener("keydown", e => { if (e.key === "Enter") document.getElementById("gatebtn").click(); });
 
-  const W = 860, labelW = 190, headH = 26, cellH = 34, axisPad = 6;
-  const cellW = (W - labelW - 10) / colCats.length;
-  const H = headH + rowCats.length * cellH + axisPad;
-  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}` });
-
-  colCats.forEach((c, j) => {
-    const t = sv("text", { x: labelW + j * cellW + cellW / 2, y: headH - 8,
-                           "text-anchor": "middle" });
-    t.style.fill = "var(--ink2)";
-    t.textContent = c.length > 22 ? c.slice(0, 21) + "…" : c;
-    svg.appendChild(t);
-  });
-  rowCats.forEach((r, i) => {
-    const t = sv("text", { x: labelW - 8, y: headH + i * cellH + cellH / 2 + 4,
-                           "text-anchor": "end" });
-    t.style.fill = "var(--ink2)";
-    t.textContent = r.length > 28 ? r.slice(0, 27) + "…" : r;
-    svg.appendChild(t);
-  });
-
-  for (const cell of rows) {
-    const i = rowCats.indexOf(rlab(cell)), j = colCats.indexOf(clab(cell));
-    if (i < 0 || j < 0) continue;
-    const v = +cell.estimate;
-    const t = vmax > vmin ? (v - vmin) / (vmax - vmin) : 0.5;
-    const x = labelW + j * cellW, y = headH + i * cellH;
-    const rect = sv("rect", { x: x + 1, y: y + 1, width: cellW - 2,
-                              height: cellH - 2, rx: 3, fill: rampColor(t) });
-    svg.appendChild(rect);
-    const label = sv("text", { x: x + cellW / 2, y: y + cellH / 2 + 4,
-                               "text-anchor": "middle", class: "ticktext" });
-    label.setAttribute("fill", t > 0.55 ? "#ffffff" : "#0b0b0b");
-    label.textContent = fmt(v);
-    svg.appendChild(label);
-    const hit = sv("rect", { x, y, width: cellW, height: cellH, fill: "transparent" });
-    hit.addEventListener("pointermove", e => {
-      rect.style.filter = "brightness(1.12)";
-      showTip(e, fmt(v, 2) + "%", `${rlab(cell)} × ${clab(cell)}`,
-              cell.se != null ? [`SE ${fmt(+cell.se, 2)}`] : []);
-    });
-    hit.addEventListener("pointerleave", () => { rect.style.filter = ""; hideTip(); });
-    svg.appendChild(hit);
-  }
-  return wrapChart(svg, title);
+/* ---------- API ---------- */
+function authHeaders() {
+  const h = { "Content-Type": "application/json" };
+  const code = getCode();
+  if (code) h["X-Access-Code"] = code;
+  return h;
 }
-
-function wrapChart(svg, title) {
-  const card = el("div", "card chart");
-  if (title) card.appendChild(el("p", "chart-title", title));
-  card.appendChild(svg);
-  return card;
+async function askApi(question) {
+  const resp = await fetch("/api/ask", { method: "POST", headers: authHeaders(),
+                                         body: JSON.stringify({ question }) });
+  if (resp.status === 401) { showGate("Your access code is no longer valid."); throw new Error("access code required"); }
+  return await resp.json();
 }
-
-function buildChart(table, plan) {
-  if (!table || !table.rows.length) return null;
-  const cols = table.columns;
-  const catCols = cols.filter(c => !METRICS.has(c));
-  if (!catCols.length && table.rows.length > 1) return null;
-  const explain = (plan && plan.explanation) || "";
-  // Rows with a missing value cannot be drawn (e.g. a construct not
-  // administered in some countries) — they stay in the table as "–".
-  // note: +null coerces to 0, so a null check must come first
-  const finite = keys => table.rows.filter(
-    r => keys.every(k => r[k] !== null && r[k] !== undefined && Number.isFinite(+r[k])));
-  if (cols.includes("row") && cols.includes("col") && cols.includes("estimate")) {
-    const rows = finite(["estimate"]);
-    return rows.length && rows.length <= 40
-      ? heatmapChart(rows, explain + "  (row percentages; hover for SE)")
-      : null;
-  }
-  if (cols.includes("estimate_2018") && cols.includes("estimate_2022")) {
-    const rows = finite(["estimate_2018", "estimate_2022"]);
-    return rows.length && rows.length <= 40
-      ? dumbbellChart(rows, catCols.length ? catCols : cols.slice(0, 1),
-                      "estimate_2018", "estimate_2022", "se_2018", "se_2022", explain)
-      : null;
-  }
-  if (cols.includes("estimate")) {
-    const rows = finite(["estimate"]);
-    if (!catCols.length || !rows.length || rows.length > 90) return null;
-    return barChart(rows, catCols, "estimate", "se",
-                    explain + "  (whiskers: 95% confidence interval)");
-  }
-  return null;
+function sendEvent(payload) {   // fire-and-forget analytics beacon
+  try {
+    fetch("/api/event", { method: "POST", headers: authHeaders(), body: JSON.stringify(payload), keepalive: true })
+      .catch(() => {});
+  } catch {}
 }
 
 /* ---------- table & export ---------- */
-function buildTable(table) {
+function buildTable(table, eventId) {
   const card = el("div", "card");
   const bar = el("div", "tablebar");
   bar.appendChild(el("span", null, `Result table (${table.rows.length} rows)`));
-  const btn = el("button", "export", "Export CSV");
+  const btn = el("button", "small", "Export CSV");
   btn.type = "button";
-  btn.addEventListener("click", () => exportCSV(table));
+  btn.addEventListener("click", () => { exportCSV(table); if (eventId) sendEvent({ event_id: eventId, kind: "export" }); });
   bar.appendChild(btn);
   card.appendChild(bar);
   const wrap = el("div", "tablewrap");
@@ -513,6 +317,33 @@ function buildProvenance(prov) {
   return card;
 }
 
+/* ---------- feedback (thumbs + optional comment) ---------- */
+function buildFeedback(eventId) {
+  const bar = el("div", "feedback");
+  bar.appendChild(el("span", null, "Was this answer useful?"));
+  const up = el("button", "small", "👍"), down = el("button", "small", "👎");
+  up.type = down.type = "button";
+  let vote = null, box = null, send = null;
+  const choose = v => {
+    vote = v; up.classList.toggle("on", v === "up"); down.classList.toggle("on", v === "down");
+    if (!box) {
+      box = el("textarea"); box.placeholder = v === "down" ? "What went wrong? (optional)" : "Anything to add? (optional)";
+      send = el("button", "small", "Send"); send.type = "button";
+      send.addEventListener("click", () => {
+        sendEvent({ event_id: eventId, kind: "feedback", vote, comment: box.value.trim() });
+        bar.replaceChildren(el("span", null, "Thanks — your feedback was recorded."));
+      });
+      bar.appendChild(box); bar.appendChild(send);
+      box.focus();
+    } else box.placeholder = v === "down" ? "What went wrong? (optional)" : "Anything to add? (optional)";
+    sendEvent({ event_id: eventId, kind: "feedback", vote, comment: "" });   // vote lands even without a comment
+  };
+  up.addEventListener("click", () => choose("up"));
+  down.addEventListener("click", () => choose("down"));
+  bar.appendChild(up); bar.appendChild(down);
+  return bar;
+}
+
 /* ---------- main flow ---------- */
 function renderResult(data, host) {
   host.replaceChildren();
@@ -520,58 +351,35 @@ function renderResult(data, host) {
     host.appendChild(el("div", "card error", "Error: " + data.error));
     return;
   }
-  host.appendChild(el("div", "card answer", data.answer));
+  const answer = el("div", "card answer", data.answer);
+  host.appendChild(answer);
+  let chartKind = "none";
   if (data.table && data.table.rows.length) {
     const chart = buildChart(data.table, data.plan);
-    if (chart) host.appendChild(chart);
-    host.appendChild(buildTable(data.table));
+    if (chart) { host.appendChild(chart); chartKind = chart.dataset.chart || "bar"; }
+    host.appendChild(buildTable(data.table, data.event_id));
   }
   if (data.provenance) host.appendChild(buildProvenance(data.provenance));
   if (data.plan) {
     const det = el("details", "plan");
     det.appendChild(el("summary", null, "Analysis plan (what the AI filled in)"));
-    const pre = el("pre", null, JSON.stringify(data.plan, null, 1));
-    det.appendChild(pre);
+    det.appendChild(el("pre", null, JSON.stringify(data.plan, null, 1)));
     host.appendChild(det);
   }
-}
-
-const $form = document.getElementById("askform");
-const $q = document.getElementById("qbox");
-const $btn = document.getElementById("askbtn");
-
-/* Access code: sent when the server requires one; asked for once, remembered. */
-function getCode() { try { return localStorage.getItem("pisa_code") || ""; } catch { return ""; } }
-function setCode(c) { try { localStorage.setItem("pisa_code", c); } catch {} }
-
-async function askApi(question) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const headers = { "Content-Type": "application/json" };
-    const code = getCode();
-    if (code) headers["X-Access-Code"] = code;
-    const resp = await fetch("/api/ask", {
-      method: "POST", headers, body: JSON.stringify({ question }),
-    });
-    if (resp.status === 401 && attempt === 0) {
-      const entered = prompt("This PISA Explorer requires an access code:");
-      if (!entered) throw new Error("access code required");
-      setCode(entered.trim());
-      continue;
-    }
-    return await resp.json();
+  if (data.event_id) {
+    answer.appendChild(buildFeedback(data.event_id));
+    sendEvent({ event_id: data.event_id, kind: "render", chart: chartKind,
+                width: window.innerWidth, mobile: isMobile(), ua: navigator.userAgent });
   }
 }
 
-function autosize() {                    // grow with content, capped by CSS max-height
+function autosize() {
   $q.style.height = "auto";
   $q.style.height = $q.scrollHeight + "px";
 }
 $q.addEventListener("input", autosize);
-$q.addEventListener("keydown", e => {    // Enter sends, Shift+Enter = newline
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    $form.requestSubmit();
-  }
+$q.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $form.requestSubmit(); }
 });
 
 $form.addEventListener("submit", async e => {
@@ -599,67 +407,64 @@ $form.addEventListener("submit", async e => {
   }
 });
 
-/* ---------- demo mode (?demo=1): renders sample results offline ---------- */
-if (new URLSearchParams(location.search).get("demo")) {
+/* ---------- dev helpers: ?demo=1 renders sample results offline; ?debug=1 lists overflowing elements ---------- */
+const params = new URLSearchParams(location.search);
+if (params.get("demo")) {
   document.querySelector(".hint")?.remove();
-  const demo1 = {
-    answer: "Demo: mean mathematics scores, PISA 2022 (top 5).",
-    plan: { explanation: "Top 5 economies by weighted mean math score, PISA 2022" },
-    table: { columns: ["CNT", "estimate", "se", "cycle"], rows: [
-      { CNT: "SGP", estimate: 574.66, se: 1.23, cycle: "2022" },
-      { CNT: "MAC", estimate: 551.92, se: 1.10, cycle: "2022" },
-      { CNT: "TAP", estimate: 547.09, se: 3.78, cycle: "2022" },
-      { CNT: "HKG", estimate: 540.35, se: 2.99, cycle: "2022" },
-      { CNT: "JPN", estimate: 535.58, se: 2.93, cycle: "2022" }]},
-    provenance: { source: "OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP)",
-      tables: ["stu_qqq_2022"], filter: "none (all rows)",
-      sample: [{ table: "stu_qqq_2022", students: 613744, weighted_students: 28255206 }],
-      method: "Weighted mean (W_FSTUWT). SE: Fay's BRR, k=0.5, 80 replicates. 10 PVs (Rubin's rules).",
-      variables: [{ variable: "PV1MATH", table: "stu_qqq_2022", label: "Plausible Value 1 in Mathematics" }],
-      notes: [] } };
-  const demo2 = {
-    answer: "Demo: mean reading score 2018 → 2022 (dumbbell).",
-    plan: { explanation: "Mean reading score by country, 2018 vs 2022" },
-    table: { columns: ["CNT", "estimate_2018", "se_2018", "estimate_2022", "se_2022", "change", "se_change"], rows: [
-      { CNT: "FIN", estimate_2018: 520.08, se_2018: 2.31, estimate_2022: 490.22, se_2022: 2.26, change: -29.86, se_change: 3.23 },
-      { CNT: "USA", estimate_2018: 505.35, se_2018: 3.57, estimate_2022: 503.94, se_2022: 4.33, change: -1.42, se_change: 5.61 },
-      { CNT: "KOR", estimate_2018: 514.05, se_2018: 2.94, estimate_2022: 515.23, se_2022: 3.65, change: 1.18, se_change: 4.69 }]},
-    provenance: { source: "OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP)",
-      tables: ["stu_qqq_2018", "stu_qqq_2022"], filter: "CNT IN ('FIN','USA','KOR')",
-      sample: [{ table: "stu_qqq_2018", students: 17141 }, { table: "stu_qqq_2022", students: 21360 }],
-      method: "Weighted mean; Fay's BRR; 10 PVs; cross-cycle SE = sqrt(SE18²+SE22²).",
-      variables: [{ variable: "PV1READ", table: "stu_qqq_2018", label: "Plausible Value 1 in Reading" }],
-      notes: ["Trend SEs exclude the OECD link error (scale equating uncertainty); they are slightly understated."] } };
-  const demo3 = {
-    answer: "Demo: gender gap in math (boys − girls), 2022 — a diverging example.",
-    plan: { explanation: "Math gender gap (male − female), PISA 2022" },
-    table: { columns: ["CNT", "contrast", "estimate", "se", "cycle"], rows: [
-      { CNT: "USA", contrast: "M − F", estimate: 13.27, se: 3.19, cycle: "2022" },
-      { CNT: "BRA", contrast: "M − F", estimate: 8.06, se: 1.85, cycle: "2022" },
-      { CNT: "KOR", contrast: "M − F", estimate: 5.13, se: 5.57, cycle: "2022" },
-      { CNT: "FIN", contrast: "M − F", estimate: -5.13, se: 2.33, cycle: "2022" }]},
-    provenance: { source: "OECD PISA public-use databases", tables: ["stu_qqq_2022"],
-      filter: "CNT IN ('USA','BRA','KOR','FIN')", sample: [],
-      method: "Group difference replicate-wise; Fay's BRR; 10 PVs.", variables: [], notes: [] } };
-  const demo4 = {
-    answer: "Demo: grade repetition by immigrant background, Brazil 2022 (weighted crosstab).",
-    plan: { template: "crosstab", explanation: "Grade repetition by immigrant background, Brazil 2022" },
-    table: { columns: ["row", "row_label", "col", "col_label", "estimate", "se", "cycle"], rows: [
-      { row: 1, row_label: "Native student", col: 0, col_label: "Never repeated", estimate: 79.35, se: 0.71, cycle: "2022" },
-      { row: 1, row_label: "Native student", col: 1, col_label: "Repeated at least once", estimate: 20.65, se: 0.71, cycle: "2022" },
-      { row: 2, row_label: "Second-generation student", col: 0, col_label: "Never repeated", estimate: 52.74, se: 11.61, cycle: "2022" },
-      { row: 2, row_label: "Second-generation student", col: 1, col_label: "Repeated at least once", estimate: 47.26, se: 11.61, cycle: "2022" },
-      { row: 3, row_label: "First-generation student", col: 0, col_label: "Never repeated", estimate: 79.38, se: 7.62, cycle: "2022" },
-      { row: 3, row_label: "First-generation student", col: 1, col_label: "Repeated at least once", estimate: 20.62, se: 7.62, cycle: "2022" }]},
-    provenance: { source: "OECD PISA public-use databases", tables: ["stu_qqq_2022"],
-      filter: "CNT = 'BRA'", sample: [],
-      method: "Weighted two-way table: row percentages, each cell with its own Fay-BRR SE.",
-      variables: [], notes: [] } };
-  for (const d of [demo1, demo2, demo3, demo4]) {
-    const host = el("div");
-    $log.appendChild(host);
-    renderResult(d, host);
-  }
+  const demos = [
+    { answer: "Demo: mean mathematics scores, PISA 2022 (top 5).",
+      plan: { explanation: "Top 5 economies by weighted mean math score, PISA 2022" },
+      table: { columns: ["CNT", "estimate", "se", "cycle"], rows: [
+        { CNT: "SGP", estimate: 574.66, se: 1.23, cycle: "2022" }, { CNT: "MAC", estimate: 551.92, se: 1.10, cycle: "2022" },
+        { CNT: "TAP", estimate: 547.09, se: 3.78, cycle: "2022" }, { CNT: "HKG", estimate: 540.35, se: 2.99, cycle: "2022" },
+        { CNT: "JPN", estimate: 535.58, se: 2.93, cycle: "2022" }]},
+      provenance: { source: "OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP)", tables: ["stu_qqq_2022"], filter: "none (all rows)",
+        sample: [{ table: "stu_qqq_2022", students: 613744, weighted_students: 28255206 }],
+        method: "Weighted mean (W_FSTUWT). SE: Fay's BRR, k=0.5, 80 replicates. 10 PVs (Rubin's rules).",
+        variables: [{ variable: "PV1MATH", table: "stu_qqq_2022", label: "Plausible Value 1 in Mathematics" }], notes: [] } },
+    { answer: "Demo: mean reading score 2018 → 2022 (dumbbell).",
+      plan: { explanation: "Mean reading score by country, 2018 vs 2022" },
+      table: { columns: ["CNT", "estimate_2018", "se_2018", "estimate_2022", "se_2022", "change", "se_change"], rows: [
+        { CNT: "FIN", estimate_2018: 520.08, se_2018: 2.31, estimate_2022: 490.22, se_2022: 2.26, change: -29.86, se_change: 3.23 },
+        { CNT: "USA", estimate_2018: 505.35, se_2018: 3.57, estimate_2022: 503.94, se_2022: 4.33, change: -1.42, se_change: 5.61 },
+        { CNT: "KOR", estimate_2018: 514.05, se_2018: 2.94, estimate_2022: 515.23, se_2022: 3.65, change: 1.18, se_change: 4.69 }]},
+      provenance: { source: "OECD PISA public-use databases", tables: ["stu_qqq_2018", "stu_qqq_2022"], filter: "CNT IN ('FIN','USA','KOR')",
+        sample: [{ table: "stu_qqq_2018", students: 17141 }, { table: "stu_qqq_2022", students: 21360 }],
+        method: "Weighted mean; Fay's BRR; 10 PVs; cross-cycle SE = sqrt(SE18²+SE22²).", variables: [],
+        notes: ["Trend SEs exclude the OECD link error (scale equating uncertainty); they are slightly understated."] } },
+    { answer: "Demo: gender gap in math (boys − girls), 2022 — a diverging example.",
+      plan: { explanation: "Math gender gap (male − female), PISA 2022" },
+      table: { columns: ["CNT", "contrast", "estimate", "se", "cycle"], rows: [
+        { CNT: "USA", contrast: "M − F", estimate: 13.27, se: 3.19, cycle: "2022" }, { CNT: "BRA", contrast: "M − F", estimate: 8.06, se: 1.85, cycle: "2022" },
+        { CNT: "KOR", contrast: "M − F", estimate: 5.13, se: 5.57, cycle: "2022" }, { CNT: "FIN", contrast: "M − F", estimate: -5.13, se: 2.33, cycle: "2022" }]},
+      provenance: { source: "OECD PISA public-use databases", tables: ["stu_qqq_2022"], filter: "CNT IN ('USA','BRA','KOR','FIN')", sample: [],
+        method: "Group difference replicate-wise; Fay's BRR; 10 PVs.", variables: [], notes: [] } },
+    { answer: "Demo: grade repetition by immigrant background, Brazil 2022 (weighted crosstab).",
+      plan: { template: "crosstab", explanation: "Grade repetition by immigrant background, Brazil 2022" },
+      table: { columns: ["row", "row_label", "col", "col_label", "estimate", "se", "cycle"], rows: [
+        { row: 1, row_label: "Native student", col: 0, col_label: "Never repeated", estimate: 79.35, se: 0.71, cycle: "2022" },
+        { row: 1, row_label: "Native student", col: 1, col_label: "Repeated at least once", estimate: 20.65, se: 0.71, cycle: "2022" },
+        { row: 2, row_label: "Second-generation student", col: 0, col_label: "Never repeated", estimate: 52.74, se: 11.61, cycle: "2022" },
+        { row: 2, row_label: "Second-generation student", col: 1, col_label: "Repeated at least once", estimate: 47.26, se: 11.61, cycle: "2022" },
+        { row: 3, row_label: "First-generation student", col: 0, col_label: "Never repeated", estimate: 79.38, se: 7.62, cycle: "2022" },
+        { row: 3, row_label: "First-generation student", col: 1, col_label: "Repeated at least once", estimate: 20.62, se: 7.62, cycle: "2022" }]},
+      provenance: { source: "OECD PISA public-use databases", tables: ["stu_qqq_2022"], filter: "CNT = 'BRA'", sample: [],
+        method: "Weighted two-way table: row percentages, each cell with its own Fay-BRR SE.", variables: [], notes: [] } },
+  ];
+  for (const d of demos) { const host = el("div"); $log.appendChild(host); renderResult(d, host); }
+} else {
+  checkGate();
+}
+if (params.get("debug")) {
+  setTimeout(() => {
+    const wide = [...document.querySelectorAll("body *")]
+      .filter(n => n.getBoundingClientRect().right > window.innerWidth + 1)
+      .slice(0, 12)
+      .map(n => `${n.tagName.toLowerCase()}${n.className ? "." + String(n.className).split(" ")[0] : ""} → ${Math.round(n.getBoundingClientRect().right)}px`);
+    const box = el("pre", "card", `innerWidth ${window.innerWidth}\noverflowing:\n` + (wide.join("\n") || "none"));
+    box.style.position = "fixed"; box.style.top = "60px"; box.style.left = "8px"; box.style.zIndex = "99"; box.style.fontSize = "11px";
+    document.body.appendChild(box);
+  }, 800);
 }
 </script>
 </body>

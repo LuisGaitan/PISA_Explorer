@@ -1,0 +1,21 @@
+# Code-only image build (seconds of upload, ~1-2 min build).
+#   gcloud builds submit --config cloudbuild.code.yaml --ignore-file .gcloudignore.code \
+#     --substitutions _TAG=v2 --region us-central1 .
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.code
+      - --build-arg
+      - DATA_IMAGE=${_DATA_IMAGE}
+      - -t
+      - us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/pisa-explorer:${_TAG}
+      - .
+images:
+  - us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/pisa-explorer:${_TAG}
+substitutions:
+  _TAG: v2
+  _DATA_IMAGE: us-central1-docker.pkg.dev/pisa-explorer-app/cloud-run-source-deploy/pisa-explorer:v1
+options:
+  logging: CLOUD_LOGGING_ONLY

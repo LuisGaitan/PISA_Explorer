@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PISA Explorer — Admin</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb;
+    --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --series1: #2a78d6; --series1-soft: #86b6ef; --neg: #e34948;
+    --accent-wash: rgba(42,120,214,0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19;
+      --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+      --series1: #3987e5; --series1-soft: #86b6ef; --neg: #e66767;
+      --accent-wash: rgba(57,135,229,0.12);
+    }
+  }
+  * { box-sizing: border-box; min-width: 0; }
+  html, body { overflow-x: hidden; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 18px 24px 12px; border-bottom: 1px solid var(--border); background: var(--surface); display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 17px; font-weight: 650; }
+  header .controls { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--ink2); }
+  select, button.small, input { background: var(--page); color: var(--ink); border: 1px solid var(--baseline); border-radius: 6px; padding: 5px 9px; font: 12.5px system-ui, sans-serif; }
+  button.small { cursor: pointer; }
+  main { max-width: 1100px; margin: 0 auto; padding: 18px 20px 60px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 6px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .tile .label { font-size: 12px; color: var(--ink2); }
+  .tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .tile .sub { font-size: 11.5px; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 10px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 10px 0; max-width: 100%; overflow-wrap: anywhere; }
+  .card.muted { color: var(--muted); }
+  .chart-title { font-size: 12.5px; color: var(--ink2); margin: 0 0 10px; font-weight: 600; }
+  .chartwrap { overflow-x: auto; }
+  .chartwrap svg { display: block; width: 100%; min-width: 420px; height: auto; }
+  svg text { font: 11.5px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .ticktext { font-variant-numeric: tabular-nums; }
+  h2 { font-size: 14px; margin: 22px 0 6px; color: var(--ink2); font-weight: 600; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th { text-align: left; color: var(--ink2); font-weight: 600; border-bottom: 1px solid var(--baseline); padding: 5px 10px 5px 0; }
+  td { border-bottom: 1px solid var(--grid); padding: 4px 10px 4px 0; vertical-align: top; }
+  td.q { max-width: 420px; }
+  .vote-up { color: #0ca30c; } .vote-down { color: var(--neg); }
+  #tooltip { position: fixed; pointer-events: none; z-index: 20; display: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.12); max-width: 300px; }
+  #tooltip .val { font-size: 14px; font-weight: 650; color: var(--ink); }
+  #tooltip .lab { color: var(--ink2); }
+  #gate { position: fixed; inset: 0; background: var(--page); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  #gate[hidden] { display: none; }
+  #gate .box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 26px; max-width: 380px; width: 100%; }
+  #gate input { width: 100%; font-size: 15px; padding: 10px 12px; }
+  #gate button { margin-top: 12px; width: 100%; background: var(--series1); color: #fff; border: 0; border-radius: 8px; padding: 10px; font-weight: 600; cursor: pointer; }
+  #gate .err { color: var(--neg); font-size: 13px; margin-top: 8px; min-height: 18px; }
+</style>
+</head>
+<body>
+<div id="gate" hidden>
+  <div class="box">
+    <h2 style="margin:0 0 10px">Admin dashboard</h2>
+    <input id="admincode" type="password" placeholder="Admin code" autocomplete="off">
+    <button id="adminbtn" type="button">Open</button>
+    <div class="err" id="adminerr"></div>
+  </div>
+</div>
+<header>
+  <h1>PISA Explorer — usage</h1>
+  <div class="controls">
+    <span>Last</span>
+    <select id="days"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="365">year</option></select>
+    <button class="small" id="refresh" type="button">Refresh</button>
+    <button class="small" id="exportbtn" type="button">Export events CSV</button>
+    <span id="meta"></span>
+  </div>
+</header>
+<main id="main"><p class="card muted">Loading…</p></main>
+
+<script src="/static/charts.js"></script>
+<script>
+"use strict";
+const $main = document.getElementById("main");
+const $meta = document.getElementById("meta");
+const getAdmin = () => { try { return localStorage.getItem("pisa_admin") || ""; } catch { return ""; } };
+const setAdmin = c => { try { if (c) localStorage.setItem("pisa_admin", c); else localStorage.removeItem("pisa_admin"); } catch {} };
+let EVENTS = [];
+
+async function load() {
+  const days = document.getElementById("days").value;
+  const resp = await fetch(`/api/admin/events?days=${days}`, { headers: { "X-Admin-Code": getAdmin() } });
+  if (resp.status === 401) { setAdmin(""); document.getElementById("gate").hidden = false; return; }
+  const data = await resp.json();
+  EVENTS = data.events || [];
+  $meta.textContent = `${data.count} events · ${data.backend}`;
+  render();
+}
+
+document.getElementById("adminbtn").addEventListener("click", async () => {
+  setAdmin(document.getElementById("admincode").value.trim());
+  document.getElementById("admincode").value = "";
+  document.getElementById("gate").hidden = true;
+  await load();
+  if (!document.getElementById("gate").hidden) document.getElementById("adminerr").textContent = "That admin code was not accepted.";
+});
+document.getElementById("admincode").addEventListener("keydown", e => { if (e.key === "Enter") document.getElementById("adminbtn").click(); });
+document.getElementById("refresh").addEventListener("click", load);
+document.getElementById("days").addEventListener("change", load);
+document.getElementById("exportbtn").addEventListener("click", () => {
+  const cols = ["ts", "kind", "institution", "session", "question", "route", "template", "instrument", "cycles", "countries", "variables", "rows", "chart", "vote", "comment", "error", "total_ms", "llm_calls", "llm_ms", "mobile", "width", "exported"];
+  const esc = v => { const s = v == null ? "" : (Array.isArray(v) ? v.join("|") : String(v)); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const lines = [cols.join(",")].concat(EVENTS.map(e => cols.map(c => esc(e[c])).join(",")));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+  a.download = "pisa_explorer_events.csv"; a.click(); URL.revokeObjectURL(a.href);
+});
+
+/* ---------- aggregation ---------- */
+const count = (items, keyFn) => {
+  const m = new Map();
+  for (const it of items) { const k = keyFn(it); if (k === undefined || k === null || k === "") continue;
+    for (const kk of (Array.isArray(k) ? k : [k])) m.set(kk, (m.get(kk) || 0) + 1); }
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
+};
+const pct = (n, d) => d ? Math.round(100 * n / d) + "%" : "–";
+const quantile = (arr, q) => { if (!arr.length) return null; const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(q * s.length))]; };
+
+function tile(label, value, sub) {
+  const t = el("div", "tile");
+  t.appendChild(el("div", "label", label));
+  t.appendChild(el("div", "value", String(value)));
+  if (sub) t.appendChild(el("div", "sub", sub));
+  return t;
+}
+function table(cols, rows, render) {
+  const wrap = el("div", "tablewrap");
+  const tbl = el("table");
+  const hr = el("tr"); for (const c of cols) hr.appendChild(el("th", null, c)); tbl.appendChild(hr);
+  for (const r of rows) tbl.appendChild(render(r));
+  wrap.appendChild(tbl);
+  return wrap;
+}
+const short = (s, n = 140) => { s = String(s ?? ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
+const when = ts => (ts || "").replace("T", " ").slice(0, 16);
+
+function render() {
+  $main.replaceChildren();
+  const asks = EVENTS.filter(e => e.kind === "ask");
+  if (!asks.length) { $main.appendChild(el("p", "card muted", "No questions recorded in this window yet.")); return; }
+  const dataAsks = asks.filter(e => e.route === "data");
+  const rendered = asks.filter(e => e.chart);
+  const latencies = asks.map(e => +e.total_ms).filter(Number.isFinite);
+  const votes = asks.filter(e => e.vote);
+
+  const kpis = el("div", "kpis");
+  kpis.appendChild(tile("Questions", asks.length, `${new Set(asks.map(e => e.session)).size} sessions · ${new Set(asks.map(e => e.institution)).size} institutions`));
+  kpis.appendChild(tile("Data answers", pct(dataAsks.length, asks.length), `${asks.filter(e => e.route === "clarify").length} clarifications · ${asks.filter(e => e.route === "conversational").length} conversational`));
+  kpis.appendChild(tile("Errors", pct(asks.filter(e => e.route === "error" || e.error).length, asks.length), `${asks.filter(e => e.raw_sql).length} raw-SQL fallbacks`));
+  kpis.appendChild(tile("Charted", pct(rendered.filter(e => e.chart !== "none").length, rendered.length || 1), `${asks.filter(e => e.exported).length} CSV exports`));
+  kpis.appendChild(tile("Feedback", `${votes.filter(e => e.vote === "up").length} 👍 / ${votes.filter(e => e.vote === "down").length} 👎`, `${votes.filter(e => e.comment).length} comments`));
+  kpis.appendChild(tile("Latency", latencies.length ? `${(quantile(latencies, 0.5) / 1000).toFixed(1)}s` : "–", latencies.length ? `p95 ${(quantile(latencies, 0.95) / 1000).toFixed(1)}s · median ${Math.round(quantile(asks.map(e => +e.llm_calls).filter(Number.isFinite), 0.5) || 0)} LLM calls` : ""));
+  kpis.appendChild(tile("Mobile", pct(rendered.filter(e => e.mobile).length, rendered.length || 1), `${EVENTS.filter(e => e.kind === "rate_limited").length} rate-limited`));
+  $main.appendChild(kpis);
+
+  const grid = el("div", "grid");
+  grid.appendChild(countBars(count(asks, e => (e.ts || "").slice(0, 10)).sort((a, b) => a[0] < b[0] ? -1 : 1), "Questions per day"));
+  grid.appendChild(countBars(count(asks, e => e.institution), "Questions by institution"));
+  grid.appendChild(countBars(count(dataAsks, e => e.template), "Analysis templates used"));
+  grid.appendChild(countBars(count(rendered, e => e.chart), "Chart forms rendered"));
+  grid.appendChild(countBars(count(dataAsks, e => e.countries).slice(0, 15), "Countries asked about (top 15)"));
+  grid.appendChild(countBars(count(dataAsks, e => e.variables).slice(0, 15), "Variables used (top 15)"));
+  $main.appendChild(grid);
+
+  const downs = asks.filter(e => e.vote === "down");
+  $main.appendChild(el("h2", null, `Thumbs-down answers (${downs.length})`));
+  $main.appendChild(el("div", "card")).appendChild(downs.length ? table(["When", "Institution", "Question", "Template", "Comment"], downs, e => {
+    const tr = el("tr"); tr.appendChild(el("td", null, when(e.ts))); tr.appendChild(el("td", null, e.institution));
+    tr.appendChild(el("td", "q", short(e.question))); tr.appendChild(el("td", null, e.template || e.route)); tr.appendChild(el("td", "q", short(e.comment, 300))); return tr;
+  }) : el("span", "muted", "none"));
+
+  const errors = asks.filter(e => e.route === "error" || e.error);
+  $main.appendChild(el("h2", null, `Failed questions (${errors.length}) — replay these`));
+  $main.appendChild(el("div", "card")).appendChild(errors.length ? table(["When", "Institution", "Question", "Error"], errors, e => {
+    const tr = el("tr"); tr.appendChild(el("td", null, when(e.ts))); tr.appendChild(el("td", null, e.institution));
+    tr.appendChild(el("td", "q", short(e.question))); tr.appendChild(el("td", "q", short(e.error, 200))); return tr;
+  }) : el("span", "muted", "none"));
+
+  const clar = asks.filter(e => e.route === "clarify");
+  $main.appendChild(el("h2", null, `Questions that needed clarification (${clar.length}) — wording gaps`));
+  $main.appendChild(el("div", "card")).appendChild(clar.length ? table(["When", "Institution", "Question"], clar, e => {
+    const tr = el("tr"); tr.appendChild(el("td", null, when(e.ts))); tr.appendChild(el("td", null, e.institution)); tr.appendChild(el("td", "q", short(e.question, 240))); return tr;
+  }) : el("span", "muted", "none"));
+
+  $main.appendChild(el("h2", null, `Recent questions (${Math.min(asks.length, 200)})`));
+  $main.appendChild(el("div", "card")).appendChild(table(["When", "Institution", "Question", "Route / template", "Chart", "Vote", "s"], asks.slice(0, 200), e => {
+    const tr = el("tr"); tr.appendChild(el("td", null, when(e.ts))); tr.appendChild(el("td", null, e.institution));
+    tr.appendChild(el("td", "q", short(e.question))); tr.appendChild(el("td", null, e.route === "data" ? (e.template || "") : e.route));
+    tr.appendChild(el("td", null, e.chart || "")); const v = el("td", e.vote ? "vote-" + e.vote : "", e.vote === "up" ? "👍" : e.vote === "down" ? "👎" : ""); tr.appendChild(v);
+    tr.appendChild(el("td", null, e.total_ms ? (e.total_ms / 1000).toFixed(1) : "")); return tr;
+  }));
+}
+
+// /admin?code=… stores the code once and scrubs it from the URL (bookmark-friendly)
+const urlCode = new URLSearchParams(location.search).get("code");
+if (urlCode) { setAdmin(urlCode); history.replaceState(null, "", "/admin"); }
+if (getAdmin()) load(); else document.getElementById("gate").hidden = false;
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# FAST code-only rebuild: layer the current code onto an image that already
+# contains the data and the built DuckDB (see DEPLOY.md "code-only redeploy").
+# The data image is produced by the full Dockerfile; bump DATA_IMAGE only when
+# the data or the pipeline changes.
+
+ARG DATA_IMAGE=us-central1-docker.pkg.dev/pisa-explorer-app/cloud-run-source-deploy/pisa-explorer:v1
+FROM ${DATA_IMAGE}
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY pipeline/ pipeline/
+COPY explorer/ explorer/
+
+# Re-register views in case pipeline/build_db.py changed (data itself is
+# untouched; this takes ~1 s).
+RUN python pipeline/build_db.py
+
+ENV BIND_HOST=0.0.0.0
+ENV PORT=8080
+EXPOSE 8080
+CMD ["python", "-m", "explorer.app"]
