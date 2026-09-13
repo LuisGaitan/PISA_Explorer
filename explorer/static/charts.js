@@ -1,13 +1,20 @@
 /* PISA Explorer chart library — shared by the chat UI and the admin dashboard.
  * Plain SVG built with DOM APIs (textContent only — labels are untrusted data).
  * Forms: bars with 95%-CI whiskers (league-table mode past 12 rows), dumbbells
- * for 2018→2022, diverging bars around zero, heatmaps for crosstabs.
+ * for cross-cycle change (2018 → 2022 → 2025, any two or three cycles),
+ * diverging bars around zero, heatmaps for crosstabs.
  * Tokens (--series1, --ink2, …) come from the host page's CSS.
  */
 "use strict";
 
-const METRICS = new Set(["estimate", "se", "n_pv", "estimate_2018", "se_2018",
-                         "estimate_2022", "se_2022", "change", "se_change", "cycle"]);
+const METRICS = new Set(["estimate", "se", "n_pv", "change", "se_change", "cycle"]);
+const CYCLE_COL = /^(estimate|se)_(\d{4})$/;          // estimate_2018, se_2025, …
+const isMetric = c => METRICS.has(c) || CYCLE_COL.test(c);
+/* Oldest → newest cycle: soft, base, strong blue (sequential = time order). */
+const CYCLE_COLORS = {
+  2: ["var(--series1-soft)", "var(--series1)"],
+  3: ["var(--series1-soft)", "var(--series1)", "var(--series1-strong)"],
+};
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -154,15 +161,20 @@ function barChart(rows, catCols, valueKey, seKey, title, opts = {}) {
   return wrapChart(svg, title, "bar");
 }
 
-/* ---------- chart: dumbbell for 2018 -> 2022 ---------- */
-function dumbbellChart(rows, catCols, k18, k22, se18k, se22k, title) {
+/* ---------- chart: dumbbell / connected dots across cycles ---------- */
+function dumbbellChart(rows, catCols, cycles, title) {
   const cats = rows.map(r => catCols.map(c => r[c]).join(" · "));
-  const v18 = rows.map(r => +r[k18]), v22 = rows.map(r => +r[k22]);
-  const s18 = rows.map(r => +r[se18k] || 0), s22 = rows.map(r => +r[se22k] || 0);
-  const all = [...v18.map((v, i) => v - 1.96 * s18[i]), ...v18.map((v, i) => v + 1.96 * s18[i]),
-               ...v22.map((v, i) => v - 1.96 * s22[i]), ...v22.map((v, i) => v + 1.96 * s22[i])];
+  const val = (r, c) => { const v = r[`estimate_${c}`]; return v === null || v === undefined ? NaN : +v; };
+  const se  = (r, c) => +r[`se_${c}`] || 0;
+  const all = [];
+  for (const r of rows) for (const c of cycles) {
+    const v = val(r, c);
+    if (Number.isFinite(v)) all.push(v - 1.96 * se(r, c), v + 1.96 * se(r, c));
+  }
   const lo = Math.min(...all), hi = Math.max(...all);
   const pad = (hi - lo) * 0.06 || 1;
+  const colors = CYCLE_COLORS[cycles.length] || CYCLE_COLORS[3];
+  const first = cycles[0], last = cycles[cycles.length - 1];
 
   const W = 860, labelW = 150, padR = 56, rowH = 32, axisH = 26, padT = 6;
   const H = padT + rows.length * rowH + axisH;
@@ -183,32 +195,37 @@ function dumbbellChart(rows, catCols, k18, k22, se18k, se22k, title) {
     label.style.fill = "var(--ink2)"; label.textContent = cats[i];
     svg.appendChild(label);
 
-    const conn = sv("line", { x1: x(v18[i]), x2: x(v22[i]), y1: cy, y2: cy, "stroke-width": 1.5 });
-    conn.style.stroke = "var(--baseline)";
-    svg.appendChild(conn);
-
-    for (const [v, colorVar] of [[v18[i], "var(--series1-soft)"], [v22[i], "var(--series1)"]]) {
-      const dot = sv("circle", { cx: x(v), cy, r: 5.5, "stroke-width": 2 });
-      dot.style.fill = colorVar; dot.style.stroke = "var(--surface)";
-      svg.appendChild(dot);
+    const present = cycles.filter(c => Number.isFinite(val(r, c)));
+    const vs = present.map(c => val(r, c));
+    if (vs.length >= 2) {
+      const conn = sv("line", { x1: x(Math.min(...vs)), x2: x(Math.max(...vs)), y1: cy, y2: cy, "stroke-width": 1.5 });
+      conn.style.stroke = "var(--baseline)";
+      svg.appendChild(conn);
     }
-    if (rows.length <= 8) {
-      const outer = v22[i] >= v18[i];
-      const vt = sv("text", { x: x(v22[i]) + (outer ? 10 : -10), y: cy + 4,
+    // draw newest last so it sits on top when dots overlap
+    present.forEach(c => {
+      const dot = sv("circle", { cx: x(val(r, c)), cy, r: 5.5, "stroke-width": 2 });
+      dot.style.fill = colors[cycles.indexOf(c)]; dot.style.stroke = "var(--surface)";
+      svg.appendChild(dot);
+    });
+    const vLast = val(r, last), vFirst = val(r, first);
+    if (rows.length <= 8 && Number.isFinite(vLast)) {
+      const outer = !Number.isFinite(vFirst) || vLast >= vFirst;
+      const vt = sv("text", { x: x(vLast) + (outer ? 10 : -10), y: cy + 4,
                               "text-anchor": outer ? "start" : "end", class: "ticktext" });
-      vt.style.fill = "var(--ink2)"; vt.textContent = fmt(v22[i]);
+      vt.style.fill = "var(--ink2)"; vt.textContent = fmt(vLast);
       svg.appendChild(vt);
     }
     const change = r.change, seCh = r.se_change;
     const hit = sv("rect", { x: 0, y: padT + i * rowH, width: W, height: rowH, fill: "transparent" });
     hit.addEventListener("pointermove", e => {
-      const lines = [`2018: ${fmt(v18[i], 2)} (SE ${fmt(s18[i], 2)})`,
-                     `2022: ${fmt(v22[i], 2)} (SE ${fmt(s22[i], 2)})`];
-      if (change !== undefined && change !== null) {
+      const lines = cycles.map(c => Number.isFinite(val(r, c))
+        ? `${c}: ${fmt(val(r, c), 2)} (SE ${fmt(se(r, c), 2)})` : `${c}: no estimate`);
+      if (change !== undefined && change !== null && Number.isFinite(+change)) {
         const sig = Math.abs(+change) > 1.96 * (+seCh || 0) ? "significant" : "not significant";
-        lines.push(`change ${(+change >= 0 ? "+" : "") + fmt(change, 2)} (SE ${fmt(seCh, 2)}) — ${sig}`);
+        lines.push(`change ${first} → ${last}: ${(+change >= 0 ? "+" : "") + fmt(change, 2)} (SE ${fmt(seCh, 2)}) — ${sig}`);
       }
-      showTip(e, cats[i], "2018 → 2022", lines);
+      showTip(e, cats[i], cycles.join(" → "), lines);
     });
     hit.addEventListener("pointerleave", hideTip);
     svg.appendChild(hit);
@@ -216,12 +233,12 @@ function dumbbellChart(rows, catCols, k18, k22, se18k, se22k, title) {
 
   const wrap = wrapChart(svg, title, "dumbbell");
   const legend = el("div", "legend");
-  for (const [name, colorVar] of [["PISA 2018", "var(--series1-soft)"], ["PISA 2022", "var(--series1)"]]) {
+  cycles.forEach((c, k) => {
     const item = el("span");
-    const dot = el("span", "dot"); dot.style.background = colorVar;
-    item.appendChild(dot); item.appendChild(document.createTextNode(name));
+    const dot = el("span", "dot"); dot.style.background = colors[k];
+    item.appendChild(dot); item.appendChild(document.createTextNode(`PISA ${c}`));
     legend.appendChild(item);
-  }
+  });
   wrap.insertBefore(legend, wrap.querySelector(".chartwrap"));
   return wrap;
 }
@@ -300,7 +317,7 @@ function wrapChart(svg, title, kind) {
 function buildChart(table, plan) {
   if (!table || !table.rows.length) return null;
   const cols = table.columns;
-  const catCols = cols.filter(c => !METRICS.has(c));
+  const catCols = cols.filter(c => !isMetric(c));
   if (!catCols.length && table.rows.length > 1) return null;
   const explain = (plan && plan.explanation) || "";
   // note: +null coerces to 0, so a null check must come first
@@ -311,11 +328,14 @@ function buildChart(table, plan) {
     return rows.length && rows.length <= 40
       ? heatmapChart(rows, explain + "  (row percentages; hover for SE)") : null;
   }
-  if (cols.includes("estimate_2018") && cols.includes("estimate_2022")) {
-    const rows = finite(["estimate_2018", "estimate_2022"]);
+  const cycles = cols.filter(c => /^estimate_\d{4}$/.test(c)).map(c => c.slice(9)).sort();
+  if (cycles.length >= 2) {
+    // a row needs at least two cycles to draw a change; single-cycle rows stay in the table
+    const rows = table.rows.filter(r => cycles.filter(
+      c => r[`estimate_${c}`] !== null && r[`estimate_${c}`] !== undefined
+           && Number.isFinite(+r[`estimate_${c}`])).length >= 2);
     return rows.length && rows.length <= 40
-      ? dumbbellChart(rows, catCols.length ? catCols : cols.slice(0, 1),
-                      "estimate_2018", "estimate_2022", "se_2018", "se_2022", explain) : null;
+      ? dumbbellChart(rows, catCols.length ? catCols : cols.slice(0, 1), cycles, explain) : null;
   }
   if (cols.includes("estimate")) {
     const rows = finite(["estimate"]);

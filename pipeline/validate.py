@@ -2,10 +2,11 @@
 
 Checks, per file:
   - Parquet row count == official public-use count (where known)
-  - Parquet row count == row count recorded in the SAS source header
+  - Parquet row count == row count recorded in the raw file's header
   - Student questionnaires: all key columns present (CNT, IDs, PV1-PV10 for
     MATH/READ/SCIE, W_FSTUWT, the 80 replicate weights, ESCS, STRATUM) and
-    exactly 80 distinct economies
+    exactly the expected number of distinct economies (80 in 2018 and 2022,
+    90 in 2025)
 
 Exit code 0 only if every check passes.
 
@@ -17,12 +18,12 @@ import sys
 
 import duckdb
 import pyarrow.parquet as pq
-import pyreadstat
 
 from sources import (
     EXPECTED_ECONOMIES_STU_QQQ,
     STU_QQQ_KEY_COLUMNS,
     get_sources,
+    read_metadata,
 )
 
 
@@ -40,9 +41,9 @@ def validate_source(source, check_header: bool) -> list[str]:
         problems.append(f"rows {rows:,} != official {source.expected_rows:,}")
 
     if check_header:
-        _, sas_meta = pyreadstat.read_sas7bdat(str(source.sas_path), metadataonly=True)
-        if sas_meta.number_rows is not None and rows != sas_meta.number_rows:
-            problems.append(f"rows {rows:,} != SAS header {sas_meta.number_rows:,}")
+        raw_meta = read_metadata(source)
+        if raw_meta.number_rows is not None and rows != raw_meta.number_rows:
+            problems.append(f"rows {rows:,} != file header {raw_meta.number_rows:,}")
 
     if source.instrument == "stu_qqq":
         missing = [c for c in STU_QQQ_KEY_COLUMNS if c not in columns]
@@ -51,8 +52,9 @@ def validate_source(source, check_header: bool) -> list[str]:
         n_economies = duckdb.sql(
             f"SELECT count(DISTINCT CNT) FROM read_parquet('{source.parquet_path}')"
         ).fetchone()[0]
-        if n_economies != EXPECTED_ECONOMIES_STU_QQQ:
-            problems.append(f"{n_economies} economies != {EXPECTED_ECONOMIES_STU_QQQ}")
+        expected_economies = EXPECTED_ECONOMIES_STU_QQQ[source.cycle]
+        if n_economies != expected_economies:
+            problems.append(f"{n_economies} economies != {expected_economies}")
 
     return problems
 
@@ -61,7 +63,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--only", nargs="*")
     parser.add_argument("--skip-header-check", action="store_true",
-                        help="skip re-reading SAS headers (faster)")
+                        help="skip re-reading raw file headers (faster)")
     args = parser.parse_args()
 
     failed = 0

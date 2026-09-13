@@ -51,7 +51,7 @@ def repl() -> None:
     agent = Agent()
     last: AgentResult | None = None
     history: list[dict] = []
-    print("PISA Explorer — ask about PISA 2018/2022. /quit to exit.")
+    print("PISA Explorer — ask about PISA 2018/2022/2025. /quit to exit.")
     while True:
         try:
             line = input("\nyou> ").strip()

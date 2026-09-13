@@ -10,7 +10,7 @@
     --page: #f9f9f7; --surface: #fcfcfb;
     --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
     --grid: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,0.10);
-    --series1: #2a78d6; --series1-soft: #86b6ef; --neg: #e34948;
+    --series1: #2a78d6; --series1-soft: #86b6ef; --series1-strong: #174b8f; --neg: #e34948;
     --accent-wash: rgba(42,120,214,0.08);
   }
   @media (prefers-color-scheme: dark) {
@@ -19,7 +19,7 @@
       --page: #0d0d0d; --surface: #1a1a19;
       --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781;
       --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
-      --series1: #3987e5; --series1-soft: #86b6ef; --neg: #e66767;
+      --series1: #3987e5; --series1-soft: #86b6ef; --series1-strong: #1d5cb5; --neg: #e66767;
       --accent-wash: rgba(57,135,229,0.12);
     }
   }
@@ -38,7 +38,7 @@
   header p  { margin: 2px 0 0; color: var(--ink2); font-size: 12.5px; }
   .chip { font-size: 12px; color: var(--ink2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
   .chip[hidden] { display: none; }
-  main { max-width: 900px; margin: 0 auto; padding: 20px 20px 130px; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px 20px 170px; }
   .q { margin: 26px 0 10px; display: flex; justify-content: flex-end; }
   .q span {
     background: var(--accent-wash); border: 1px solid var(--border);
@@ -103,6 +103,23 @@
     padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
   }
   form.askbar button:disabled { opacity: .5; cursor: default; }
+  /* Footer: tagline centred on the screen, sponsor logo pinned bottom-left on the same line. */
+  .footer {
+    position: relative; margin-top: 10px; min-height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: var(--muted); text-align: center;
+  }
+  .footer .logo {
+    position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+    display: block; height: 30px; padding: 3px 6px; border-radius: 6px; background: #fff;
+  }
+  .footer .logo img { height: 24px; width: auto; display: block; }
+  .footer .tagline { padding: 0 150px; }
+  @media (max-width: 640px) {
+    .footer { flex-direction: column; gap: 6px; }
+    .footer .logo { position: static; transform: none; }
+    .footer .tagline { padding: 0; }
+  }
   #tooltip {
     position: fixed; pointer-events: none; z-index: 20; display: none;
     background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
@@ -127,7 +144,7 @@
   @media (max-width: 600px) {
     header { padding: 12px 14px 10px; }
     header p { display: none; }
-    main { padding: 12px 10px 140px; }
+    main { padding: 12px 10px 210px; }
     .q span { max-width: 92%; }
     .card { padding: 12px; }
     td, th { padding-right: 8px; }
@@ -140,7 +157,7 @@
 <div id="gate" hidden>
   <div class="box">
     <h2>PISA Explorer</h2>
-    <p>Ask questions about the OECD PISA 2018 &amp; 2022 databases in plain language. Enter the access code you were given — it also tells us which institution you're testing from.</p>
+    <p>Ask questions about the OECD PISA 2018, 2022 &amp; 2025 databases in plain language. Enter the access code you were given — it also tells us which institution you're testing from.</p>
     <input id="gatecode" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Access code">
     <button id="gatebtn" type="button">Enter</button>
     <div class="err" id="gateerr"></div>
@@ -150,20 +167,26 @@
 <header>
   <div>
     <h1>PISA Explorer</h1>
-    <p>Ask about the OECD PISA 2018 &amp; 2022 databases — survey-weighted, plausible-value-correct, with full provenance.</p>
+    <p>Ask about the OECD PISA 2018, 2022 &amp; 2025 databases — survey-weighted, plausible-value-correct, with full provenance.</p>
   </div>
   <span class="chip" id="chip" hidden></span>
 </header>
 <main id="log">
-  <p class="hint">Try: “How did the math gender gap change in the US between 2018 and 2022?”<br>
-  “Which 5 countries had the highest reading scores in 2022?” · “What share of students in Brazil repeated a grade?”</p>
+  <p class="hint">Try: “How did the math gender gap change in the US between 2018 and 2025?”<br>
+  “Which 5 countries had the highest science scores in 2025?” · “What share of students in Brazil repeated a grade?”</p>
 </main>
 <form class="askbar" id="askform">
   <div class="inner">
     <textarea id="qbox" rows="1" autocomplete="off"
-      placeholder="Ask a question about PISA 2018 / 2022…  (Enter to send, Shift+Enter for a new line)"
+      placeholder="Ask a question about PISA 2018 / 2022 / 2025…  (Enter to send, Shift+Enter for a new line)"
       maxlength="2000"></textarea>
     <button id="askbtn" type="submit">Ask</button>
+  </div>
+  <div class="footer">
+    <a class="logo" href="https://www.gse.upenn.edu/" target="_blank" rel="noopener" title="Penn GSE">
+      <img src="/static/gse-logo.png" alt="Penn GSE — Graduate School of Education, University of Pennsylvania">
+    </a>
+    <span class="tagline">This work was supported by the PennGSE Learning Analytics and Artificial Intelligence program</span>
   </div>
 </form>
 
@@ -418,10 +441,19 @@ if (params.get("demo")) {
         { CNT: "SGP", estimate: 574.66, se: 1.23, cycle: "2022" }, { CNT: "MAC", estimate: 551.92, se: 1.10, cycle: "2022" },
         { CNT: "TAP", estimate: 547.09, se: 3.78, cycle: "2022" }, { CNT: "HKG", estimate: 540.35, se: 2.99, cycle: "2022" },
         { CNT: "JPN", estimate: 535.58, se: 2.93, cycle: "2022" }]},
-      provenance: { source: "OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP)", tables: ["stu_qqq_2022"], filter: "none (all rows)",
+      provenance: { source: "OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP), 2025 (CY09MS)", tables: ["stu_qqq_2022"], filter: "none (all rows)",
         sample: [{ table: "stu_qqq_2022", students: 613744, weighted_students: 28255206 }],
         method: "Weighted mean (W_FSTUWT). SE: Fay's BRR, k=0.5, 80 replicates. 10 PVs (Rubin's rules).",
         variables: [{ variable: "PV1MATH", table: "stu_qqq_2022", label: "Plausible Value 1 in Mathematics" }], notes: [] } },
+    { answer: "Demo: mean science score 2018 → 2022 → 2025 (three-cycle dumbbell; Cambodia joined in 2025).",
+      plan: { explanation: "Mean science score by country, 2018 vs 2022 vs 2025" },
+      table: { columns: ["CNT", "estimate_2018", "se_2018", "estimate_2022", "se_2022", "estimate_2025", "se_2025", "change", "se_change"], rows: [
+        { CNT: "FIN", estimate_2018: 522.3, se_2018: 2.5, estimate_2022: 511.0, se_2022: 2.4, estimate_2025: 501.2, se_2025: 2.3, change: -21.1, se_change: 3.4 },
+        { CNT: "USA", estimate_2018: 502.4, se_2018: 3.3, estimate_2022: 499.0, se_2022: 3.5, estimate_2025: 495.1, se_2025: 3.8, change: -7.3, se_change: 5.0 },
+        { CNT: "SGP", estimate_2018: 550.9, se_2018: 1.5, estimate_2022: 561.5, se_2022: 1.5, estimate_2025: 565.2, se_2025: 1.6, change: 14.3, se_change: 2.2 },
+        { CNT: "KHM", estimate_2018: null, se_2018: null, estimate_2022: null, se_2022: null, estimate_2025: 391.4, se_2025: 3.1, change: null, se_change: null }]},
+      provenance: { source: "OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP), 2025 (CY09MS)", tables: ["stu_qqq_2018", "stu_qqq_2022", "stu_qqq_2025"], filter: "CNT IN ('FIN','USA','SGP','KHM')",
+        sample: [], method: "Weighted mean (W_FSTUWT), 10 PVs, Fay-BRR SE. Cross-cycle change = 2025 minus 2018.", variables: [], notes: ["1 row(s) have no estimate — the variable was not administered for those groups; they are listed in the table but excluded from the chart."] } },
     { answer: "Demo: mean reading score 2018 → 2022 (dumbbell).",
       plan: { explanation: "Mean reading score by country, 2018 vs 2022" },
       table: { columns: ["CNT", "estimate_2018", "se_2018", "estimate_2022", "se_2022", "change", "se_change"], rows: [

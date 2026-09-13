@@ -304,22 +304,47 @@ def regression(con, table, y, xs, by=(), where=None,
     return combine(reps, by=(*by, "term"))
 
 
-def trend(result_2018: pd.DataFrame, result_2022: pd.DataFrame,
+def trend(results, result_2022: pd.DataFrame | None = None,
           by=()) -> pd.DataFrame:
-    """2022 minus 2018 for two already-combined results with matching groups.
+    """Cross-cycle table for already-combined results with matching groups.
 
-    Cycles are independent samples, so var(diff) = var18 + var22. NOTE: this
-    excludes the OECD link error (the extra uncertainty from scale equating
-    across cycles); comparisons against published trend SEs will be slightly
-    smaller. Add the link-error term when absolute trend inference matters.
+    `results` maps cycle -> result frame in chronological order, e.g.
+    {"2018": r18, "2022": r22, "2025": r25} (the legacy two-frame call
+    trend(r18, r22, by=...) still works). The output carries
+    estimate_<cycle> / se_<cycle> for every cycle plus `change` and
+    `se_change` = LAST cycle minus FIRST cycle. Groups missing from a cycle
+    (e.g. an economy that first joined in 2025) keep their row with NULLs
+    for that cycle, so the table says what is missing instead of hiding it.
+
+    Cycles are independent samples, so var(change) = var_first + var_last.
+    NOTE: this excludes the OECD link error (the extra uncertainty from
+    scale equating across cycles); comparisons against published trend SEs
+    will be slightly smaller. Add the link-error term when absolute trend
+    inference matters.
     """
+    if isinstance(results, pd.DataFrame):
+        results = {"2018": results, "2022": result_2022}
+    cycles = list(results)
+    if len(cycles) < 2:
+        raise ValueError("trend needs at least two cycles")
     keys = list(by)
-    merged = result_2018.merge(result_2022, on=keys, suffixes=("_2018", "_2022")) \
-        if keys else result_2018.assign(_k=1).merge(
-            result_2022.assign(_k=1), on="_k", suffixes=("_2018", "_2022")
-        ).drop(columns="_k")
-    merged["change"] = merged.estimate_2022 - merged.estimate_2018
-    merged["se_change"] = np.sqrt(merged.se_2018**2 + merged.se_2022**2)
-    cols = keys + ["estimate_2018", "se_2018", "estimate_2022", "se_2022",
-                   "change", "se_change"]
+    merged = None
+    for cycle in cycles:
+        part = results[cycle].rename(
+            columns={"estimate": f"estimate_{cycle}", "se": f"se_{cycle}"})
+        part = part[[c for c in part.columns if c != "n_pv"]]
+        if merged is None:
+            merged = part
+        elif keys:
+            merged = merged.merge(part, on=keys, how="outer")
+        else:
+            merged = (merged.assign(_k=1).merge(part.assign(_k=1), on="_k")
+                      .drop(columns="_k"))
+    first, last = cycles[0], cycles[-1]
+    merged["change"] = merged[f"estimate_{last}"] - merged[f"estimate_{first}"]
+    merged["se_change"] = np.sqrt(merged[f"se_{first}"] ** 2
+                                  + merged[f"se_{last}"] ** 2)
+    cols = keys + [c for cycle in cycles
+                   for c in (f"estimate_{cycle}", f"se_{cycle}")] \
+        + ["change", "se_change"]
     return merged[cols]

@@ -39,7 +39,8 @@ from .events import open_store
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 STATIC_TYPES = {".html": "text/html; charset=utf-8",
                 ".js": "application/javascript; charset=utf-8",
-                ".css": "text/css; charset=utf-8"}
+                ".css": "text/css; charset=utf-8",
+                ".png": "image/png"}
 
 RATE_LIMIT = int(os.environ.get("PISA_RATE_LIMIT", "20"))
 GLOBAL_RATE = int(os.environ.get("PISA_GLOBAL_RATE", "200"))

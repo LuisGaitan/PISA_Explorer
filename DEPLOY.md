@@ -1,8 +1,8 @@
 # Deploying PISA Explorer to Cloud Run
 
-The image is fully self-contained (app + 3.7 GB Parquet + DuckDB rebuilt at
-build time), so there is nothing to provision besides Cloud Run itself — no
-BigQuery, no database service, no bucket.
+The image is fully self-contained (app + ~5.0 GB Parquet for the three cycles
++ DuckDB rebuilt at build time), so there is nothing to provision besides
+Cloud Run itself — no BigQuery, no database service, no bucket.
 
 ## One-time setup
 
@@ -35,7 +35,7 @@ the code, but a clean secret is still the right fix.)
 
 ## Deploy (from the repo root)
 
-`gcloud run deploy --source .` does NOT work for this repo: the ~3.4 GB
+`gcloud run deploy --source .` does NOT work for this repo: the multi-GB
 source context exceeds gcloud's single-request upload window (it dies with
 `ReadTimeout` after uploading for ~20 minutes). Use the three-step route
 instead — archive, resumable upload, build from the bucket — which is what
@@ -49,7 +49,7 @@ gcloud secrets add-iam-policy-binding gemini-api-key `
   --member="serviceAccount:$pn-compute@developer.gserviceaccount.com" `
   --role="roles/secretmanager.secretAccessor"
 
-# 1. archive the source (same exclusions as .gcloudignore; ~3.4 GB)
+# 1. archive the source (same exclusions as .gcloudignore; ~5 GB with 2025)
 tar -cf $env:TEMP\pisa-source.tgz -z --options gzip:compression-level=1 `
   --exclude=./.git --exclude=./.env --exclude=__pycache__ --exclude=*.pyc `
   --exclude=./data/pisa.duckdb --exclude=./data/pisa.duckdb.wal `
@@ -85,7 +85,7 @@ testers; the UI asks for the code once and remembers it.
 ## Code-only redeploy (the normal case — minutes, no data upload)
 
 `Dockerfile.code` layers the current code onto the existing data image, so a
-code change never re-uploads the 3.4 GB of Parquet:
+code change never re-uploads the ~5 GB of Parquet:
 
 ```powershell
 gcloud builds submit --config cloudbuild.code.yaml --ignore-file .gcloudignore.code `
@@ -98,6 +98,24 @@ gcloud run deploy pisa-explorer `
 (`gcloud run deploy --image` keeps the service's existing env vars, secrets
 and limits.) Repeat the full archive route only when the data or the pipeline
 changes, then point `_DATA_IMAGE` in `cloudbuild.code.yaml` at the new data tag.
+
+## Data updates (e.g. adding a PISA cycle)
+
+Adding PISA 2025 changed the data, so the live `v1` data image (2018 + 2022
+only) cannot be reused by a code-only build: the 2025 views would be missing
+and every 2025 question would fail. After a data change:
+
+1. rebuild locally: `python pipeline/convert.py`, `build_db.py`,
+   `build_catalog.py`, `validate.py` (and `check_2025_published.py`);
+2. run the **full archive route** above with a new tag (e.g. `v3`), then
+   `gcloud run deploy --image ...:v3`;
+3. set `_DATA_IMAGE` in `cloudbuild.code.yaml` (and the `DATA_IMAGE` default
+   in `Dockerfile.code`) to that tag so later code-only builds layer on it.
+
+The three-cycle image is about 40% larger than the 2018+2022 one; the
+`e2-highcpu-8` build machine and the 2400 s timeout still suffice, and the
+2Gi Cloud Run instance is unchanged (queries stream Parquet through DuckDB;
+only the projected columns of one cycle table are held in memory at a time).
 
 ## Access codes, admin, analytics
 

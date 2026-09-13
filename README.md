@@ -1,9 +1,10 @@
 # PISA Explorer
 
 Foundation for a conversational PISA analysis tool built on the **official OECD
-PISA 2018 (CY07MSU) and 2022 (CY08MSP) public-use databases** — both cycles,
-all 80 economies, with the survey weights, plausible values, and replicate
-weights that make population statistics methodologically correct.
+PISA 2018 (CY07MSU), 2022 (CY08MSP) and 2025 (CY09MS) public-use databases** —
+three cycles, all economies (80 in 2018 and 2022, 90 in 2025), with the survey
+weights, plausible values, and replicate weights that make population
+statistics methodologically correct.
 
 Full background, audit findings, and the agreed architecture live in
 [PISA_PROJECT_HANDOFF.md](PISA_PROJECT_HANDOFF.md).
@@ -12,15 +13,17 @@ Full background, audit findings, and the agreed architecture live in
 
 ```
 pipeline/
-  sources.py       registry of raw SAS files + official row counts
-  convert.py       SAS7BDAT -> Parquet (chunked, atomic writes, self-validating)
+  sources.py       registry of raw SAS/SPSS files + official row counts
+  convert.py       SAS7BDAT / SAV -> Parquet (chunked, atomic writes, self-validating)
   build_db.py      builds data/pisa.duckdb (views over Parquet + escs_trend table)
   build_catalog.py variable catalog + value labels + cross-cycle comparability map
   validate.py      checks row counts, key columns, economy counts
+  check_2025_published.py  reproduces Technical Report Annex 14 (sample sizes,
+                   weighted populations, SEs of mean scores) for all 90 economies
 explorer/
-  catalog.py       keyword retrieval over the 23k-variable catalog (search/describe/comparability)
+  catalog.py       keyword retrieval over the 29k-variable catalog (search/describe/comparability)
   estimator.py     PV x Fay-BRR replicate engine (the survey-methodology core)
-  analysis.py      templates: weighted_mean, weighted_proportion, gap, trend,
+  analysis.py      templates: weighted_mean, weighted_proportion, gap, trend (any 2-3 cycles),
                    quartile_means, quartile_gap (weighted within-group quartiles),
                    correlation (weighted, PV-aware, BRR SE)
   demo.py          end-to-end demo:  python -m explorer.demo
@@ -37,18 +40,22 @@ data/              (gitignored) parquet/, metadata/, catalog/, pisa.duckdb — f
 
 Raw data stays where it is, read-only, and is never committed:
 
-- 2018: `C:\Users\Luis\Desktop\DataMining\PISA_Data2018`
-- 2022: `C:\Users\Luis\Desktop\DataMining\PISA_Data2022`
+- 2018: `C:\Users\Luis\Desktop\DataMining\PISA_Data2018` (SAS)
+- 2022: `C:\Users\Luis\Desktop\DataMining\PISA_Data2022` (SAS)
+- 2025: `C:\Users\Luis\Desktop\DataMining\PISA_Data2025` (SPSS `.sav` — the
+  only format the OECD released for 2025; also holds the codebook, compendia
+  and Technical Report annexes used for validation)
 
 ## Rebuild from scratch
 
 ```
 pip install -r requirements.txt
-python pipeline/convert.py       # ~43 GB SAS -> ~3.7 GB Parquet, ~25 min total
+python pipeline/convert.py       # ~88 GB raw -> ~5.0 GB Parquet, ~35 min total (2025 alone: ~9 min)
 python pipeline/build_db.py
 python pipeline/build_catalog.py
 python pipeline/validate.py
-python -m explorer.demo          # end-to-end check (~1 s)
+python pipeline/check_2025_published.py   # 2025 SEs/sample sizes vs the Technical Report
+python -m explorer.demo          # end-to-end check (~2 s)
 ```
 
 ## Chat with the data
@@ -62,7 +69,7 @@ GEMINI_API_KEY=your-key-here
 Then:
 
 ```
-python -m explorer.chat "How did reading scores change in Finland between 2018 and 2022?"
+python -m explorer.chat "How did reading scores change in Finland between 2018 and 2025?"
 python -m explorer.chat            # interactive; /export file.csv saves the last table
 ```
 
@@ -81,8 +88,9 @@ python -m explorer.app           # opens on http://127.0.0.1:8765 (local only)
 ```
 
 Same engine as the CLI, plus charts: country comparisons render as bars with
-95%-confidence whiskers, 2018→2022 questions as dumbbells (2018 → 2022 dots),
-gaps as diverging bars around zero, and crosstabs as heatmaps. Every chart has
+95%-confidence whiskers, cross-cycle questions as dumbbells (one dot per cycle,
+2018 → 2022 → 2025), gaps as diverging bars around zero, and crosstabs as
+heatmaps. Every chart has
 hover tooltips (value, SE, CI, significance), sits above its full data table
 (Export CSV button), and carries the same provenance card. Light/dark follows
 the OS. `?demo=1` renders sample charts offline without spending API calls.
@@ -106,8 +114,16 @@ All survey-correct (`W_FSTUWT`, 10 PVs via Rubin's rules, Fay-BRR SEs over the
 | `regression` | weighted least squares, readable term names, "controlling for" questions |
 | `raw_sql` | read-only SELECT escape hatch, clearly flagged as unweighted |
 
-Cross-cycle (2018 vs 2022) versions of all of these run automatically when the
-question compares cycles.
+Cross-cycle versions of all of these run automatically when the question
+compares cycles: the template runs per cycle (any two or all three of 2018,
+2022, 2025), the table shows every cycle side by side, and `change` is the
+last cycle minus the first. A question that names no cycle means 2025.
+
+Where a variable differs by cycle the plan carries `cycle_overrides` — a
+per-cycle replacement of plan fields that is always stated in the provenance.
+The standing example is gender: `ST004D01T` (1 = female, 2 = male) in 2018
+and 2022, but in 2025 fourteen economies release only the derived `MALE` flag
+(1 = male, 0 = female/other), so 2025 gender analyses use `MALE`.
 
 ## Deployment
 
@@ -117,10 +133,12 @@ knobs: `PISA_ACCESS_CODE`, `PISA_RATE_LIMIT` (default 20/h per session),
 `PISA_GLOBAL_RATE` (default 200/h total), `PORT`, `BIND_HOST`.
 
 `convert.py` is idempotent (skips finished files; `--force` to redo,
-`--only 2022` / `--only stu_qqq_2018` to filter). Every Parquet file is written
-to a temp name and renamed only after its row count matches both the SAS header
-and the official figure — a crash cannot leave a plausible-looking partial file
-(the defect that silently truncated the old CSV pipeline).
+`--only 2025` / `--only stu_qqq_2018` to filter). Every Parquet file is written
+to a temp name and renamed only after its row count matches both the raw file's
+header and the official figure — a crash cannot leave a plausible-looking
+partial file (the defect that silently truncated the old CSV pipeline). The
+2025 questionnaire-timing file declares UTF-8 but contains Latin-1 bytes;
+`sources.py` carries the per-file encoding override.
 
 ## Database
 
@@ -128,27 +146,40 @@ and the official figure — a crash cannot leave a plausible-looking partial fil
 
 | View | Content |
 |---|---|
-| `stu_qqq_2018` / `stu_qqq_2022` | Student questionnaire (PV1–PV10 MATH/READ/SCIE, `W_FSTUWT`, `W_FSTURWT1–80`, ESCS) |
-| `sch_qqq_*`, `tch_qqq_*` | School and teacher questionnaires |
-| `stu_cog_*`, `stu_tim_*`, `stu_ttm_2018` | Cognitive item responses and timing |
-| `flt_qqq_*`, `flt_cog_*`, `flt_tim_*`, `flt_ttm_2018` | Financial literacy |
+| `stu_qqq_2018` / `_2022` / `_2025` | Student questionnaire (PV1–PV10 MATH/READ/SCIE, `W_FSTUWT`, `W_FSTURWT1–80`, ESCS). 2025 adds science subscales (SEPS/SEDE/SEID/SENV), the Learning-in-the-Digital-World PVs (CMPS/CPPK/CMOD/CPRO) and the ICT and parent questionnaire items |
+| `sch_qqq_*`, `tch_qqq_*` | School and teacher questionnaires (all three cycles) |
+| `stu_cog_*` | Cognitive item responses (all three cycles) |
+| `stu_tim_*` | Questionnaire timing (all three cycles) |
+| `stu_ttm_2018` / `stu_ttm_2025` | Cognitive item process data (time, actions) |
+| `flt_qqq_*`, `flt_cog_*`, `flt_tim_*`, `flt_ttm_2018` | Financial literacy (2018, 2022) |
 | `crt_cog_2022` | Creative thinking (2022 only) |
+| `ldw_cog_2025` | Learning in the Digital World item responses and process data (2025 only; the LDW *scores* are the CMPS/CPPK/CMOD/CPRO PVs in `stu_qqq_2025`) |
 | `escs_trend` | OECD comparable-ESCS trend table |
 
-The two cycles deliberately keep separate tables: questionnaires overlap but
-are not identical across cycles (variables added/dropped/renamed), so
-cross-cycle comparability is a per-variable decision made at query time.
+The cycles deliberately keep separate tables: questionnaires overlap but are
+not identical across cycles (variables added/dropped/renamed), so cross-cycle
+comparability is a per-variable decision made at query time. The 2025 files
+are mapped onto the instrument names by content (`CY09_MS_STU_TT_PUF` is the
+questionnaire-timing file → `stu_tim_2025`; `CY09_MS_COG_PROCESS` is the
+cognitive process file → `stu_ttm_2025`; `CY09_MS_LDW` → `ldw_cog_2025`).
+Not loaded: the LDW self-regulated-learning file (not downloaded) and the
+Foreign Language Assessment files (OECD release expected in 2027).
 
 ## Catalog and statistics layer
 
-`catalog_variables` (23,307 rows, one per variable per table, ~95% with value
-labels) and `catalog_comparability` (cross-cycle availability of 16,233
-variables in the 8 shared instruments) live both as DuckDB tables and as
-Parquet under `data/catalog/`. `explorer.catalog.search()` is the retrieval
-function the AI layer will call — only the ~15 relevant variables ever reach
-a prompt. 2018 value labels are recovered by combining each instrument's
+`catalog_variables` (29,337 rows, one per variable per table, ~95% with
+value labels) and `catalog_comparability` (cross-cycle availability of
+20,670 variables in the 9 instruments present in two or more cycles:
+`in_2018` / `in_2022` / `in_2025`, per-cycle labels, `n_cycles`; 6,280
+variables appear in 2+ cycles and 1,335 in all three) live
+both as DuckDB tables and as Parquet under `data/catalog/`. `explorer.catalog.search()` is the retrieval
+function the AI layer calls: it ranks *variables* (not rows) and returns each
+selected variable's row from every cycle and instrument it exists in, so a
+variable card reads `REPEAT (stu_qqq_2018, stu_qqq_2022, stu_qqq_2025)` and
+the planner can see cross-cycle availability directly. Only the ~40
+top-ranked variables ever reach a prompt. 2018 value labels are recovered by combining each instrument's
 `.FORMAT.SAS` (variable -> format name) with its `.SAS7BCAT` catalog
-(format -> labels, latin1); 2022 labels come from the SPSS files.
+(format -> labels, latin1); 2022 and 2025 labels come from the SPSS files.
 
 ## Methodology rules (implemented in `explorer/estimator.py`)
 
@@ -161,6 +192,12 @@ a prompt. 2018 value labels are recovered by combining each instrument's
   yet included — flagged in `analysis.trend`).
 - **Validated:** country means AND standard errors reproduce the published
   PISA 2018/2022 figures (e.g. USA 2022 math 465 SE 4.0, FIN 484 SE 1.9,
-  KOR 527 SE 3.9).
+  KOR 527 SE 3.9). For 2025, `pipeline/check_2025_published.py` reproduces
+  the Technical Report's Annex 14 sample sizes, weighted populations and
+  mean-score standard errors for all 90 economies in science, reading and
+  mathematics.
+- 2025 gotchas the planner knows: Uzbekistan has science PVs only; gender
+  comes from `MALE` in 2025 (see above); the LDW PVs exist only for
+  computer-based economies.
 - Codes stay in the data; labels come from the catalog and are applied at
   display time.

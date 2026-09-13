@@ -1,8 +1,8 @@
 """End-to-end demo of the foundation: catalog retrieval + survey-correct
 statistics answering a real trend question.
 
-  Question: "Did the gender gap in math change between 2018 and 2022 in
-             Korea, the US, Finland, and Brazil?"
+  Question: "Did the gender gap in math change between 2018, 2022 and 2025
+             in Korea, the US, Finland, and Brazil?"
 
 Run:  python -m explorer.demo
 """
@@ -15,6 +15,7 @@ from .db import connect
 
 COUNTRIES = ("KOR", "USA", "FIN", "BRA")
 WHERE = "CNT IN ('KOR','USA','FIN','BRA')"
+CYCLES = ("2018", "2022", "2025")
 
 
 def main() -> None:
@@ -37,7 +38,7 @@ def main() -> None:
     print("=" * 70)
     print("2. WEIGHTED MEAN MATH (10 PVs averaged, Fay-BRR SE over 80 replicates)")
     print("=" * 70)
-    for cycle in ("2018", "2022"):
+    for cycle in CYCLES:
         res = weighted_mean(
             con, f"stu_qqq_{cycle}", "PV{pv}MATH", by=("CNT",), where=WHERE
         ).sort_values("CNT")
@@ -50,7 +51,9 @@ def main() -> None:
     print("3. GENDER GAP IN MATH (boys - girls), replicate-wise SE")
     print("=" * 70)
     gaps = {}
-    for cycle in ("2018", "2022"):
+    for cycle in CYCLES:
+        # ST004D01T (1=female, 2=male) is populated for these four economies in
+        # every cycle; 14 economies release only the derived MALE flag in 2025.
         gaps[cycle] = gap(
             con, f"stu_qqq_{cycle}", "PV{pv}MATH",
             group_col="ST004D01T", minuend=2, subtrahend=1,   # 2=Male, 1=Female
@@ -62,14 +65,15 @@ def main() -> None:
 
     print()
     print("=" * 70)
-    print("4. TREND: did the gap change 2018 -> 2022?")
+    print("4. TREND: did the gap change 2018 -> 2022 -> 2025?")
     print("=" * 70)
-    tr = trend(gaps["2018"], gaps["2022"], by=("CNT",))
-    print("\n  (change = gap_2022 - gap_2018; |change| > 2*SE ~= significant;")
+    tr = trend({c: gaps[c] for c in CYCLES}, by=("CNT",))
+    print("\n  (change = gap_2025 - gap_2018; |change| > 2*SE ~= significant;")
     print("   link error not yet included — see analysis.trend docstring)")
     for _, r in tr.iterrows():
         sig = "significant" if abs(r.change) > 2 * r.se_change else "not significant"
-        print(f"    {r.CNT}: gap {r.estimate_2018:+5.1f} -> {r.estimate_2022:+5.1f}  "
+        print(f"    {r.CNT}: gap {r.estimate_2018:+5.1f} -> {r.estimate_2022:+5.1f} "
+              f"-> {r.estimate_2025:+5.1f}  "
               f"change {r.change:+5.1f} (SE {r.se_change:.2f})  [{sig}]")
 
     con.close()

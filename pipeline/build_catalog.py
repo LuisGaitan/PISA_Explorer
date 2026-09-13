@@ -2,6 +2,8 @@
 
 Sources, per instrument:
   - column labels + types: data/metadata/*.json (captured at conversion time)
+  - value labels 2025:     embedded in the SPSS source, already captured in the
+                           metadata JSON at conversion time
   - value labels 2022:     the SPSS .SAV files (embedded labels, metadata-only read)
   - value labels 2018:     .FORMAT.SAS (variable -> format name) combined with
                            the .SAS7BCAT catalogs (format name -> {value: label});
@@ -13,7 +15,8 @@ Outputs (all rebuildable):
       variable, table_name, cycle, instrument, label, var_type,
       value_labels (JSON string or NULL), n_value_labels
   data/catalog/comparability.parquet   one row per (instrument, variable) for
-      instruments present in both cycles: availability + labels per cycle
+      instruments present in at least two cycles: in_2018 / in_2022 / in_2025,
+      label_<cycle>, n_cycles, label_changed (any two present labels differ)
   ...and both registered as tables in data/pisa.duckdb
       (catalog_variables, catalog_comparability).
 
@@ -30,7 +33,7 @@ import duckdb
 import pandas as pd
 import pyreadstat
 
-from sources import DATA_2022, DATA_DIR, DB_PATH, SOURCES
+from sources import CYCLES, DATA_2022, DATA_DIR, DB_PATH, SOURCES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("build_catalog")
@@ -106,10 +109,12 @@ def main() -> int:
         column_labels = info["column_labels"] or {}
         var_types = info["variable_types"] or {}
 
-        if source.cycle == "2022":
+        if info.get("variable_value_labels"):
+            vvl = info["variable_value_labels"]        # SPSS sources (2025)
+        elif source.cycle == "2022":
             vvl = value_labels_2022(source.instrument)
         else:
-            vvl = value_labels_2018(source.sas_path, source.instrument)
+            vvl = value_labels_2018(source.path, source.instrument)
 
         n_labeled = 0
         for var, label in column_labels.items():
@@ -134,32 +139,33 @@ def main() -> int:
     variables.to_parquet(CATALOG_DIR / "variables.parquet", index=False)
     log.info(f"variables.parquet: {len(variables):,} rows")
 
-    # Cross-cycle comparability for instruments present in both cycles
-    both = variables.groupby("instrument")["cycle"].nunique()
-    shared = both[both == 2].index
+    # Cross-cycle comparability for instruments present in 2+ cycles
+    per_cycle = variables.groupby("instrument")["cycle"].nunique()
+    shared = per_cycle[per_cycle >= 2].index
     comp_rows = []
     for instrument in shared:
         sub = variables[variables.instrument == instrument]
-        v18 = sub[sub.cycle == "2018"].set_index("variable")
-        v22 = sub[sub.cycle == "2022"].set_index("variable")
-        for var in sorted(set(v18.index) | set(v22.index)):
-            in18, in22 = var in v18.index, var in v22.index
-            comp_rows.append({
-                "instrument": instrument,
-                "variable": var,
-                "in_2018": in18,
-                "in_2022": in22,
-                "label_2018": v18.label[var] if in18 else None,
-                "label_2022": v22.label[var] if in22 else None,
-                "label_changed": (in18 and in22
-                                  and v18.label[var].strip().lower()
-                                  != v22.label[var].strip().lower()),
-            })
+        labels = {c: sub[sub.cycle == c].set_index("variable").label
+                  for c in CYCLES}
+        all_vars = sorted(set().union(*(set(v.index) for v in labels.values())))
+        for var in all_vars:
+            present = [c for c in CYCLES if var in labels[c].index]
+            row = {"instrument": instrument, "variable": var}
+            for c in CYCLES:
+                row[f"in_{c}"] = c in present
+            for c in CYCLES:
+                row[f"label_{c}"] = labels[c][var] if c in present else None
+            norm = {labels[c][var].strip().lower() for c in present}
+            row["n_cycles"] = len(present)
+            row["label_changed"] = len(norm) > 1
+            comp_rows.append(row)
     comparability = pd.DataFrame(comp_rows)
     comparability.to_parquet(CATALOG_DIR / "comparability.parquet", index=False)
-    n_both = int((comparability.in_2018 & comparability.in_2022).sum())
+    n_multi = int((comparability.n_cycles >= 2).sum())
+    n_all = int((comparability.n_cycles == len(CYCLES)).sum())
     log.info(f"comparability.parquet: {len(comparability):,} variables across "
-             f"{len(shared)} shared instruments ({n_both:,} present in both cycles)")
+             f"{len(shared)} shared instruments ({n_multi:,} in 2+ cycles, "
+             f"{n_all:,} in all {len(CYCLES)})")
 
     con = duckdb.connect(str(DB_PATH))
     for table, path in [("catalog_variables", CATALOG_DIR / "variables.parquet"),

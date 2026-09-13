@@ -1,4 +1,5 @@
-"""SAS7BDAT -> Parquet converter for the PISA 2018/2022 databases.
+"""Raw OECD file -> Parquet converter for the PISA 2018/2022/2025 databases
+(SAS7BDAT for 2018/2022, SPSS .sav for 2025).
 
 Design rules (each one fixes a defect found in the previous pipeline):
   1. ATOMIC WRITES: every Parquet file is written to `<name>.parquet.tmp` and
@@ -8,13 +9,16 @@ Design rules (each one fixes a defect found in the previous pipeline):
      (meta.number_rows); the written Parquet must match it exactly, and must
      match the official public-use count in sources.py where one is known.
   3. STREAMING: files are read in chunks sized to the column count, so even
-     the 15 GB cognitive files never come close to exhausting RAM.
+     the 15 GB cognitive files never come close to exhausting RAM. The chunk
+     loop is explicit (row_offset/row_limit) rather than pyreadstat's
+     read_file_in_chunks helper, which drops the encoding override that the
+     2025 questionnaire-timing file needs.
   4. METADATA CAPTURED: column labels and value labels are dumped to JSON at
      conversion time — the raw material for the future variable catalog.
 
 Usage:
   python pipeline/convert.py                  # convert everything not yet done
-  python pipeline/convert.py --only 2022      # one cycle
+  python pipeline/convert.py --only 2025      # one cycle
   python pipeline/convert.py --only stu_qqq_2018 sch_qqq_2022
   python pipeline/convert.py --force          # reconvert even if output exists
 """
@@ -32,7 +36,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pyreadstat
 
-from sources import METADATA_DIR, Source, get_sources
+from sources import METADATA_DIR, Source, get_sources, read_metadata
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("convert")
@@ -68,13 +72,30 @@ def to_arrow(df: pd.DataFrame, schema: pa.Schema) -> pa.Table:
     return pa.Table.from_pandas(df, schema=schema, preserve_index=False)
 
 
+def read_chunks(source: Source, chunk_size: int):
+    """Yield DataFrame chunks of the raw file in order (any format)."""
+    reader = pyreadstat.read_sav if source.fmt == "sav" else pyreadstat.read_sas7bdat
+    kwargs = {"encoding": source.encoding} if source.encoding else {}
+    offset = 0
+    while True:
+        df, _ = reader(str(source.path), row_offset=offset, row_limit=chunk_size,
+                       **kwargs)
+        if len(df) == 0:
+            return
+        yield df
+        if len(df) < chunk_size:
+            return
+        offset += len(df)
+
+
 def dump_metadata(source: Source, meta, n_rows: int, n_cols: int) -> None:
     METADATA_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "name": source.name,
         "cycle": source.cycle,
         "instrument": source.instrument,
-        "source_file": str(source.sas_path),
+        "source_file": str(source.path),
+        "format": source.fmt,
         "rows": n_rows,
         "columns": n_cols,
         "column_labels": meta.column_names_to_labels,
@@ -86,20 +107,20 @@ def dump_metadata(source: Source, meta, n_rows: int, n_cols: int) -> None:
 
 
 def convert_source(source: Source) -> dict:
-    if not source.sas_path.exists():
-        raise FileNotFoundError(f"{source.name}: source missing: {source.sas_path}")
+    if not source.path.exists():
+        raise FileNotFoundError(f"{source.name}: source missing: {source.path}")
 
     # Header-only read: authoritative row count + labels, costs seconds.
-    _, meta = pyreadstat.read_sas7bdat(str(source.sas_path), metadataonly=True)
+    meta = read_metadata(source)
     header_rows = meta.number_rows
     n_cols = len(meta.column_names)
     chunk_size = choose_chunk_size(n_cols)
-    size_gb = source.sas_path.stat().st_size / 1024**3
+    size_gb = source.path.stat().st_size / 1024**3
 
     expected = source.expected_rows
     if expected is not None and header_rows is not None and expected != header_rows:
         raise RuntimeError(
-            f"{source.name}: SAS header says {header_rows:,} rows but official "
+            f"{source.name}: file header says {header_rows:,} rows but official "
             f"count is {expected:,} — investigate before converting"
         )
     target_rows = expected if expected is not None else header_rows
@@ -119,9 +140,7 @@ def convert_source(source: Source) -> dict:
     total_rows = 0
     started = time.time()
     try:
-        for df_chunk, _ in pyreadstat.read_file_in_chunks(
-            pyreadstat.read_sas7bdat, str(source.sas_path), chunksize=chunk_size
-        ):
+        for df_chunk in read_chunks(source, chunk_size):
             if writer is None:
                 schema = build_schema(df_chunk, meta.readstat_variable_types)
                 writer = pq.ParquetWriter(tmp_path, schema, compression="zstd")

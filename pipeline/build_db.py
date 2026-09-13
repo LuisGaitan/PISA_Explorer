@@ -5,7 +5,7 @@ Each converted instrument becomes a VIEW named `<instrument>_<cycle>`
 instantly rebuilt by rerunning this script. The small ESCS trend file is
 materialized as a real table `escs_trend`.
 
-Note: 2018 and 2022 keep their own per-cycle tables on purpose. The two
+Note: 2018, 2022 and 2025 keep their own per-cycle tables on purpose. The
 cycles' questionnaires overlap but are not identical (variables were added,
 dropped, and renamed between cycles), so cross-cycle comparability is decided
 per variable at query time, not forced at the schema level.

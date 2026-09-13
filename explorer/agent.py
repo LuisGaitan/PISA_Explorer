@@ -42,20 +42,26 @@ from .llm import generate, generate_json
 MAX_CARDS = 40
 MAX_RESULT_ROWS = 500
 
-INSTRUMENTS = ["stu_qqq", "sch_qqq", "tch_qqq", "stu_cog", "stu_tim",
-               "flt_qqq", "flt_cog", "flt_tim", "crt_cog"]
+INSTRUMENTS = ["stu_qqq", "sch_qqq", "tch_qqq", "stu_cog", "stu_tim", "stu_ttm",
+               "flt_qqq", "flt_cog", "flt_tim", "crt_cog", "ldw_cog"]
+CYCLES = ["2018", "2022", "2025"]
+DEFAULT_CYCLE = "2025"          # a question that names no cycle means the latest
+SOURCE_LINE = ("OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP), "
+               "2025 (CY09MS)")
+ESTIMATE_COL = re.compile(r"^estimate(_\d{4})?$")
 
 FORBIDDEN_SQL = re.compile(
     r"\b(copy|attach|detach|install|load|pragma|export|import|create|insert|"
     r"update|delete|alter|drop|call|set|reset)\b", re.IGNORECASE)
 
 TERMS_SYSTEM = """You are the router inside PISA Explorer, a local app where a
-user chats with the OECD PISA 2018/2022 databases. How the app works (answer
+user chats with the OECD PISA 2018/2022/2025 databases. How the app works (answer
 questions about it truthfully): the user's question becomes an analysis plan;
 validated survey statistics run locally; the app itself then AUTOMATICALLY
 renders a chart when the result has a chartable shape (group comparisons ->
-bar chart with 95% CI whiskers; 2018-vs-2022 -> dumbbell chart; group gaps ->
-diverging bars), plus the data table, a CSV export button, and a provenance
+bar chart with 95% CI whiskers; cross-cycle 2018/2022/2025 -> dumbbell chart
+with one dot per cycle; group gaps -> diverging bars), plus the data table, a
+CSV export button, and a provenance
 card. Single-number results and raw-SQL results get a table but no chart — to
 get a chart, the user should ask for a comparison across groups, countries, or
 cycles. Never claim "I cannot visualize data": charts appear automatically for
@@ -76,7 +82,7 @@ terms. Example:
   -> {"data_question": false, "search_terms": [],
       "direct_answer": "Charts appear automatically when a result compares
       groups: country or group comparisons draw bars with confidence whiskers,
-      2018-vs-2022 questions draw dumbbells, and gaps draw diverging bars.
+      cross-cycle questions draw dumbbells, and gaps draw diverging bars.
       The last result was a single number, which has no chart form — ask for a
       comparison instead (for example: 'compare reading scores for students
       with high vs low ICT autonomy, top vs bottom quartile, by country') and
@@ -84,14 +90,47 @@ terms. Example:
 A follow-up like "yes, top vs bottom quartile" that answers a clarifying
 question IS a data question — combine it with the context and route it to data."""
 
-PLAN_SYSTEM = """You plan analyses of the OECD PISA 2018 and 2022 databases.
+PLAN_SYSTEM = """You plan analyses of the OECD PISA 2018, 2022 and 2025 databases.
 
-DATABASE: DuckDB. Tables are <instrument>_<cycle>, e.g. stu_qqq_2018, stu_qqq_2022
-(instruments: {instruments}). Student questionnaire (stu_qqq_*) holds achievement
-plausible values PV1..PV10 for MATH/READ/SCIE, final weight W_FSTUWT, replicate
-weights, ESCS (socio-economic index), and CNT (ISO-3 country code, e.g. 'USA',
-'KOR', 'DEU'). Gender is ST004D01T (1=Female, 2=Male) in both cycles.
+DATABASE: DuckDB. Tables are <instrument>_<cycle>, e.g. stu_qqq_2018, stu_qqq_2022,
+stu_qqq_2025 (instruments: {instruments}; cycles: 2018, 2022, 2025). Student
+questionnaire (stu_qqq_*) holds achievement plausible values PV1..PV10 for
+MATH/READ/SCIE, final weight W_FSTUWT, replicate weights, ESCS (socio-economic
+index), and CNT (ISO-3 country code, e.g. 'USA', 'KOR', 'DEU').
 There is also escs_trend (OECD comparable-ESCS across cycles).
+
+ECONOMY CODES that are NOT ISO-3 (use exactly these): QCI = B-S-J-Z (China:
+Beijing, Shanghai, Jiangsu, Zhejiang; 2018 and 2025 only), TAP = Chinese
+Taipei, MAC = Macao (China), HKG = Hong Kong (China), KSV = Kosovo, QAT =
+Qatar, QAZ = Baku (Azerbaijan; 2018/2022) vs AZE = Azerbaijan (2025), QUR =
+Ukrainian regions (2022) / QUA = Ukrainian regions (2025), QKI = Kurdistan
+Region (Iraq; 2025), QTJ = Dushanbe (Tajikistan; 2025), QMR = Moscow and QRT =
+Tatarstan (2018), RUS = Russia (2018). Never invent codes: an economy is a
+single CNT value. Not every economy is in every cycle (e.g. ARM, KEN, KGZ,
+MUS, RWA, ZMB, ECU joined in 2025; JAM only 2022; BIH, BLR, UKR only 2018).
+
+GENDER: ST004D01T (1=Female, 2=Male) in 2018 and 2022. In 2025 fourteen
+economies (ARG, AUS, BEL, CAN, CHL, COL, DEU, DNK, ESP, IRL, ISL, NLD, NZL,
+URY) release only the derived flag MALE (1=Male, 0=Female/Other), which is
+complete for all 90 economies — so for 2025 use MALE (gap: group_col="MALE",
+minuend=1, subtrahend=0; dummy: "CASE WHEN MALE = 1 THEN 1 ELSE 0 END"). In a
+plan that spans 2018/2022 AND 2025, keep ST004D01T in the main fields and put
+the 2025 variant in cycle_overrides (see below).
+
+PISA 2025 SPECIFICS: 90 economies (80 in 2018/2022). Science was the major
+domain; the same proficiency-level cutoffs apply in every cycle (the scales are
+linked). Uzbekistan (UZB) has science PVs only in 2025 (no MATH, no READ —
+its rows show no estimate for those domains). Extra 2025 PVs:
+science competency subscales PV{{pv}}SEPS / PV{{pv}}SEDE / PV{{pv}}SEID,
+environmental science PV{{pv}}SENV, and the new "Learning in the Digital World"
+domain PV{{pv}}CMPS (computational problem solving), PV{{pv}}CPPK
+(computational practices / prior knowledge), PV{{pv}}CMOD, PV{{pv}}CPRO
+(computer-based economies only). The 2025 student file also carries the
+ICT-familiarity (IC*) and parent-questionnaire (PA*) items; tch_qqq_2025
+covers 19 economies. stu_ttm = cognitive item process data (2018, 2025);
+stu_tim = questionnaire timing (all cycles); ldw_cog_2025 = LDW item
+responses and process data (scored items P1M…S, timing …TT, actions …A) —
+LDW *scores* are the PV{{pv}}CMPS etc. columns in stu_qqq_2025.
 
 You receive VARIABLE CARDS retrieved from the official codebooks — the only
 variables you may use besides the ones named above. If the ideal variable is
@@ -105,7 +144,15 @@ Reply with ONLY this JSON:
  "template": "weighted_mean"|"weighted_proportion"|"gap"|"quartile_means"|
              "quartile_gap"|"correlation"|"percentiles"|"percentile_spread"|
              "crosstab"|"regression"|"raw_sql",
- "cycles": ["2018","2022"] or ["2022"] or ["2018"],
+ "cycles": chronological list drawn from ["2018","2022","2025"] — e.g.
+            ["2025"] (latest; the default when no cycle is named),
+            ["2018","2022","2025"] (a full trend), ["2022","2025"] (the latest
+            change),
+ "cycle_overrides": {{"<cycle>": {{field: value, ...}}}}|null   (per-cycle
+            replacements for plan fields when a variable differs by cycle,
+            e.g. {{"2025": {{"group_col": "MALE", "minuend": 1, "subtrahend": 0}}}};
+            the system merges them into the plan for that cycle only and
+            states them in the provenance),
  "instrument": "stu_qqq" etc.,
  "measure": SQL expression; write {{pv}} for the plausible-value slot, e.g. "PV{{pv}}MATH",
             or a plain expression like "ESCS" (weighted_mean and gap only),
@@ -163,10 +210,14 @@ first, or (if the user insists on both at once) raw_sql computing both
 weighted means per group as sum(W_FSTUWT * var) / sum(W_FSTUWT) — and note in
 the explanation that raw SQL carries no standard errors.
 
-Rules: comparisons across cycles => cycles=["2018","2022"] (the system runs the
-template per cycle and differences them). Achievement questions always use the
-PV{{pv}} form. Filter to the countries the user names; if none named, ask
-yourself whether all 80 economies is really wanted — for rankings it is.
+Rules: comparisons across cycles => list every cycle asked about, in
+chronological order ("over time" / "trend" / "since 2018" => all three unless
+the user narrows it); the system runs the template per cycle, reports every
+cycle side by side, and adds the change from the FIRST to the LAST listed
+cycle. A question that names no cycle means the latest one (2025) — say so in
+the explanation. Achievement questions always use the PV{{pv}} form. Filter to
+the countries the user names; if none named, ask yourself whether all
+economies (80 in 2018/2022, 90 in 2025) is really wanted — for rankings it is.
 Percentages of a category => weighted_proportion with valid_values listed.
 "High vs low X" for a continuous X => quartile_gap (never invent thresholds).
 Distribution / spread / inequality within groups => percentiles or
@@ -181,7 +232,12 @@ measure, e.g. "% below Level 2 in math" => measure =
 SUMMARY_SYSTEM = """You summarize PISA analysis results for a general audience.
 Write 2-5 sentences. Cite the key numbers with their standard errors like
 "465 points (SE 4.0)". Treat |estimate| > 1.96*SE as statistically significant
-and say so in plain language. If a substitution_note or method note is present,
+and say so in plain language. In a multi-cycle table the columns are
+estimate_<cycle> per cycle and `change` = last cycle minus first cycle;
+describe the path over time (e.g. 2018 → 2022 → 2025), not just the endpoints.
+All three cycles — including PISA 2025, released in 2026 — are real, published
+survey results: never describe 2025 figures as projections, forecasts or
+expectations. If a substitution_note or method note is present,
 state it plainly. Do not invent numbers not in the table."""
 
 
@@ -234,39 +290,60 @@ class Agent:
     # ---------- retrieval ----------
 
     def _retrieve(self, terms: list[str]) -> pd.DataFrame:
+        """Top-scoring VARIABLES across the search terms, with every table
+        (cycle/instrument) row of each — capped at MAX_CARDS variables."""
         frames = [catalog.search(t, limit=8) for t in terms]
+        if not frames:
+            return pd.DataFrame()
         hits = (pd.concat(frames, ignore_index=True)
-                .drop_duplicates(subset=["variable", "table_name"])
-                .sort_values("score", ascending=False)
-                .head(MAX_CARDS)) if frames else pd.DataFrame()
-        return hits
+                .drop_duplicates(subset=["variable", "table_name"]))
+        best = hits.groupby("variable")["score"].max()
+        keep = best.sort_values(ascending=False).head(MAX_CARDS).index
+        hits = hits[hits.variable.isin(keep)].assign(score=lambda d: d.variable.map(best))
+        return hits.sort_values(["score", "variable", "table_name"],
+                                ascending=[False, True, True])
 
     @staticmethod
     def _cards(hits: pd.DataFrame) -> str:
+        """One card per variable, listing every table it exists in — so the
+        planner sees cross-cycle availability at a glance (and a variable
+        absent from a cycle is visibly absent)."""
         if hits is None or hits.empty:
             return "(no extra variables retrieved)"
         lines = []
-        for _, r in hits.iterrows():
-            desc = catalog.describe(r.variable, cycle=r.cycle)
+        for var, group in hits.groupby("variable", sort=False):
+            group = group.sort_values("table_name")
+            latest = group.sort_values("cycle").iloc[-1]
+            desc = catalog.describe(var, cycle=latest.cycle)
             values = ""
             if not desc.empty and desc.iloc[0].value_labels:
                 labels = json.loads(desc.iloc[0].value_labels)
                 shown = [f"{k}={v}" for k, v in list(labels.items())[:6]]
                 values = f" [values: {', '.join(shown)}]"
-            lines.append(f"- {r.variable} ({r.table_name}): {r.label}{values}")
+            tables = ", ".join(group.table_name)
+            lines.append(f"- {var} ({tables}): {latest.label}{values}")
         return "\n".join(lines)
 
     # ---------- execution (offline-testable, no LLM) ----------
 
     def execute(self, plan: dict) -> tuple[pd.DataFrame, dict]:
         template = plan.get("template")
-        cycles = [str(c) for c in plan.get("cycles") or ["2022"]]
+        cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
+        unknown = [c for c in cycles if c not in CYCLES]
+        if unknown:
+            raise ValueError(f"unknown cycle(s) {unknown}; available: {CYCLES}")
         instrument = plan.get("instrument") or "stu_qqq"
         by = tuple(plan.get("by") or ())
         where = plan.get("where") or None
         self._check_fragment(where)
         for col in by:
             self._check_identifier(col)
+        overrides = {str(k): v for k, v in (plan.get("cycle_overrides") or {}).items()
+                     if isinstance(v, dict) and v}
+        for ov in overrides.values():
+            for value in ov.values():
+                if isinstance(value, str):
+                    self._check_fragment(value)
 
         if template == "raw_sql":
             table = self._run_raw_sql(plan["sql"])
@@ -276,12 +353,21 @@ class Agent:
         tables = [f"{instrument}_{c}" for c in cycles]
         per_cycle: dict[str, pd.DataFrame] = {}
         for cycle, tbl in zip(cycles, tables):
-            res = self._run_template(template, plan, tbl, by, where)
+            cplan = {**plan, **overrides.get(cycle, {})}
+            cwhere = cplan.get("where") or None
+            res = self._run_template(template, cplan, tbl, by, cwhere)
             if plan.get("include_oecd_average") and "CNT" in by:
                 avg = self._oecd_average_rows(res, tbl)
                 if avg is not None:
                     res = pd.concat([res, avg], ignore_index=True)
             per_cycle[cycle] = res
+        if overrides and "contrast" in per_cycle[cycles[0]].columns:
+            # an overridden group variable relabels the contrast (e.g. "MALE:
+            # 1 - 0" vs "ST004D01T: 2 - 1"); align on the first cycle's label
+            # so the cycles merge — the override itself is stated in provenance
+            label = per_cycle[cycles[0]]["contrast"].iloc[0]
+            for res in per_cycle.values():
+                res["contrast"] = label
 
         extra_keys = {"gap": ["contrast"], "quartile_gap": ["contrast"],
                       "quartile_means": ["quarter"],
@@ -292,15 +378,14 @@ class Agent:
         if template == "crosstab":
             extra_keys = [k for k in extra_keys
                           if k in per_cycle[cycles[0]].columns]
-        if len(cycles) == 2:
-            table = trend(per_cycle["2018"], per_cycle["2022"],
-                          by=[c for c in by] + extra_keys)
+        if len(cycles) >= 2:
+            table = trend(per_cycle, by=[c for c in by] + extra_keys)
         else:
             table = per_cycle[cycles[0]].assign(cycle=cycles[0])
 
         sort_by = plan.get("sort_by")
         if sort_by:
-            candidates = [sort_by, "estimate_2022" if sort_by == "estimate" else sort_by]
+            candidates = [sort_by, f"estimate_{cycles[-1]}" if sort_by == "estimate" else sort_by]
             col = next((c for c in candidates if c in table.columns), None)
             if col:
                 table = table.sort_values(col, ascending=not plan.get("sort_desc", True))
@@ -309,8 +394,7 @@ class Agent:
         table = table.reset_index(drop=True)
 
         prov = self._provenance(plan, tables)
-        estimate_cols = [c for c in ("estimate", "estimate_2018", "estimate_2022")
-                         if c in table.columns]
+        estimate_cols = [c for c in table.columns if ESTIMATE_COL.match(c)]
         n_missing = int(table[estimate_cols].isna().any(axis=1).sum()) \
             if estimate_cols else 0
         if n_missing:
@@ -354,11 +438,18 @@ class Agent:
         """One template invocation against one cycle table."""
         if template == "weighted_mean":
             return weighted_mean(self.con, tbl, plan["measure"], by=by, where=where)
+        if template == "weighted_proportion" and not plan.get("variable") \
+                and plan.get("measure"):
+            # The planner sometimes files a threshold share ("% below Level
+            # 2" = CASE WHEN … THEN 100 ELSE 0) under weighted_proportion;
+            # that is exactly weighted_mean of the 0/100 measure.
+            return weighted_mean(self.con, tbl, plan["measure"], by=by, where=where)
         if template == "weighted_proportion":
             return weighted_proportion(
                 self.con, tbl, plan["variable"], plan["value"], by=by,
                 where=where, valid_values=plan.get("valid_values"))
         if template == "gap":
+            self._check_identifier(plan["group_col"])
             return gap(self.con, tbl, plan["measure"], plan["group_col"],
                        plan["minuend"], plan["subtrahend"], by=by, where=where)
         if template == "quartile_means":
@@ -442,10 +533,11 @@ class Agent:
     # ---------- provenance ----------
 
     def _referenced_variables(self, plan: dict, tables: list[str]) -> list[dict]:
-        text = " ".join(str(plan.get(k) or "") for k in
-                        ("measure", "variable", "group_col", "where", "by",
-                         "quart_variable", "x", "y", "row_var", "col_var",
-                         "predictors"))
+        fields = ("measure", "variable", "group_col", "where", "by",
+                  "quart_variable", "x", "y", "row_var", "col_var", "predictors")
+        parts = [plan] + [ov for ov in (plan.get("cycle_overrides") or {}).values()
+                          if isinstance(ov, dict)]
+        text = " ".join(str(part.get(k) or "") for part in parts for k in fields)
         text = text.replace("{pv}", "1")  # PV{pv}MATH -> PV1MATH (stands for all 10)
         tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text))
         tokens |= {"W_FSTUWT"}
@@ -495,6 +587,9 @@ class Agent:
             "raw_sql": "Direct SQL — NO automatic weighting/PV/BRR treatment; "
                        "results are not population estimates unless the query weights them.",
         }
+        if template == "weighted_proportion" and not plan.get("variable") \
+                and plan.get("measure"):
+            template = "weighted_mean"      # threshold share ran as a 0/100 mean
         method = methods.get(template, "")
         pv_fields = " ".join(str(plan.get(k) or "") for k in ("measure", "x", "y"))
         if "{pv}" in pv_fields:
@@ -506,11 +601,25 @@ class Agent:
                          "estimates (SE = sqrt(sum of country SEs squared) / N).")
         if plan.get("substitution_note"):
             notes.append(f"VARIABLE SUBSTITUTION: {plan['substitution_note']}")
-        if len(plan.get("cycles") or []) == 2:
-            method += (" Cross-cycle change: independent samples, "
-                       "SE = sqrt(SE18^2 + SE22^2).")
+        cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
+        if len(cycles) >= 2:
+            first, last = cycles[0], cycles[-1]
+            method += (f" Cross-cycle change = {last} minus {first}: independent "
+                       f"samples, SE = sqrt(SE{first[2:]}^2 + SE{last[2:]}^2).")
             notes.append("Trend SEs exclude the OECD link error (scale equating "
                          "uncertainty); they are slightly understated.")
+        for cycle, ov in sorted((plan.get("cycle_overrides") or {}).items()):
+            if isinstance(ov, dict) and ov:
+                fields = ", ".join(f"{k} = {v}" for k, v in ov.items())
+                notes.append(f"PISA {cycle} uses a per-cycle variable override: "
+                             f"{fields} (the variable differs in that cycle; "
+                             "other cycles use the main plan fields).")
+        unknown = self._unknown_country_codes(where, tables)
+        if unknown:
+            notes.append("The filter names economy code(s) that exist in none of "
+                         f"the queried tables: {', '.join(unknown)} — those rows "
+                         "are absent, not zero. Check the code (e.g. B-S-J-Z "
+                         "(China) is QCI, Chinese Taipei is TAP).")
 
         sample = []
         for tbl in tables:
@@ -524,7 +633,7 @@ class Agent:
                 sample.append({"table": tbl})
 
         return {
-            "source": "OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP)",
+            "source": SOURCE_LINE,
             "tables": tables or ["(raw SQL — see query)"],
             "variables": self._referenced_variables(plan, tables),
             "filter": where or "none (all rows)",
@@ -535,6 +644,42 @@ class Agent:
         }
 
     # ---------- the full loop ----------
+
+    def _unknown_country_codes(self, where: str | None, tables: list[str]) -> list[str]:
+        """Codes quoted in the filter that no queried table contains."""
+        codes = sorted(set(re.findall(r"'([A-Z]{3})'", where or "")))
+        if not codes or not tables:
+            return []
+        present: set[str] = set()
+        for tbl in tables:
+            try:
+                present |= {r[0] for r in self.con.sql(
+                    f"SELECT DISTINCT CNT FROM {tbl}").fetchall()}
+            except Exception:  # noqa: BLE001 — a table without CNT
+                return []
+        return [c for c in codes if c not in present]
+
+    @staticmethod
+    def _country_legend(shown: pd.DataFrame) -> str:
+        """CNT code -> economy name for the codes in the shown table, so the
+        summary can say 'B-S-J-Z (China)' instead of the bare code 'QCI'."""
+        if "CNT" not in shown.columns:
+            return ""
+        codes = [c for c in shown["CNT"].dropna().astype(str).unique() if c != "OECD avg"]
+        if not codes:
+            return ""
+        names: dict[str, str] = {}
+        for cycle in ("2025", "2022", "2018"):
+            desc = catalog.describe("CNT", cycle=cycle)
+            desc = desc[desc.table_name.str.startswith("stu_qqq")]
+            if not desc.empty and desc.iloc[0].value_labels:
+                for k, v in json.loads(desc.iloc[0].value_labels).items():
+                    names.setdefault(k, v)
+        pairs = [f"{c} = {names[c]}" for c in codes if c in names]
+        if not pairs:
+            return ""
+        return ("COUNTRY CODES (use the name, with the code in parentheses on "
+                f"first mention): {'; '.join(pairs)}\n")
 
     @staticmethod
     def _transcript(history) -> str:
@@ -557,13 +702,14 @@ class Agent:
     VIZ_ANSWER = (
         "Charts render automatically whenever a result compares things: country "
         "or group comparisons draw bar charts with 95%-confidence whiskers, "
-        "2018-vs-2022 questions draw dumbbell charts, and group gaps draw "
-        "diverging bars. A single-number result (like a lone correlation or one "
-        "average) has no chart form, so only its table is shown. To get a chart, "
-        "ask for a comparison — across countries, groups (gender, immigrant "
-        "background, grade repetition…), or the two cycles. For example: "
-        "“compare reading scores for boys and girls in Spain, France and "
-        "Germany in 2022”."
+        "cross-cycle questions (2018, 2022, 2025) draw dumbbell charts with one "
+        "dot per cycle, and group gaps draw diverging bars. A single-number "
+        "result (like a lone correlation or one average) has no chart form, so "
+        "only its table is shown. To get a chart, ask for a comparison — across "
+        "countries, groups (gender, immigrant background, grade repetition…), "
+        "or cycles. For example: “compare science scores for boys and girls in "
+        "Spain, France and Germany in 2025” or “how did reading in Finland "
+        "change from 2018 to 2025?”."
     )
 
     def ask(self, question: str, history: list | None = None) -> AgentResult:
@@ -605,6 +751,7 @@ class Agent:
                                plan=plan, retrieved=hits, error=str(e), route="error")
 
         shown = table.head(30).round(2)
+        legend = self._country_legend(shown)
         truncation = (
             f"WARNING: the table has {len(table)} rows but only the first 30 are "
             f"shown below. If the question needs rows beyond these (rankings, "
@@ -616,7 +763,7 @@ class Agent:
             f"PLANNED: {plan.get('explanation')}\n"
             f"METHOD: {provenance['method']}\n"
             f"NOTES: {'; '.join(provenance['notes']) or 'none'}\n"
-            f"{truncation}"
+            f"{legend}{truncation}"
             f"RESULT TABLE (CSV):\n{shown.to_csv(index=False)}"
         )
         answer = generate(summary_prompt, system=SUMMARY_SYSTEM)

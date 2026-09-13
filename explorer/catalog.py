@@ -37,7 +37,8 @@ def search(
     instrument: str | None = None,
     limit: int = 15,
 ) -> pd.DataFrame:
-    """Return the top `limit` catalog rows matching `query`."""
+    """Return the catalog rows of the top `limit` VARIABLES matching `query`
+    (all tables/cycles in which each selected variable exists)."""
     df = _load()
     if cycle:
         df = df[df.cycle == str(cycle)]
@@ -56,7 +57,16 @@ def search(
         score += df._label_lower.str.contains(token, regex=False) * 3.0
 
     hits = df.assign(score=score)[score > 0]
-    hits = hits.sort_values(["score", "variable"], ascending=[False, True]).head(limit)
+    # Rank VARIABLES, not rows: a variable that exists in several cycles and
+    # instruments (e.g. REPEAT in five tables) must not crowd out the others,
+    # and every cycle's row of a selected variable must come back together —
+    # the planner needs to see that a variable exists in 2025 as well as 2022.
+    best = hits.groupby("variable")["score"].max()
+    top = best.sort_values(ascending=False).head(limit)
+    hits = hits[hits.variable.isin(top.index)]
+    hits = hits.assign(score=hits.variable.map(top))
+    hits = hits.sort_values(["score", "variable", "table_name"],
+                            ascending=[False, True, True])
     return hits[["variable", "table_name", "cycle", "label", "n_value_labels", "score"]]
 
 
