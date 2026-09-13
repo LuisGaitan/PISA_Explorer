@@ -114,9 +114,9 @@ and every 2025 question would fail. After a data change:
    in `Dockerfile.code`) to that tag so later code-only builds layer on it.
 
 The three-cycle image is about 40% larger than the 2018+2022 one; the
-`e2-highcpu-8` build machine and the 2400 s timeout still suffice, and the
-2Gi Cloud Run instance is unchanged (queries stream Parquet through DuckDB;
-only the projected columns of one cycle table are held in memory at a time).
+`e2-highcpu-8` build machine and the 2400 s timeout still suffice. Memory
+per instance is governed by the heaviest query shape, not by the data size
+(see "Production settings" below).
 
 ## Institution gate, admin, analytics
 
