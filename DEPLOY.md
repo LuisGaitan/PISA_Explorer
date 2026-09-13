@@ -153,15 +153,20 @@ configuration, applied 2026-09-13:
 
 ```powershell
 gcloud run services update pisa-explorer --region us-central1 `
-  --concurrency 2 --max-instances 20 --min-instances 1 --session-affinity `
+  --memory 4Gi --cpu 2 --concurrency 2 --max-instances 20 --min-instances 1 --session-affinity `
   --update-env-vars PISA_RATE_LIMIT=60,PISA_GLOBAL_RATE=5000
 ```
 
 Why these numbers:
 
-- **One analysis at a time per instance** (an `_agent_lock` in `app.py`): the
-  DuckDB connection is not thread-safe and an all-economies query holds up
-  to ~1 GB of replicate-weight frames, so two at once could exceed 2Gi.
+- **4Gi memory, one analysis at a time per instance** (an `_agent_lock` in
+  `app.py`): the DuckDB connection is not thread-safe, and measured peaks are
+  1.4 GB for an all-economies mean and 2.4 GB for a three-cycle all-economies
+  gender gap (the replicate-weight frames plus their Arrow copy). A 2Gi
+  instance was killed for exceeding its limit during the first load test
+  (two 503s). `explorer/db.py` also caps DuckDB's own buffer pool at 1 GB
+  (`PISA_DUCKDB_MEMORY`) — its default is ~80% of RAM, which would have
+  competed with the frames.
   Throughput therefore comes from *instances*: each handles ~6 questions a
   minute, so 20 instances give ~7,000 questions/hour. `--concurrency 2` lets
   an instance accept one running question plus one waiting (and static files
