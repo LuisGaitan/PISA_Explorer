@@ -16,6 +16,6 @@ images:
   - us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/pisa-explorer:${_TAG}
 substitutions:
   _TAG: v2
-  _DATA_IMAGE: us-central1-docker.pkg.dev/pisa-explorer-app/cloud-run-source-deploy/pisa-explorer:v1
+  _DATA_IMAGE: us-central1-docker.pkg.dev/pisa-explorer-app/cloud-run-source-deploy/pisa-explorer:v3
 options:
   logging: CLOUD_LOGGING_ONLY

@@ -3,7 +3,7 @@
 # The data image is produced by the full Dockerfile; bump DATA_IMAGE only when
 # the data or the pipeline changes.
 
-ARG DATA_IMAGE=us-central1-docker.pkg.dev/pisa-explorer-app/cloud-run-source-deploy/pisa-explorer:v1
+ARG DATA_IMAGE=us-central1-docker.pkg.dev/pisa-explorer-app/cloud-run-source-deploy/pisa-explorer:v3
 FROM ${DATA_IMAGE}
 
 WORKDIR /app
