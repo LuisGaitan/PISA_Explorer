@@ -145,6 +145,48 @@ gcloud run services update pisa-explorer --region us-central1 --update-env-vars 
   `gcloud firestore databases create --location=us-central1 --type=firestore-native`
   plus `roles/datastore.user` for the Cloud Run service account.
 
+## Production settings (300+ students plus public traffic)
+
+The feedback-phase defaults (2 instances, 20 questions/hour per session,
+200/hour global) are far too tight for a real audience. The production
+configuration, applied 2026-09-13:
+
+```powershell
+gcloud run services update pisa-explorer --region us-central1 `
+  --concurrency 2 --max-instances 20 --min-instances 1 --session-affinity `
+  --update-env-vars PISA_RATE_LIMIT=60,PISA_GLOBAL_RATE=5000
+```
+
+Why these numbers:
+
+- **One analysis at a time per instance** (an `_agent_lock` in `app.py`): the
+  DuckDB connection is not thread-safe and an all-economies query holds up
+  to ~1 GB of replicate-weight frames, so two at once could exceed 2Gi.
+  Throughput therefore comes from *instances*: each handles ~6 questions a
+  minute, so 20 instances give ~7,000 questions/hour. `--concurrency 2` lets
+  an instance accept one running question plus one waiting (and static files
+  and analytics beacons in between), which makes the autoscaler spread load
+  early instead of queueing four deep.
+- **`--min-instances 1`** keeps one instance warm so the first visitor of the
+  day does not wait through a cold start (~40 USD/month; set it back to 0 to
+  scale to zero).
+- **`--session-affinity`** routes a browser back to the instance holding its
+  conversation history, so follow-up questions keep working across many
+  instances (best effort; a scale-down still resets a conversation).
+- **Rate limits** are now circuit breakers, not usage caps: 60/hour per
+  session never interrupts a real person; 5,000/hour global (per instance,
+  since counters live in instance memory) bounds runaway spend. At
+  gemini-2.5-flash prices a question costs well under one cent, so even a
+  saturated hour is a few dollars; the project budget alert is 200 USD/month
+  (50/90/100%).
+- **Gemini key**: paid tier (tier 2) — the free tier's daily request cap
+  would allow under 100 questions a day. `llm.py` retries 429/5xx and
+  network errors twice with short backoff.
+
+Not yet in place (add if abuse appears): a per-IP limit via Cloud Armor
+(campus NAT makes naive per-IP limits punish whole institutions), an uptime
+check with alerting on 5xx, and a custom domain.
+
 ## Cost & protection model
 
 - **Scale to zero**: `--min-instances 0` means you pay nothing while idle;

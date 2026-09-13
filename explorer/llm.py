@@ -63,6 +63,30 @@ def _load_key() -> str:
     )
 
 
+RETRY_STATUSES = {429, 500, 502, 503, 504}   # rate-limited / transient upstream
+RETRY_DELAYS = (1.0, 3.0)                    # seconds before attempt 2 and 3
+
+
+def _post_with_retry(request: urllib.request.Request) -> dict:
+    """POST once, retrying transient failures (Gemini overload, rate limit,
+    network blips) with short backoff — at hundreds of concurrent users a
+    single 503 must not become a failed answer."""
+    attempts = len(RETRY_DELAYS) + 1
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")[:500]
+            if e.code not in RETRY_STATUSES or attempt == attempts - 1:
+                raise LLMError(f"Gemini API error {e.code}: {detail}") from e
+        except urllib.error.URLError as e:
+            if attempt == attempts - 1:
+                raise LLMError(f"Gemini API unreachable: {e.reason}") from e
+        time.sleep(RETRY_DELAYS[attempt])
+    raise LLMError("Gemini API: retries exhausted")   # unreachable
+
+
 def generate(
     prompt: str,
     system: str | None = None,
@@ -88,13 +112,7 @@ def generate(
     )
     started = time.time()
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")[:500]
-        raise LLMError(f"Gemini API error {e.code}: {detail}") from e
-    except urllib.error.URLError as e:
-        raise LLMError(f"Gemini API unreachable: {e.reason}") from e
+        payload = _post_with_retry(request)
     finally:
         _stats["calls"] += 1
         _stats["ms"] += (time.time() - started) * 1000

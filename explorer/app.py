@@ -51,7 +51,8 @@ INSTITUTION_MAX_CHARS = 80
 INSTITUTION_MIN_CHARS = 2
 
 _agent: Agent | None = None
-_lock = threading.Lock()
+_lock = threading.Lock()          # guards _sessions / rate counters (short holds)
+_agent_lock = threading.Lock()    # serializes analyses on this instance
 _sessions: OrderedDict[str, dict] = OrderedDict()   # sid -> {history, asks}
 _global_asks: deque = deque()
 _events = open_store()
@@ -264,26 +265,33 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         sid, cookie = self._sid()
-        with _lock:
+        with _lock:                       # session/rate bookkeeping: microseconds
             session = get_session(sid)
             ok, message = rate_ok(session)
-            if not ok:
-                _events.create({"kind": "rate_limited", "session": sid[:12],
-                                "institution": institution, "question": question})
-                self._send_json(429, {"error": message}, extra_headers=cookie)
-                return
-            result = get_agent().ask(question, history=session["history"])
+            history = list(session["history"])
+        if not ok:
+            _events.create({"kind": "rate_limited", "session": sid[:12],
+                            "institution": institution, "question": question})
+            self._send_json(429, {"error": message}, extra_headers=cookie)
+            return
+        # One analysis at a time per instance: the DuckDB connection is not
+        # thread-safe and an all-economies query can need ~1 GB. Throughput
+        # comes from Cloud Run instances, not threads (see DEPLOY.md).
+        with _agent_lock:
+            result = get_agent().ask(question, history=history)
+        with _lock:
             session["history"].append({
                 "question": question,
                 "answer": result.answer,
                 "explanation": (result.plan or {}).get("explanation"),
             })
             del session["history"][:-6]
-            event_id = _events.create({
-                "kind": "ask", "session": sid[:12], "institution": institution,
-                "turn": len(session["history"]),
-                **result.analytics(),
-            })
+            turn = len(session["history"])
+        event_id = _events.create({
+            "kind": "ask", "session": sid[:12], "institution": institution,
+            "turn": turn,
+            **result.analytics(),
+        })
         self._send_json(200, result_payload(result, event_id), extra_headers=cookie)
 
     def _event(self, body: dict) -> None:
