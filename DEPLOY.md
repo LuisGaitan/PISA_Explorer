@@ -72,15 +72,16 @@ gcloud run deploy pisa-explorer `
   --min-instances 0 `
   --allow-unauthenticated `
   --set-secrets GEMINI_API_KEY=gemini-api-key:latest `
-  --set-env-vars PISA_ACCESS_CODE=<pick-a-code>,PISA_RATE_LIMIT=20,PISA_GLOBAL_RATE=200
+  --set-env-vars PISA_ADMIN_CODE=<secret>,PISA_RATE_LIMIT=20,PISA_GLOBAL_RATE=200
 ```
 
 (The Artifact Registry repo `cloud-run-source-deploy` is created automatically
 by a first `gcloud run deploy --source` attempt; otherwise create it with
 `gcloud artifacts repositories create cloud-run-source-deploy --repository-format=docker --location=us-central1`.)
 
-The deploy command prints the public URL. Share the URL + access code with
-testers; the UI asks for the code once and remembers it.
+The deploy command prints the public URL. Share the URL with testers; the UI
+asks each visitor for their institution or organization once and remembers it
+on that device (there is no password).
 
 ## Code-only redeploy (the normal case — minutes, no data upload)
 
@@ -117,16 +118,20 @@ The three-cycle image is about 40% larger than the 2018+2022 one; the
 2Gi Cloud Run instance is unchanged (queries stream Parquet through DuckDB;
 only the projected columns of one cycle table are held in memory at a time).
 
-## Access codes, admin, analytics
+## Institution gate, admin, analytics
 
 ```powershell
 gcloud run services update pisa-explorer --region us-central1 --update-env-vars `
-  "PISA_ACCESS_CODES=penn-2026:University of Pennsylvania,ucla-2026:UCLA,pisa2026:General,PISA_ADMIN_CODE=<secret>"
+  "PISA_ADMIN_CODE=<secret>"
 ```
 
-- One code per institution: the code *is* the attribution (no typos, no
-  extra form field) and any one can be revoked by removing it. The legacy
-  single `PISA_ACCESS_CODE` still works (recorded as "General").
+- **No password.** The gate asks for the visitor's institution or
+  organization (free text, 2–80 characters). The browser stores it and sends
+  it as the `X-Institution` header on every request; the server normalizes
+  it (single spaces, length cap) and records it on each event, so the admin
+  dashboard's "Questions by institution" chart groups by what people typed.
+  Spelling variants of the same institution therefore show as separate rows.
+  The former `PISA_ACCESS_CODES` / `PISA_ACCESS_CODE` variables are ignored.
 - `PISA_ADMIN_CODE` unlocks the usage dashboard at `/admin` (enter the code
   once, or open `/admin?code=<secret>` — it stores the code and scrubs the
   URL). The dashboard reads `/api/admin/events`; export the raw events as CSV
@@ -149,8 +154,9 @@ gcloud run services update pisa-explorer --region us-central1 --update-env-vars 
   the per-session limit stops any one tester from hogging it. Also set a
   budget alert in Google Cloud Billing and a quota cap on the Gemini key in
   Google AI Studio.
-- **Access code**: without `PISA_ACCESS_CODE` the endpoint is open to anyone
-  who finds the URL — always set it on a public deployment.
+- **Open endpoint**: with no password, anyone who finds the URL can ask
+  questions; the per-session and global hourly rate limits are what bound
+  the Gemini spend, so keep them set on a public deployment.
 - **Query safety**: the DuckDB connection is read-only and raw SQL is
   single-statement SELECT-only, so the worst a malicious query can do is
   read public OECD data it could download anyway.
@@ -159,7 +165,7 @@ gcloud run services update pisa-explorer --region us-central1 --update-env-vars 
 
 ```powershell
 docker build -t pisa-explorer .
-docker run --rm -p 8080:8080 --env-file .env -e PISA_ACCESS_CODE=test123 pisa-explorer
+docker run --rm -p 8080:8080 --env-file .env pisa-explorer
 # then open http://localhost:8080
 ```
 

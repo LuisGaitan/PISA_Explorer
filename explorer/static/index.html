@@ -36,7 +36,8 @@
   }
   header h1 { margin: 0; font-size: 17px; font-weight: 650; }
   header p  { margin: 2px 0 0; color: var(--ink2); font-size: 12.5px; }
-  .chip { font-size: 12px; color: var(--ink2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+  .chip { font-size: 12px; color: var(--ink2); background: none; border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; white-space: nowrap; cursor: pointer; font-family: inherit; }
+  .chip:hover { background: var(--accent-wash); }
   .chip[hidden] { display: none; }
   main { max-width: 900px; margin: 0 auto; padding: 20px 20px 170px; }
   .q { margin: 26px 0 10px; display: flex; justify-content: flex-end; }
@@ -157,11 +158,11 @@
 <div id="gate" hidden>
   <div class="box">
     <h2>PISA Explorer</h2>
-    <p>Ask questions about the OECD PISA 2018, 2022 &amp; 2025 databases in plain language. Enter the access code you were given — it also tells us which institution you're testing from.</p>
-    <input id="gatecode" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Access code">
+    <p>Ask questions about the OECD PISA 2018, 2022 &amp; 2025 databases in plain language. To begin, tell us which institution or organization you are from.</p>
+    <input id="gatecode" autocomplete="organization" autocapitalize="words" spellcheck="false" maxlength="80" placeholder="Institution or organization">
     <button id="gatebtn" type="button">Enter</button>
     <div class="err" id="gateerr"></div>
-    <div class="fine">Questions and feedback are recorded to improve the tool. No personal information is requested.</div>
+    <div class="fine">Your institution is remembered on this device and recorded with your questions and feedback to improve the tool. No personal information is requested.</div>
   </div>
 </div>
 <header>
@@ -169,7 +170,7 @@
     <h1>PISA Explorer</h1>
     <p>Ask about the OECD PISA 2018, 2022 &amp; 2025 databases — survey-weighted, plausible-value-correct, with full provenance.</p>
   </div>
-  <span class="chip" id="chip" hidden></span>
+  <button class="chip" id="chip" type="button" title="Change institution" hidden></button>
 </header>
 <main id="log">
   <p class="hint">Try: “How did the math gender gap change in the US between 2018 and 2025?”<br>
@@ -200,60 +201,64 @@ const $btn = document.getElementById("askbtn");
 const $chip = document.getElementById("chip");
 const isMobile = () => window.matchMedia("(max-width: 600px)").matches;
 
-/* ---------- access code (one field; the code identifies the institution) ---------- */
-function getCode() { try { return localStorage.getItem("pisa_code") || ""; } catch { return ""; } }
-function setCode(c) { try { if (c) localStorage.setItem("pisa_code", c); else localStorage.removeItem("pisa_code"); } catch {} }
+/* ---------- institution gate (no password: the visitor names their organization once) ---------- */
+function getInstitution() { try { return localStorage.getItem("pisa_institution") || ""; } catch { return ""; } }
+function setInstitution(v) { try { if (v) localStorage.setItem("pisa_institution", v); else localStorage.removeItem("pisa_institution"); } catch {} }
 
 const $gate = document.getElementById("gate");
 const $gatecode = document.getElementById("gatecode");
 const $gateerr = document.getElementById("gateerr");
 
-async function whoami(code) {
+async function whoami(institution) {
   const resp = await fetch("/api/whoami", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ institution }),
   });
   return { ok: resp.status === 200, data: await resp.json().catch(() => ({})) };
 }
 
 function showGate(message) {
   $gateerr.textContent = message || "";
+  $gatecode.value = getInstitution();
   $gate.hidden = false;
   setTimeout(() => $gatecode.focus(), 50);
 }
 
 async function checkGate() {
-  const { ok, data } = await whoami(getCode());
+  const stored = getInstitution();
+  const { ok, data } = stored ? await whoami(stored) : { ok: false, data: {} };
   if (ok) {
     $gate.hidden = true;
-    if (data.gated) { $chip.textContent = data.institution; $chip.hidden = false; }
+    $chip.textContent = data.institution + " · change";
+    $chip.hidden = false;
     return true;
   }
-  if (getCode()) setCode("");          // a stored code that no longer works
+  if (stored) setInstitution("");      // a stored value the server no longer accepts
   showGate("");
   return false;
 }
 
 document.getElementById("gatebtn").addEventListener("click", async () => {
-  const code = $gatecode.value.trim();
-  if (!code) { $gateerr.textContent = "Please enter your access code."; return; }
-  const { ok, data } = await whoami(code);
-  if (ok) { setCode(code); $gatecode.value = ""; await checkGate(); $q.focus(); }
-  else $gateerr.textContent = data.error || "That code was not accepted.";
+  const name = $gatecode.value.trim();
+  if (name.length < 2) { $gateerr.textContent = "Please enter the name of your institution or organization."; return; }
+  const { ok, data } = await whoami(name);
+  if (ok) { setInstitution(data.institution); await checkGate(); $q.focus(); }
+  else $gateerr.textContent = data.error || "That name was not accepted.";
 });
 $gatecode.addEventListener("keydown", e => { if (e.key === "Enter") document.getElementById("gatebtn").click(); });
+$chip.addEventListener("click", () => showGate(""));
 
 /* ---------- API ---------- */
 function authHeaders() {
   const h = { "Content-Type": "application/json" };
-  const code = getCode();
-  if (code) h["X-Access-Code"] = code;
+  const inst = getInstitution();
+  if (inst) h["X-Institution"] = encodeURIComponent(inst);   // header values must be ASCII
   return h;
 }
 async function askApi(question) {
   const resp = await fetch("/api/ask", { method: "POST", headers: authHeaders(),
                                          body: JSON.stringify({ question }) });
-  if (resp.status === 401) { showGate("Your access code is no longer valid."); throw new Error("access code required"); }
+  if (resp.status === 401) { showGate("Please tell us your institution or organization first."); throw new Error("institution required"); }
   return await resp.json();
 }
 function sendEvent(payload) {   // fire-and-forget analytics beacon

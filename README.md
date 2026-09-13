@@ -32,7 +32,7 @@ explorer/
   chat.py          terminal chat:  python -m explorer.chat ["question"]
   app.py           local web app:  python -m explorer.app  ->  http://127.0.0.1:8765
   events.py        usage analytics store (Firestore on Cloud Run, JSONL locally)
-  static/index.html  the web UI (gate, chat, charts with 95% CI, tables, provenance, feedback, CSV export)
+  static/index.html  the web UI (institution gate, chat, charts with 95% CI, tables, provenance, feedback, CSV export)
   static/charts.js   shared SVG chart library (bars/league, dumbbell, diverging, heatmap)
   static/admin.html  usage dashboard at /admin (PISA_ADMIN_CODE)
 data/              (gitignored) parquet/, metadata/, catalog/, pisa.duckdb — fully rebuildable
@@ -127,10 +127,13 @@ and 2022, but in 2025 fourteen economies release only the derived `MALE` flag
 
 ## Deployment
 
-The public-sharing setup (Cloud Run, access code, per-session and global rate
-limits, self-contained Docker image) is in [DEPLOY.md](DEPLOY.md). Environment
-knobs: `PISA_ACCESS_CODE`, `PISA_RATE_LIMIT` (default 20/h per session),
-`PISA_GLOBAL_RATE` (default 200/h total), `PORT`, `BIND_HOST`.
+The public-sharing setup (Cloud Run, institution gate, per-session and
+global rate limits, self-contained Docker image) is in [DEPLOY.md](DEPLOY.md).
+There is no password: visitors enter the name of their institution or
+organization once (remembered by the browser), and it is recorded with every
+question for the admin dashboard. Environment knobs: `PISA_ADMIN_CODE`,
+`PISA_RATE_LIMIT` (default 20/h per session), `PISA_GLOBAL_RATE` (default
+200/h total), `PORT`, `BIND_HOST`.
 
 `convert.py` is idempotent (skips finished files; `--force` to redo,
 `--only 2025` / `--only stu_qqq_2018` to filter). Every Parquet file is written

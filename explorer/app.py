@@ -6,10 +6,6 @@
 Environment (all optional locally; set them in production):
   PORT                listen port (Cloud Run sets this; default 8765)
   BIND_HOST           0.0.0.0 in containers; default 127.0.0.1 (local only)
-  PISA_ACCESS_CODES   "code:Institution,code2:Institution 2" — each tester
-                      group gets its own code, so attribution is reliable and
-                      any one code can be revoked. REQUIRED for public use.
-  PISA_ACCESS_CODE    legacy single code (institution recorded as "General")
   PISA_ADMIN_CODE     unlocks /admin and /api/admin/*; if unset, admin is off
   PISA_RATE_LIMIT     questions per session per hour (default 20)
   PISA_GLOBAL_RATE    questions per hour across ALL users (default 200) —
@@ -17,9 +13,12 @@ Environment (all optional locally; set them in production):
   PISA_EVENTS_BACKEND firestore | jsonl | auto (default: firestore on Cloud Run)
   GEMINI_API_KEY      the LLM key (or .env locally)
 
-Protection model (lessons from the old prototype's open endpoint):
-per-session cookies isolate conversation histories; access codes gate the
-spending endpoint; per-session and global hourly rate limits bound cost; the
+Access: there is no password. The gate asks visitors for the name of their
+institution or organization (free text, remembered by the browser), which is
+sent with every request as the X-Institution header (percent-encoded so
+non-ASCII names survive HTTP) and recorded on each event for the admin
+dashboard. Protection model: per-session cookies isolate conversation
+histories; per-session and global hourly rate limits bound Gemini spend; the
 agent's own guards (read-only DB, SELECT-only SQL) bound what a query can do.
 """
 
@@ -32,6 +31,7 @@ import time
 from collections import OrderedDict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote
 
 from .agent import Agent
 from .events import open_store
@@ -47,23 +47,8 @@ GLOBAL_RATE = int(os.environ.get("PISA_GLOBAL_RATE", "200"))
 RATE_WINDOW = 3600.0
 MAX_SESSIONS = 500
 ADMIN_CODE = os.environ.get("PISA_ADMIN_CODE") or None
-
-
-def _parse_access_codes() -> dict[str, str]:
-    """code -> institution label. Empty dict = open (local dev only)."""
-    codes: dict[str, str] = {}
-    for pair in (os.environ.get("PISA_ACCESS_CODES") or "").split(","):
-        if ":" in pair:
-            code, label = pair.split(":", 1)
-            if code.strip():
-                codes[code.strip()] = label.strip() or "Unknown"
-    legacy = os.environ.get("PISA_ACCESS_CODE")
-    if legacy:
-        codes.setdefault(legacy.strip(), "General")
-    return codes
-
-
-ACCESS_CODES = _parse_access_codes()
+INSTITUTION_MAX_CHARS = 80
+INSTITUTION_MIN_CHARS = 2
 
 _agent: Agent | None = None
 _lock = threading.Lock()
@@ -79,14 +64,12 @@ def get_agent() -> Agent:
     return _agent
 
 
-def institution_for(code: str) -> str | None:
-    """Constant-time lookup; None when the code is not accepted."""
-    if not ACCESS_CODES:
-        return "Local"
-    for known, label in ACCESS_CODES.items():
-        if secrets.compare_digest(code, known):
-            return label
-    return None
+def clean_institution(raw: str | None) -> str | None:
+    """Normalize a visitor-supplied institution name (percent-decoded, single
+    spaces, capped length); None when it is missing or too short."""
+    text = unquote(str(raw or ""))
+    text = " ".join(text.replace("\x00", "").split())[:INSTITUTION_MAX_CHARS].strip()
+    return text if len(text) >= INSTITUTION_MIN_CHARS else None
 
 
 def get_session(sid: str) -> dict:
@@ -187,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
             return {}, raw
 
     def _institution(self) -> str | None:
-        return institution_for(self.headers.get("X-Access-Code", ""))
+        return clean_institution(self.headers.get("X-Institution", ""))
 
     def _is_admin(self) -> bool:
         return bool(ADMIN_CODE) and secrets.compare_digest(
@@ -257,19 +240,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": str(e)})
 
     def _whoami(self, body: dict) -> None:
-        """The gate: validates an access code and names its institution."""
-        code = (body.get("code") or self.headers.get("X-Access-Code", "")).strip()
-        institution = institution_for(code)
+        """The gate: accepts an institution/organization name and echoes the
+        normalized form the server will record."""
+        institution = clean_institution(
+            body.get("institution") or self.headers.get("X-Institution", ""))
         if institution is None:
-            self._send_json(401, {"error": "That access code is not recognized."})
+            self._send_json(401, {"error": "Please enter the name of your "
+                                           "institution or organization."})
             return
-        self._send_json(200, {"institution": institution,
-                              "gated": bool(ACCESS_CODES)})
+        self._send_json(200, {"institution": institution, "gated": True})
 
     def _ask(self, body: dict) -> None:
         institution = self._institution()
         if institution is None:
-            self._send_json(401, {"error": "access code required"})
+            self._send_json(401, {"error": "institution required"})
             return
         question = (body.get("question") or "").strip()
         if not question:
@@ -306,7 +290,7 @@ class Handler(BaseHTTPRequestHandler):
         """Browser-side facts about a question: what rendered, feedback,
         exports, device — merged into that question's event document."""
         if self._institution() is None:
-            self._send_json(401, {"error": "access code required"})
+            self._send_json(401, {"error": "institution required"})
             return
         event_id = str(body.get("event_id") or "")
         kind = str(body.get("kind") or "")
@@ -345,8 +329,7 @@ def main() -> None:
     parser.add_argument("--host", default=os.environ.get("BIND_HOST", "127.0.0.1"))
     args = parser.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    gate = (f"{len(ACCESS_CODES)} access code(s)" if ACCESS_CODES
-            else "no access code (local dev)")
+    gate = "institution-name gate (no password)"
     print(f"PISA Explorer on http://{args.host}:{args.port}  "
           f"[{gate}, admin {'ON' if ADMIN_CODE else 'off'}, events -> {_events.name}, "
           f"{RATE_LIMIT}/h per session, {GLOBAL_RATE}/h global]")

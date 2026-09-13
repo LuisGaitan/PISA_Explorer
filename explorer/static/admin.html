@@ -173,6 +173,7 @@ function render() {
   grid.appendChild(countBars(count(asks, e => (e.ts || "").slice(0, 10)).sort((a, b) => a[0] < b[0] ? -1 : 1), "Questions per day"));
   grid.appendChild(countBars(count(asks, e => e.institution), "Questions by institution"));
   grid.appendChild(countBars(count(dataAsks, e => e.template), "Analysis templates used"));
+  grid.appendChild(countBars(count(dataAsks, e => (Array.isArray(e.cycles) ? e.cycles.join(" + ") : e.cycles) || "–"), "PISA cycles asked about"));
   grid.appendChild(countBars(count(rendered, e => e.chart), "Chart forms rendered"));
   grid.appendChild(countBars(count(dataAsks, e => e.countries).slice(0, 15), "Countries asked about (top 15)"));
   grid.appendChild(countBars(count(dataAsks, e => e.variables).slice(0, 15), "Variables used (top 15)"));
