@@ -12,3 +12,6 @@ __pycache__/
 # OS / editor
 Thumbs.db
 .DS_Store
+
+# Test/tool caches
+.pytest_cache/
