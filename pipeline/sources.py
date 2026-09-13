@@ -1,10 +1,15 @@
 """Registry of PISA source files: where each raw file lives, what it is, and
 the official row counts used for validation.
 
-The raw OECD databases are read-only sources and never modified:
-  2018 (CY07MSU): C:\\Users\\Luis\\Desktop\\DataMining\\PISA_Data2018   (SAS)
-  2022 (CY08MSP): C:\\Users\\Luis\\Desktop\\DataMining\\PISA_Data2022   (SAS)
-  2025 (CY09MS):  C:\\Users\\Luis\\Desktop\\DataMining\\PISA_Data2025   (SPSS)
+The raw OECD databases are read-only sources and never modified. They live
+outside the repository, under one folder named by PISA_RAW_ROOT (environment
+variable, or a line in the gitignored .env at the repo root; default: ./raw):
+  <PISA_RAW_ROOT>/PISA_Data2018   2018 (CY07MSU), the SAS release
+  <PISA_RAW_ROOT>/PISA_Data2022   2022 (CY08MSP), the SAS release
+  <PISA_RAW_ROOT>/PISA_Data2025   2025 (CY09MS),  the SPSS release
+Per-cycle overrides: PISA_RAW_2018 / PISA_RAW_2022 / PISA_RAW_2025.
+Download the public-use files from the OECD PISA data pages and keep the
+OECD folder layout used below.
 
 PISA 2025 is distributed in SPSS format only (one .sav per file), so each
 source carries its file format and, where the file's declared encoding is
@@ -33,17 +38,36 @@ validates against the row count stored in the file header itself
 (meta.number_rows), which it also cross-checks when an official count exists.
 """
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
-
-DATA_2018 = Path(r"C:\Users\Luis\Desktop\DataMining\PISA_Data2018")
-DATA_2022 = Path(r"C:\Users\Luis\Desktop\DataMining\PISA_Data2022")
-DATA_2025 = Path(r"C:\Users\Luis\Desktop\DataMining\PISA_Data2025")
 
 CYCLES = ("2018", "2022", "2025")
 
 # Repo-local output area (gitignored, fully rebuildable from sources)
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _dotenv(name: str) -> str | None:
+    """A single KEY=value from the gitignored .env (no dependency on
+    python-dotenv); the process environment wins when both are set."""
+    env_file = REPO_ROOT / ".env"
+    if not env_file.exists():
+        return None
+    for line in env_file.read_text(encoding="utf-8-sig").splitlines():
+        if line.startswith(name + "="):
+            return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return None
+
+
+def _setting(name: str, default: str) -> str:
+    return os.environ.get(name) or _dotenv(name) or default
+
+
+RAW_ROOT = Path(_setting("PISA_RAW_ROOT", str(REPO_ROOT / "raw")))
+DATA_2018 = Path(_setting("PISA_RAW_2018", str(RAW_ROOT / "PISA_Data2018")))
+DATA_2022 = Path(_setting("PISA_RAW_2022", str(RAW_ROOT / "PISA_Data2022")))
+DATA_2025 = Path(_setting("PISA_RAW_2025", str(RAW_ROOT / "PISA_Data2025")))
 DATA_DIR = REPO_ROOT / "data"
 PARQUET_DIR = DATA_DIR / "parquet"
 METADATA_DIR = DATA_DIR / "metadata"

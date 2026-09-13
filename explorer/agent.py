@@ -1,7 +1,7 @@
 """The conversational layer: natural-language question -> catalog retrieval ->
 Gemini fills an analysis plan -> survey-correct execution -> summary.
 
-Design rules (each traces to a defect in the old prototype, see handoff §4):
+Design rules (each traces to a defect found in an earlier text-to-SQL prototype):
   - The LLM is a query planner, never a data container: it sees ~40 retrieved
     catalog cards, never a schema dump, never the data.
   - Statistics run through the validated templates in analysis.py; the LLM

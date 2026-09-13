@@ -110,8 +110,9 @@ and every 2025 question would fail. After a data change:
    `build_catalog.py`, `validate.py` (and `check_2025_published.py`);
 2. run the **full archive route** above with a new tag (e.g. `v3`), then
    `gcloud run deploy --image ...:v3`;
-3. set `_DATA_IMAGE` in `cloudbuild.code.yaml` (and the `DATA_IMAGE` default
-   in `Dockerfile.code`) to that tag so later code-only builds layer on it.
+3. set the tag in `_DATA_IMAGE` in `cloudbuild.code.yaml` (the project ID
+   is filled in from the build's own `$PROJECT_ID`) so later code-only
+   builds layer on it.
 
 The three-cycle image is about 40% larger than the 2018+2022 one; the
 `e2-highcpu-8` build machine and the 2400 s timeout still suffice. Memory

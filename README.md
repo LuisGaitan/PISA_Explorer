@@ -1,13 +1,25 @@
 # PISA Explorer
 
-Foundation for a conversational PISA analysis tool built on the **official OECD
-PISA 2018 (CY07MSU), 2022 (CY08MSP) and 2025 (CY09MS) public-use databases** —
-three cycles, all economies (80 in 2018 and 2022, 90 in 2025), with the survey
-weights, plausible values, and replicate weights that make population
-statistics methodologically correct.
+A conversational analysis tool for the **official OECD PISA 2018 (CY07MSU),
+2022 (CY08MSP) and 2025 (CY09MS) public-use databases** — three cycles, all
+economies (80 in 2018 and 2022, 90 in 2025), with the survey weights,
+plausible values, and replicate weights that make population statistics
+methodologically correct. Ask a question in plain language; get a
+survey-weighted answer with standard errors, a chart, the data table, and the
+full provenance of every number.
 
-Full background, audit findings, and the agreed architecture live in
-[PISA_PROJECT_HANDOFF.md](PISA_PROJECT_HANDOFF.md).
+**Live site:** https://pisa-explorer-106435871926.us-central1.run.app (no
+account needed — visitors name their institution or organization once).
+
+**For researchers:** the statistics engine (`explorer/estimator.py`,
+`explorer/analysis.py`) and the data pipeline have no language-model
+dependency. You can rebuild the database from the OECD files, reproduce the
+Technical Report validation, and call every analysis template from Python
+without an API key; only the chat layer needs one.
+
+Supported by the Penn GSE Learning Analytics and Artificial Intelligence
+program. MIT licensed — see [LICENSE](LICENSE); contributions welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md); citation in [CITATION.cff](CITATION.cff).
 
 ## Layout
 
@@ -38,18 +50,36 @@ explorer/
 data/              (gitignored) parquet/, metadata/, catalog/, pisa.duckdb — fully rebuildable
 ```
 
-Raw data stays where it is, read-only, and is never committed:
+## Raw data
 
-- 2018: `C:\Users\Luis\Desktop\DataMining\PISA_Data2018` (SAS)
-- 2022: `C:\Users\Luis\Desktop\DataMining\PISA_Data2022` (SAS)
-- 2025: `C:\Users\Luis\Desktop\DataMining\PISA_Data2025` (SPSS `.sav` — the
-  only format the OECD released for 2025; also holds the codebook, compendia
-  and Technical Report annexes used for validation)
+The repository contains **no PISA data**. Download the public-use files from
+the OECD PISA data pages (https://www.oecd.org/en/about/programmes/pisa/pisa-data.html):
+the 2018 and 2022 SAS releases and the 2025 SPSS release, which is the only
+format the OECD published for 2025 (the 2025 page also has the codebook,
+compendia and Technical Report annexes used for validation). Keep them
+outside the repository under one folder:
+
+```
+<PISA_RAW_ROOT>/PISA_Data2018/   STU/, SCH/, TCH/, COG/, TIM/, TTM/, FLT/       (SAS)
+<PISA_RAW_ROOT>/PISA_Data2022/   STU_QQQ_SAS/, SCH_QQQ_SAS/, ..., CRT_SAS/       (SAS)
+<PISA_RAW_ROOT>/PISA_Data2025/   CY09_MS_*.sav, PISA2025_Codebook.xlsx, Excel Files/
+```
+
+and point `PISA_RAW_ROOT` at that folder (environment variable, or a line in
+the gitignored `.env`; per-cycle overrides `PISA_RAW_2018/2022/2025`). The raw
+files are read-only sources and are never modified. The OECD data are free to
+use under the [OECD terms and conditions](https://www.oecd.org/en/about/terms-conditions.html);
+everything the pipeline produces is derived from those public files.
+
+**Hardware:** the three cycles are ~88 GB of raw files and convert to ~5 GB
+of Parquet in about 35 minutes; 16 GB of RAM is enough for the pipeline, and
+an all-economies three-cycle query peaks around 2.4 GB.
 
 ## Rebuild from scratch
 
 ```
 pip install -r requirements.txt
+pytest tests/                    # offline checks, no data or key needed
 python pipeline/convert.py       # ~88 GB raw -> ~5.0 GB Parquet, ~35 min total (2025 alone: ~9 min)
 python pipeline/build_db.py
 python pipeline/build_catalog.py

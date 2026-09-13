@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use PISA Explorer in research, please cite it as below."
+title: "PISA Explorer: conversational, survey-correct analysis of the OECD PISA 2018, 2022 and 2025 databases"
+type: software
+authors:
+  - family-names: Gaitan
+    given-names: Luis
+version: "2026.09"
+date-released: "2026-09-13"
+license: MIT
+repository-code: "https://github.com/LuisGaitan/PISA_Explorer"
+keywords:
+  - PISA
+  - OECD
+  - education
+  - survey statistics
+  - plausible values
+  - balanced repeated replication
+  - large language models
+abstract: >
+  PISA Explorer converts the OECD PISA public-use databases (2018, 2022, 2025)
+  into a queryable store and answers natural-language questions with
+  methodologically correct population statistics: final student weights,
+  all plausible values combined by Rubin's rules, and Fay's balanced repeated
+  replication standard errors over the 80 replicate weights. A language model
+  fills in validated analysis templates but never computes statistics; every
+  answer carries full provenance. Estimates and standard errors reproduce the
+  OECD Technical Report figures.
