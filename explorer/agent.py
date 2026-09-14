@@ -292,8 +292,72 @@ class AgentResult:
 
 
 class Agent:
+    # What is actually loaded — asserted to the router so the model's training
+    # memory ("PISA 2025 is upcoming") never overrides reality. Innovative
+    # domains per cycle are stated because the model tends to invent one.
+    INNOVATIVE = {"2018": "global competence (questionnaire only in the public file)",
+                  "2022": "creative thinking (crt_cog_2022)",
+                  "2025": "Learning in the Digital World (LDW plausible values "
+                          "PV1-10 CMPS/CPPK/CMOD/CPRO in stu_qqq_2025 and item "
+                          "file ldw_cog_2025)"}
+
     def __init__(self):
         self.con = connect(read_only=True)
+        self.coverage = self._coverage()
+        self.facts = self._facts_block()
+
+    def _coverage(self) -> dict[str, dict]:
+        out = {}
+        for cycle in CYCLES:
+            try:
+                n, k = self.con.sql(f"SELECT count(*), count(DISTINCT CNT) "
+                                    f"FROM stu_qqq_{cycle}").fetchone()
+                out[cycle] = {"students": int(n), "economies": int(k)}
+            except Exception:  # noqa: BLE001 — a cycle not built locally
+                continue
+        return out
+
+    def _facts_block(self) -> str:
+        lines = [f"- PISA {c}: LOADED — {v['students']:,} students, "
+                 f"{v['economies']} economies; innovative domain: {self.INNOVATIVE[c]}"
+                 for c, v in self.coverage.items()]
+        return (
+            "\n\nFACTS ABOUT THIS APP'S DATA (authoritative — they override anything "
+            f"you believe from training; today is {time.strftime('%Y-%m-%d')}):\n"
+            + "\n".join(lines) +
+            "\n- The OECD published the PISA 2025 results on 8 September 2026 and "
+            "the full 2025 public-use database is in this app NOW. Never say 2025 "
+            "data are upcoming, unavailable, or not yet released.\n"
+            "- No PISA cycle so far assessed AI literacy. The OECD has announced "
+            "Media and AI Literacy as the innovative domain for PISA 2029; it has "
+            "not been administered and this app has no data on it. Do not describe "
+            "AI literacy as part of PISA 2025.\n"
+            "- Not loaded: the 2025 Foreign Language Assessment (OECD release "
+            "expected 2027).\n"
+            "When a direct_answer concerns what data exist or when they were "
+            "released, use these facts verbatim; if unsure, say the app covers "
+            "PISA 2018, 2022 and 2025 and suggest asking a data question."
+        )
+
+    # Deterministic answer for "do you have the 2025 data?" — the one factual
+    # question the model got wrong in production; the app answers it itself.
+    COVERAGE_WORDS = re.compile(
+        r"\b(available|access|have|has|include|includes|contain|loaded|released|"
+        r"release|yet|cover|covers|coverage|which (years|cycles)|what (years|cycles))\b",
+        re.IGNORECASE)
+
+    def _coverage_answer(self) -> str:
+        parts = [f"PISA {c} ({v['economies']} economies, {v['students']:,} students)"
+                 for c, v in self.coverage.items()]
+        return ("Yes. This app holds the full OECD public-use databases for "
+                + ", ".join(parts) + ". The 2025 database was released by the OECD "
+                "on 8 September 2026 and is loaded here, including the Learning in "
+                "the Digital World domain (2025's innovative domain). Not loaded: the "
+                "2025 Foreign Language Assessment, which the OECD releases in 2027. "
+                "No PISA cycle has assessed AI literacy yet; the OECD has announced "
+                "Media and AI Literacy for PISA 2029. Ask a data question — for "
+                "example “mean science score in Finland in 2025” or “find me data "
+                "about well-being in 2025”.")
 
     # ---------- retrieval ----------
 
@@ -877,10 +941,13 @@ class Agent:
 
     def _ask(self, question: str, history: list | None) -> AgentResult:
         context = self._transcript(history)
-        route = generate_json(f"{context}Question: {question}", system=TERMS_SYSTEM)
+        route = generate_json(f"{context}Question: {question}",
+                              system=TERMS_SYSTEM + self.facts)
         if not route.get("data_question"):
             if self.VIZ_WORDS.search(question):
                 return AgentResult(question, self.VIZ_ANSWER, route="conversational")
+            if self.YEAR_RE.search(question) and self.COVERAGE_WORDS.search(question):
+                return AgentResult(question, self._coverage_answer(), route="conversational")
             return AgentResult(question, route.get("direct_answer")
                                or "Could you rephrase that?", route="conversational")
 
