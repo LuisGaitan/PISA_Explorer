@@ -300,15 +300,28 @@ class Agent:
     def _retrieve(self, terms: list[str], per_term: int = 8) -> pd.DataFrame:
         """Top-scoring VARIABLES across the search terms, with every table
         (cycle/instrument) row of each — capped at MAX_CARDS variables."""
-        # The router lists the user's own concept first and broader synonyms
-        # after it; weight them so a synonym ("school climate") cannot outrank
-        # the word the user actually used ("bullying"), while a variable that
-        # matches several terms still gets a bonus.
+        # Term roles: a bare year is not a topic (skipped); a term naming only
+        # a respondent type ("teachers") matches hundreds of labels and says
+        # nothing about the construct (0.3); the first real concept is the
+        # user's own (1.0); the router's broader synonyms that follow
+        # ("school climate" for "bullying") must not outrank it (0.5). A
+        # variable matching several terms still earns a bonus.
         frames = []
+        primary_seen = False
         for i, term in enumerate(terms):
+            words = [w for w in re.split(r"\W+", term.lower()) if w]
+            if not words or all(re.fullmatch(r"\d{4}", w) for w in words):
+                continue
+            generic = all(w in catalog.ENTITY_WORDS or w in catalog.STOPWORDS
+                          for w in words)
+            if generic:
+                weight = 0.3
+            elif not primary_seen:
+                weight, primary_seen = 1.0, True
+            else:
+                weight = 0.5
             frame = catalog.search(term, limit=per_term)
-            frames.append(frame.assign(score=frame.score * (1.0 if i == 0 else 0.6),
-                                       _term=i))
+            frames.append(frame.assign(score=frame.score * weight, _term=i))
         if not frames:
             return pd.DataFrame()
         stacked = pd.concat(frames, ignore_index=True)

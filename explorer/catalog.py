@@ -79,7 +79,7 @@ def search(
 
     score = pd.Series(0.0, index=df.index)
     if phrase:
-        score += df._label_compact.str.contains(phrase, regex=False) * 60.0
+        score += df._label_compact.str.contains(phrase, regex=False) * 25.0
     for token in tokens:
         score += (df._name_lower == token) * 100.0
         score += df._name_lower.str.contains(token, regex=False) * 30.0
@@ -91,7 +91,7 @@ def search(
             # BELONG, ANXMAT): a name starting with the stem is a strong hit —
             # except for PISA's entity words, which prefix hundreds of names
             if token not in ENTITY_WORDS:
-                score += df._name_lower.str.startswith(token[:4]) * 15.0
+                score += df._name_lower.str.startswith(token[:4]) * 30.0
 
     hits = df.assign(score=score)[score > 0]
     # Rank VARIABLES, not rows: a variable that exists in several cycles and
