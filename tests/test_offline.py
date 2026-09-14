@@ -82,3 +82,43 @@ def test_sql_guards_reject_writes_and_multiple_statements():
         Agent._check_identifier("CNT; DROP")
     Agent._check_fragment("CNT IN ('USA','FIN')")   # fine
     Agent._check_identifier("ST004D01T")             # fine
+
+
+def test_validate_plan_names_missing_fields():
+    from explorer.agent import Agent
+    with pytest.raises(ValueError, match="missing measure"):
+        Agent._validate_plan({"template": "weighted_mean", "cycles": ["2025"]})
+    with pytest.raises(ValueError, match="missing measure"):      # "None" placeholder
+        Agent._validate_plan({"template": "weighted_mean", "measure": "None"})
+    with pytest.raises(ValueError, match="group_col"):
+        Agent._validate_plan({"template": "gap", "measure": "PV{pv}MATH",
+                              "minuend": 2, "subtrahend": 1})
+    with pytest.raises(ValueError, match="unknown template"):
+        Agent._validate_plan({"template": "explore"})
+    # a threshold share filed as a proportion with only a measure is complete
+    Agent._validate_plan({"template": "weighted_proportion",
+                          "measure": "CASE WHEN PV{pv}MATH < 420.07 THEN 100.0 ELSE 0.0 END"})
+    Agent._validate_plan({"template": "weighted_proportion", "variable": "REPEAT", "value": 1})
+
+
+def test_catalog_search_prefers_phrase_over_scattered_tokens(monkeypatch):
+    from explorer import catalog
+    frame = pd.DataFrame({
+        "variable": ["ST300Q01JA", "PROWBST", "BELONG", "ST016Q01NA", "CM033Q01S"],
+        "table_name": ["stu_qqq_2025"] * 4 + ["stu_cog_2025"],
+        "cycle": ["2025"] * 5,
+        "instrument": ["stu_qqq"] * 4 + ["stu_cog"],
+        "label": ["Discuss how well you are doing at school",
+                  "Proportion of staff focused on well-being",
+                  "Sense of belonging (WLE)",
+                  "Overall, how satisfied are you with your life as a whole these days?",
+                  "Chocolate and Health - Q01 (Scored Response)"],
+        "var_type": ["double"] * 5, "value_labels": [None] * 5, "n_value_labels": [0] * 5,
+    })
+    monkeypatch.setattr(catalog, "_load", lambda: catalog._prepare(frame))
+    top = catalog.search("well-being", limit=3).variable.tolist()
+    assert top[0] == "PROWBST"                      # phrase match wins
+    assert "ST300Q01JA" not in top[:1]              # "well" alone is a stopword
+    top = catalog.search("life satisfaction", limit=3).variable.tolist()
+    assert top[0] == "ST016Q01NA"                   # satisf~ stem + "life"
+    assert catalog.search("belonging", limit=2).variable.tolist()[0] == "BELONG"

@@ -67,13 +67,21 @@ get a chart, the user should ask for a comparison across groups, countries, or
 cycles. Never claim "I cannot visualize data": charts appear automatically for
 comparison-shaped results.
 
-Reply with JSON: {"data_question": bool, "search_terms": [str, ...], "direct_answer": str|null}.
+Reply with JSON: {"data_question": bool, "intent": "analyze"|"explore",
+"search_terms": [str, ...], "direct_answer": str|null}.
 If the question needs data — including a follow-up that continues or answers a
 clarification from the conversation context — set data_question=true and give
 2-6 short catalog search terms (constructs, topics, variable ideas — e.g.
 "gender", "mathematics", "socioeconomic status", "bullying", "immigrant").
-If it is conversational, about PISA in general, or about this app's abilities
-(no data needed), set data_question=false and write direct_answer.
+intent="explore" when the user wants to know WHAT DATA EXISTS — "what data /
+variables / questions do you have about X", "find me data on X", "is there
+anything on X", "which indices cover X" — the app then lists the matching
+catalog variables (no statistic is computed), so give 3-8 search terms that
+cover the topic broadly (synonyms and related constructs). intent="analyze"
+when the user wants a number, share, comparison, ranking, trend or
+relationship. If it is conversational, about PISA in general, or about this
+app's abilities (no data needed), set data_question=false and write
+direct_answer.
 
 direct_answer speaks AS the app ("PISA Explorer"), never as a language model:
 never say "I am an AI / text-based model", never mention routing or search
@@ -251,7 +259,7 @@ class AgentResult:
     retrieved: pd.DataFrame | None = None
     error: str | None = None
     notes: list[str] = field(default_factory=list)
-    route: str = "data"          # conversational | clarify | data | error
+    route: str = "data"          # conversational | clarify | explore | data | error
     timing: dict = field(default_factory=dict)   # total_ms, llm_calls, llm_ms
 
     def analytics(self) -> dict:
@@ -289,15 +297,24 @@ class Agent:
 
     # ---------- retrieval ----------
 
-    def _retrieve(self, terms: list[str]) -> pd.DataFrame:
+    def _retrieve(self, terms: list[str], per_term: int = 8) -> pd.DataFrame:
         """Top-scoring VARIABLES across the search terms, with every table
         (cycle/instrument) row of each — capped at MAX_CARDS variables."""
-        frames = [catalog.search(t, limit=8) for t in terms]
+        # The router lists the user's own concept first and broader synonyms
+        # after it; weight them so a synonym ("school climate") cannot outrank
+        # the word the user actually used ("bullying"), while a variable that
+        # matches several terms still gets a bonus.
+        frames = []
+        for i, term in enumerate(terms):
+            frame = catalog.search(term, limit=per_term)
+            frames.append(frame.assign(score=frame.score * (1.0 if i == 0 else 0.6),
+                                       _term=i))
         if not frames:
             return pd.DataFrame()
-        hits = (pd.concat(frames, ignore_index=True)
-                .drop_duplicates(subset=["variable", "table_name"]))
-        best = hits.groupby("variable")["score"].max()
+        stacked = pd.concat(frames, ignore_index=True)
+        n_terms = stacked.groupby("variable")["_term"].nunique()
+        hits = stacked.drop_duplicates(subset=["variable", "table_name"]).drop(columns="_term")
+        best = stacked.groupby("variable")["score"].max() * (1 + 0.1 * (n_terms - 1))
         keep = best.sort_values(ascending=False).head(MAX_CARDS).index
         hits = hits[hits.variable.isin(keep)].assign(score=lambda d: d.variable.map(best))
         return hits.sort_values(["score", "variable", "table_name"],
@@ -326,7 +343,48 @@ class Agent:
 
     # ---------- execution (offline-testable, no LLM) ----------
 
+    # Fields a template cannot run without. A plan that lacks one used to reach
+    # DuckDB as the literal word "None" (Binder Error: column "None") — now it
+    # is refused with a message that names the gap.
+    REQUIRED_FIELDS = {
+        "weighted_mean": [("measure",)],
+        "weighted_proportion": [("variable", "measure"), ("value", "measure")],
+        "gap": [("measure",), ("group_col",), ("minuend",), ("subtrahend",)],
+        "quartile_means": [("measure",), ("quart_variable",)],
+        "quartile_gap": [("measure",), ("quart_variable",)],
+        "correlation": [("x",), ("y",)],
+        "percentiles": [("measure",)],
+        "percentile_spread": [("measure",)],
+        "crosstab": [("row_var",), ("col_var",)],
+        "regression": [("measure",), ("predictors",)],
+        "raw_sql": [("sql",)],
+    }
+
+    @classmethod
+    def _validate_plan(cls, plan: dict) -> None:
+        """Raise ValueError naming what an incomplete plan is missing.
+        Each entry in REQUIRED_FIELDS is a tuple of alternatives: at least one
+        of them must be present and not a null-ish placeholder."""
+        template = plan.get("template")
+        if template not in cls.REQUIRED_FIELDS:
+            raise ValueError(f"unknown template {template!r}")
+
+        def present(key: str) -> bool:
+            value = plan.get(key)
+            if value is None or value == [] or value == "":
+                return False
+            return not (isinstance(value, str) and value.strip().lower()
+                        in ("none", "null", "nan"))
+
+        missing = [" or ".join(alts) for alts in cls.REQUIRED_FIELDS[template]
+                   if not any(present(k) for k in alts)]
+        if missing:
+            raise ValueError(
+                f"the {template} plan is incomplete — missing {', '.join(missing)}. "
+                "Try naming the variable or measure you want analyzed.")
+
     def execute(self, plan: dict) -> tuple[pd.DataFrame, dict]:
+        self._validate_plan(plan)
         template = plan.get("template")
         cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
         unknown = [c for c in cycles if c not in CYCLES]
@@ -659,6 +717,85 @@ class Agent:
                 return []
         return [c for c in codes if c not in present]
 
+    YEAR_RE = re.compile(r"\b(2018|2022|2025)\b")
+    ITEM_WORDS = re.compile(r"\b(item|items|test|cognitive|timing|process|log|logs|"
+                            r"response time|actions)\b", re.IGNORECASE)
+    MISSING_LABEL = re.compile(r"valid skip|system missing|not administered|"
+                               r"not applicable|invalid|no response|not reached|"
+                               r"^missing", re.IGNORECASE)
+    MAX_EXPLORE_ROWS = 40
+
+    def _explore(self, question: str, terms: list[str]) -> AgentResult:
+        """Answer 'what data is there about X' from the catalog itself: one
+        row per matching variable with its label, the tables (cycles and
+        instruments) it exists in, and its response codes. Deterministic —
+        no plan, no statistic, no LLM summary that could invent variables."""
+        hits = self._retrieve(terms, per_term=12)
+        years = sorted(set(self.YEAR_RE.findall(question)))
+        if years and not hits.empty:
+            hits = hits[hits.cycle.isin(years)]
+        # "What data is there on X" means questionnaire content (items and
+        # derived indices); test items, timing and process logs only when
+        # the question asks for them.
+        if not hits.empty and not self.ITEM_WORDS.search(question):
+            questionnaire = hits.table_name.str.split("_").str[1].eq("qqq")
+            hits = hits[questionnaire] if questionnaire.any() else hits
+        rows = []
+        for var, group in hits.groupby("variable", sort=False):
+            group = group.sort_values("table_name")
+            latest = group.sort_values("cycle").iloc[-1]
+            desc = catalog.describe(var, cycle=latest.cycle)
+            values = ""
+            if not desc.empty and desc.iloc[0].value_labels:
+                labels = {k: v for k, v in json.loads(desc.iloc[0].value_labels).items()
+                          if not self.MISSING_LABEL.search(str(v))}
+                shown = [f"{k}={v}" for k, v in list(labels.items())[:4]]
+                values = ("; ".join(shown) + (" …" if len(labels) > 4 else "")
+                          if labels else "continuous index / numeric")
+            rows.append({"variable": var, "label": latest.label,
+                         "tables": ", ".join(group.table_name),
+                         "cycles": ", ".join(sorted(set(group.cycle))),
+                         "values": values, "score": float(group.score.iloc[0])})
+        table = (pd.DataFrame(rows).sort_values(["score", "variable"],
+                                                ascending=[False, True])
+                 .head(self.MAX_EXPLORE_ROWS).drop(columns="score")
+                 .reset_index(drop=True)) if rows else pd.DataFrame(
+            columns=["variable", "label", "tables", "cycles", "values"])
+        scope = f"PISA {', '.join(years)}" if years else "PISA 2018, 2022 and 2025"
+        topic = ", ".join(t for t in terms if not self.YEAR_RE.fullmatch(t)) or "that topic"
+        if table.empty:
+            answer = (f"No catalog variables matched “{topic}” in {scope}. Try "
+                      "other words for the construct (PISA labels use the OECD's "
+                      "wording, e.g. “sense of belonging”, “bullying”, “life "
+                      "satisfaction”).")
+        else:
+            top = "; ".join(f"{r.variable} ({r.label[:60]}{'…' if len(r.label) > 60 else ''})"
+                            for r in table.head(5).itertuples())
+            answer = (f"{len(table)} catalog variables relate to “{topic}” in {scope}; "
+                      f"the closest matches: {top}. The table lists each one with "
+                      "its codebook label, the tables it exists in, and its response "
+                      "codes. To analyze one, ask for a statistic — for example "
+                      f"“mean {table.variable.iloc[0]} by country in "
+                      f"{years[-1] if years else '2025'}” or “what share of students "
+                      "in Brazil chose each answer?”.")
+        plan = {"template": "explore", "cycles": years or None,
+                "search_terms": terms,
+                "explanation": f"Catalog search for variables about {topic}"}
+        provenance = {
+            "source": SOURCE_LINE,
+            "tables": sorted({t for r in table.itertuples()
+                              for t in r.tables.split(", ")}) if not table.empty else [],
+            "variables": [{"variable": r.variable, "table": r.tables.split(", ")[-1],
+                           "label": r.label} for r in table.head(15).itertuples()],
+            "filter": f"search terms: {', '.join(terms)}"
+                      + (f"; cycles: {', '.join(years)}" if years else ""),
+            "method": "Keyword search over the OECD codebooks (variable names and "
+                      "labels). No statistic was computed.",
+            "sample": [], "sql": None, "notes": [],
+        }
+        return AgentResult(question, answer, plan=plan, table=table,
+                           provenance=provenance, retrieved=hits, route="explore")
+
     @staticmethod
     def _country_legend(shown: pd.DataFrame) -> str:
         """CNT code -> economy name for the codes in the shown table, so the
@@ -733,6 +870,9 @@ class Agent:
                 return AgentResult(question, self.VIZ_ANSWER, route="conversational")
             return AgentResult(question, route.get("direct_answer")
                                or "Could you rephrase that?", route="conversational")
+
+        if route.get("intent") == "explore":
+            return self._explore(question, route.get("search_terms") or [])
 
         hits = self._retrieve(route.get("search_terms") or [])
         plan = generate_json(

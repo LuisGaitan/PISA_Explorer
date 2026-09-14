@@ -23,11 +23,32 @@ import pandas as pd
 from .db import CATALOG_DIR
 
 
+# Query words that carry no topical signal (they match thousands of labels).
+STOPWORDS = {
+    "the", "and", "for", "with", "how", "what", "which", "who", "are", "is",
+    "of", "in", "on", "to", "by", "about", "data", "dataset", "variable",
+    "variables", "well", "very", "much", "many", "any", "all", "from", "this",
+    "that", "these", "those", "you", "your", "their", "own", "do", "does",
+    "did", "have", "has", "at", "as", "or", "an", "a", "be", "being",
+}
+
+
+# Words that name the respondent type rather than a construct.
+ENTITY_WORDS = {"teacher", "teachers", "student", "students", "school", "schools",
+                "parent", "parents", "country", "countries"}
+
+
 @functools.lru_cache(maxsize=1)
 def _load() -> pd.DataFrame:
-    df = pd.read_parquet(CATALOG_DIR / "variables.parquet")
+    return _prepare(pd.read_parquet(CATALOG_DIR / "variables.parquet"))
+
+
+def _prepare(df: pd.DataFrame) -> pd.DataFrame:
+    """Derived lower-case / compact columns the scorer matches against."""
+    df = df.copy()
     df["_name_lower"] = df.variable.str.lower()
     df["_label_lower"] = df.label.str.lower()
+    df["_label_compact"] = df._label_lower.str.replace(r"[^a-z0-9]", "", regex=True)
     return df
 
 
@@ -45,16 +66,32 @@ def search(
     if instrument:
         df = df[df.instrument == instrument.lower()]
 
-    tokens = [t for t in re.split(r"\W+", query.lower()) if len(t) >= 2]
-    if not tokens:
+    tokens = [t for t in re.split(r"\W+", query.lower())
+              if len(t) >= 2 and t not in STOPWORDS]
+    # Whole-phrase match, insensitive to hyphens/spaces ("well-being" ==
+    # "wellbeing" == "well being"), outranks any pile of single-token hits —
+    # otherwise "well-being" is won by every label containing "well". It also
+    # rescues phrases made only of stopwords (well-being is exactly that).
+    compact = re.sub(r"[^a-z0-9]", "", query.lower())
+    phrase = compact if len(compact) >= 5 else ""
+    if not tokens and not phrase:
         return df.head(0)[["variable", "table_name", "label", "n_value_labels"]]
 
     score = pd.Series(0.0, index=df.index)
+    if phrase:
+        score += df._label_compact.str.contains(phrase, regex=False) * 60.0
     for token in tokens:
         score += (df._name_lower == token) * 100.0
         score += df._name_lower.str.contains(token, regex=False) * 30.0
         score += df._label_lower.str.contains(rf"\b{re.escape(token)}\b", regex=True) * 8.0
         score += df._label_lower.str.contains(token, regex=False) * 3.0
+        if len(token) >= 6:   # crude stem: satisfaction ~ satisfied, bullying ~ bullied
+            score += df._label_lower.str.contains(rf"\b{re.escape(token[:4])}", regex=True) * 4.0
+            # derived indices abbreviate the concept in their NAME (BULLIED,
+            # BELONG, ANXMAT): a name starting with the stem is a strong hit —
+            # except for PISA's entity words, which prefix hundreds of names
+            if token not in ENTITY_WORDS:
+                score += df._name_lower.str.startswith(token[:4]) * 15.0
 
     hits = df.assign(score=score)[score > 0]
     # Rank VARIABLES, not rows: a variable that exists in several cycles and
