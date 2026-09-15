@@ -44,7 +44,8 @@ MAX_CARDS = 40
 MAX_RESULT_ROWS = 500
 
 INSTRUMENTS = ["stu_qqq", "sch_qqq", "tch_qqq", "stu_cog", "stu_tim", "stu_ttm",
-               "flt_qqq", "flt_cog", "flt_tim", "crt_cog", "ldw_cog"]
+               "flt_qqq", "flt_cog", "flt_tim", "crt_cog", "ldw_cog",
+               "stu_sch"]   # virtual: stu_qqq joined to sch_qqq
 CYCLES = ["2018", "2022", "2025"]
 DEFAULT_CYCLE = "2025"          # a question that names no cycle means the latest
 SOURCE_LINE = ("OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP), "
@@ -102,7 +103,26 @@ question IS a data question — combine it with the context and route it to data
 PLAN_SYSTEM = """You plan analyses of the OECD PISA 2018, 2022 and 2025 databases.
 
 DATABASE: DuckDB. Tables are <instrument>_<cycle>, e.g. stu_qqq_2018, stu_qqq_2022,
-stu_qqq_2025 (instruments: {instruments}; cycles: 2018, 2022, 2025). Student
+stu_qqq_2025 (instruments: {instruments}; cycles: 2018, 2022, 2025).
+stu_sch_<cycle> = every student row joined to its school's questionnaire
+(sch_qqq, one row per school, by CNTSCHID): use instrument "stu_sch" whenever
+a SCHOOL variable (a sch_qqq card: SC…, school type, location, size,
+resources) is combined with a STUDENT outcome or grouping — e.g. public vs
+private gap => instrument stu_sch, template gap, group_col SC013Q01TA. All
+student columns, weights (W_FSTUWT) and PVs are there unchanged; a school
+variable never exists in stu_qqq itself. STANDARD SCHOOL VARIABLES — these
+exist in sch_qqq in EVERY cycle and you may use them whether or not a card
+lists them (they count as "named above"): SC013Q01TA public (1) vs private
+(2) school as reported by the principal — ALWAYS use it for "public vs
+private" (minuend=2, subtrahend=1 = private minus public); do not substitute
+PRIVATESCH (57 economies in 2025) or SCHLTYPE (1 private independent / 2
+private government-dependent / 3 public) unless the user asks for the
+government-dependent distinction; SC001Q01TA school location: 1 village/rural
+(<3,000), 2 small town, 3 town, 4 city (100,000-1M), 5 large city, 6 megacity
+(2022/2025) — "rural vs urban/city" => gap with a CASE group_col, e.g. rural
+= SC001Q01TA IN (1, 2) vs city = SC001Q01TA >= 4; EDUSHORT / STAFFSHORT
+shortage indices (all cycles); CLSIZE class size; SCHSIZE school size and
+STRATIO student-teacher ratio (2018 and 2022 only). Student
 questionnaire (stu_qqq_*) holds achievement plausible values PV1..PV10 for
 MATH/READ/SCIE, final weight W_FSTUWT, replicate weights, ESCS (socio-economic
 index), and CNT (ISO-3 country code, e.g. 'USA', 'KOR', 'DEU').
@@ -795,6 +815,57 @@ class Agent:
                     "they are listed in the table but excluded from the chart.")
         return notes
 
+    # ---------- joined view plumbing ----------
+
+    @staticmethod
+    def underlying_tables(table: str) -> list[str]:
+        """The physical tables behind a table name (a joined view maps to
+        its student and school tables); catalog lookups use these."""
+        m = re.fullmatch(r"stu_sch_(\d{4})", table)
+        if m:
+            return [f"stu_qqq_{m.group(1)}", f"sch_qqq_{m.group(1)}"]
+        return [table]
+
+    def _table_columns(self, table: str) -> set[str]:
+        cache = self.__dict__.setdefault("_columns_cache", {})
+        if table not in cache:
+            cache[table] = {r[0] for r in self.con.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = ?", [table]).fetchall()}
+        return cache[table]
+
+    def _check_columns(self, plan: dict, table: str) -> None:
+        """Every catalog variable a plan uses must exist in the table it runs
+        on — otherwise DuckDB's binder error reaches the user. A school
+        variable used on a student table gets a message naming the fix."""
+        columns = self._table_columns(table)
+        if not columns:
+            return
+        cycle = table.rsplit("_", 1)[-1]
+        fields = self.COVERAGE_FIELDS + ("where", "by")
+        text = " ".join(str(plan.get(k) or "") for k in fields).replace("{pv}", "1")
+        for token in sorted(set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text))):
+            if token in columns or len(token) < 3:
+                continue
+            desc = catalog.describe(token, cycle=cycle)
+            if desc.empty:
+                continue                     # not a variable: SQL keyword, literal
+            tables = sorted(set(desc.table_name))
+            hint = ""
+            if any(t.startswith("sch_qqq") for t in tables) and table.startswith("stu_qqq"):
+                hint = (" — it is a SCHOOL questionnaire variable; combine it with "
+                        "student outcomes through instrument \"stu_sch\" (students "
+                        "joined to their school)")
+            raise ValueError(f"{token} is not in {table} (it exists in "
+                             f"{', '.join(tables)}){hint}")
+
+    def _coverage_for(self, var: str, instrument: str, cycle: str) -> dict | None:
+        for tbl in self.underlying_tables(f"{instrument}_{cycle}"):
+            cov = catalog.coverage(var, tbl)
+            if cov is not None:
+                return cov
+        return None
+
     # ---------- coverage guard (offline-testable, no LLM) ----------
 
     COVERAGE_FIELDS = ("measure", "variable", "group_col", "quart_variable",
@@ -824,7 +895,7 @@ class Agent:
                 named &= present
             findings = []
             for var in self._plan_variables(cplan):
-                cov = catalog.coverage(var, table)
+                cov = self._coverage_for(var, instrument, cycle)
                 if not cov or not cov["partial"]:
                     continue
                 named_missing = sorted(named & cov["missing"])
@@ -1033,10 +1104,12 @@ class Agent:
             if not cycles:
                 raise CoverageError(self._coverage_message(findings),
                                     self._provenance(plan, tables))
+            plan["_no_trend"] = len(cycles) < 2     # no change is computed
         per_cycle: dict[str, pd.DataFrame] = {}
         for cycle in cycles:
             tbl = f"{instrument}_{cycle}"
             cplan = {**plan, **overrides.get(cycle, {})}
+            self._check_columns(cplan, tbl)
             cwhere = cplan.get("where") or None
             if cycle in region_codes:
                 codes = region_codes[cycle]["codes"]
@@ -1221,7 +1294,7 @@ class Agent:
         for code_col, var_key, label_col in (("row", "row_var", "row_label"),
                                              ("col", "col_var", "col_label")):
             desc = catalog.describe(plan[var_key])
-            desc = desc[desc.table_name == table]
+            desc = desc[desc.table_name.isin(Agent.underlying_tables(table))]
             if desc.empty or not desc.iloc[0].value_labels:
                 continue
             labels = json.loads(desc.iloc[0].value_labels)
@@ -1266,9 +1339,10 @@ class Agent:
         tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text))
         tokens |= {"W_FSTUWT"}
         out, seen = [], set()
+        physical = [t for tbl in tables for t in self.underlying_tables(tbl)]
         for token in sorted(tokens):
             desc = catalog.describe(token)
-            desc = desc[desc.table_name.isin(tables)] if tables else desc
+            desc = desc[desc.table_name.isin(physical)] if physical else desc
             for _, r in desc.iterrows():
                 key = (r.variable, r.table_name)
                 if key not in seen:
@@ -1326,7 +1400,7 @@ class Agent:
         if plan.get("substitution_note"):
             notes.append(f"VARIABLE SUBSTITUTION: {plan['substitution_note']}")
         cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
-        if len(cycles) >= 2:
+        if len(cycles) >= 2 and not plan.get("_no_trend"):
             first, last = cycles[0], cycles[-1]
             method += (f" Cross-cycle change = {last} minus {first}: independent "
                        f"samples, SE = sqrt(SE{first[2:]}^2 + SE{last[2:]}^2).")
@@ -1564,7 +1638,7 @@ class Agent:
                     lines = []
                     for r in rows[cols].round(1).itertuples(index=False):
                         d = r._asdict()
-                        pos = (f"rank {int(d['rank'])} of {len(table)}"
+                        pos = (f"rank {int(d['rank'])} of {int(table['rank'].notna().sum())}"
                                if "rank" in d and not pd.isna(d["rank"]) else "")
                         vals = ", ".join(f"{k} {v}" for k, v in d.items()
                                          if k not in ("rank", "CNT") and not pd.isna(v))

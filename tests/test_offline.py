@@ -398,3 +398,42 @@ def test_explore_drops_weak_matches(monkeypatch):
     monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: weak.head(0).assign(var_type=[], value_labels=[]))
     res = agent._explore("do you have data on coverage rates?", ["coverage rates"])
     assert res.route == "explore" and "No catalog variables matched" in res.answer
+
+
+# ---------- student + school joined view ----------
+
+def test_joined_view_maps_to_its_physical_tables_and_columns_are_checked(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    assert Agent.underlying_tables("stu_sch_2022") == ["stu_qqq_2022", "sch_qqq_2022"]
+    assert Agent.underlying_tables("stu_qqq_2025") == ["stu_qqq_2025"]
+    agent = Agent.__new__(Agent)
+    monkeypatch.setattr(agent, "_table_columns",
+                        lambda t: {"CNT", "PV1MATH", "W_FSTUWT", "ST004D01T"} if t == "stu_qqq_2022"
+                        else {"CNT", "PV1MATH", "W_FSTUWT", "SC013Q01TA"})
+    rows = {"SC013Q01TA": ["sch_qqq_2022"], "PV1MATH": ["stu_qqq_2022"], "ST004D01T": ["stu_qqq_2022"]}
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: pd.DataFrame(
+        {"variable": [var] * len(rows.get(var, [])), "table_name": rows.get(var, []),
+         "cycle": ["2022"] * len(rows.get(var, [])), "label": [var] * len(rows.get(var, [])),
+         "var_type": ["double"] * len(rows.get(var, [])), "value_labels": [None] * len(rows.get(var, []))}))
+    ok = {"template": "gap", "measure": "PV{pv}MATH", "group_col": "ST004D01T", "minuend": 2, "subtrahend": 1,
+          "where": "CNT = 'MEX'"}
+    agent._check_columns(ok, "stu_qqq_2022")                       # nothing raised
+    bad = {**ok, "group_col": "SC013Q01TA"}
+    with pytest.raises(ValueError, match="SCHOOL questionnaire variable.*stu_sch"):
+        agent._check_columns(bad, "stu_qqq_2022")
+    agent._check_columns(bad, "stu_sch_2022")                      # the joined view has it
+
+
+def test_joined_view_exists_in_the_local_database():
+    from explorer.db import DB_PATH
+    if not DB_PATH.exists():
+        pytest.skip("no local DuckDB (CI)")
+    import duckdb
+    con = duckdb.connect(str(DB_PATH), read_only=True)
+    cols = {r[0] for r in con.execute("SELECT column_name FROM information_schema.columns "
+                                      "WHERE table_name = 'stu_sch_2022'").fetchall()}
+    assert {"CNT", "CNTSCHID", "W_FSTUWT", "W_FSTURWT80", "PV10SCIE", "SC013Q01TA"} <= cols
+    n_stu = con.execute("SELECT count(*) FROM stu_qqq_2022").fetchone()[0]
+    n_view = con.execute("SELECT count(*) FROM stu_sch_2022").fetchone()[0]
+    assert n_stu == n_view                                           # LEFT JOIN: no row lost or duplicated

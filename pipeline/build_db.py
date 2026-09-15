@@ -40,6 +40,29 @@ def main() -> int:
         )
         built.append(source.name)
 
+    # stu_sch_<cycle>: every student row joined to its school's questionnaire
+    # (one row per school; CNT + CNTSCHID is unique). LEFT JOIN keeps students
+    # whose school has no questionnaire row (school variables NULL there).
+    # Student weights stay valid: this is the OECD's own setup for "public vs
+    # private" style comparisons of student outcomes by school characteristics.
+    for cycle in sorted({s.cycle for s in SOURCES}):
+        stu, sch = f"stu_qqq_{cycle}", f"sch_qqq_{cycle}"
+        if stu not in built or sch not in built:
+            continue
+        cols = lambda t: [r[0] for r in con.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = ? "
+            "ORDER BY ordinal_position", [t]).fetchall()]
+        stu_cols = set(cols(stu))
+        sch_only = [c for c in cols(sch) if c not in stu_cols]
+        sch_select = ", ".join(f'h."{c}"' for c in sch_only)
+        con.execute(
+            f"CREATE OR REPLACE VIEW stu_sch_{cycle} AS "
+            f"SELECT s.*, {sch_select} FROM {stu} s LEFT JOIN {sch} h "
+            f"ON s.CNT = h.CNT AND s.CNTSCHID = h.CNTSCHID"
+        )
+        built.append(f"stu_sch_{cycle}")
+        log.info(f"stu_sch_{cycle}: joined view, {len(sch_only)} school columns")
+
     catalog_dir = DB_PATH.parent / "catalog"
     for table, filename in (("catalog_variables", "variables.parquet"),
                             ("catalog_comparability", "comparability.parquet")):
