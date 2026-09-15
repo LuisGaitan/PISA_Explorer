@@ -267,7 +267,8 @@ estimate_<cycle> per cycle and `change` = last cycle minus first cycle;
 describe the path over time (e.g. 2018 → 2022 → 2025), not just the endpoints.
 All three cycles — including PISA 2025, released in 2026 — are real, published
 survey results: never describe 2025 figures as projections, forecasts or
-expectations. Never attribute a change or a difference to causes, factors or
+expectations, and do not remark on their being real (just report them as
+you would any other cycle). Never attribute a change or a difference to causes, factors or
 policies that are not in the table: if the notes say causes cannot be
 established from PISA, say that explicitly in one sentence and point to what
 the app can estimate instead. If a substitution_note or method note is present,
@@ -598,6 +599,19 @@ class Agent:
             col = next((c for c in candidates if c in table.columns), None)
             if col:
                 table = table.sort_values(col, ascending=not plan.get("sort_desc", True))
+        if sort_by and "CNT" in by and len(table) > 1:
+            # A ranking question: number the rows so "where is Kosovo ranked"
+            # has a literal answer in the table, not a position to be counted.
+            # Rank always counts from the TOP of the sort measure (highest
+            # score or largest change = 1), whichever way the table is shown.
+            rank_col = next((c for c in [sort_by, f"estimate_{cycles[-1]}"
+                                         if sort_by == "estimate" else sort_by]
+                             if c in table.columns), None)
+            if rank_col:
+                table = table.reset_index(drop=True)
+                economies = table["CNT"].astype(str) != "OECD avg"   # the average is not a rank
+                ranks = table.loc[economies, rank_col].rank(ascending=False, method="min")
+                table.insert(0, "rank", ranks.reindex(table.index).astype("Int64"))
         if plan.get("top_n"):
             table = table.head(int(plan["top_n"]))
         table = table.reset_index(drop=True)
@@ -973,6 +987,86 @@ class Agent:
         return AgentResult(question, answer, plan=plan, table=table,
                            provenance=provenance, retrieved=hits, route="explore")
 
+    SUMMARY_ROWS = 30          # default window handed to the summarizer
+    RANKING_ROWS = 120         # a ranked per-economy table is passed whole up to this
+
+    def _summary_view(self, table: pd.DataFrame, question: str,
+                      history: list | None = None) -> tuple[pd.DataFrame, str, str]:
+        """What the summarizer is allowed to see.
+
+        A ranked per-economy table (it carries a `rank` column) is passed in
+        full, in a compact form (rank, economy, estimates), because 90 short
+        rows are cheap and truncating them made "where is Kosovo ranked"
+        unanswerable. Any other large table keeps the 30-row window plus the
+        do-not-guess warning. In both cases, economies named in the question
+        (or in the follow-up's context) get their rows spelled out as FOCUS
+        ROWS, computed here — never left for the model to count."""
+        compact_cols = [c for c in table.columns
+                        if c in ("rank", "CNT", "contrast", "quarter", "percentile",
+                                 "term", "cycle") or ESTIMATE_COL.match(c)
+                        or c.startswith("se") or c in ("change", "se_change")]
+        ranked = "rank" in table.columns and len(table) <= self.RANKING_ROWS
+        if ranked:
+            shown = table[compact_cols].round(1)
+            truncation = ""
+        else:
+            shown = table.head(self.SUMMARY_ROWS).round(2)
+            truncation = (
+                f"WARNING: the table has {len(table)} rows but only the first "
+                f"{self.SUMMARY_ROWS} are shown below. If the question needs rows "
+                "beyond these (rankings, extremes, totals), say the full table is "
+                "in the result — NEVER answer it from this partial view.\n"
+            ) if len(table) > self.SUMMARY_ROWS else ""
+
+        focus = ""
+        if "CNT" in table.columns:
+            text = question + " " + " ".join(h.get("question", "") for h in (history or [])[-2:])
+            hits = self._economies_mentioned(text, table["CNT"].astype(str).unique())
+            if hits:
+                rows = table[table["CNT"].isin(hits)]
+                if not rows.empty:
+                    cols = [c for c in compact_cols if c in rows.columns]
+                    lines = []
+                    for r in rows[cols].round(1).itertuples(index=False):
+                        d = r._asdict()
+                        pos = (f"rank {int(d['rank'])} of {len(table)}"
+                               if "rank" in d and not pd.isna(d["rank"]) else "")
+                        vals = ", ".join(f"{k} {v}" for k, v in d.items()
+                                         if k not in ("rank", "CNT") and not pd.isna(v))
+                        lines.append(f"{d['CNT']}: {pos}{'; ' if pos else ''}{vals}")
+                    focus = ("FOCUS ROWS (economies named in the question, located by "
+                             "the app — state these positions and values exactly):\n"
+                             + "\n".join(lines) + "\n")
+        return shown, truncation, focus
+
+    def _economies_mentioned(self, text: str, codes) -> list[str]:
+        """Codes of economies named in the text, by code or by name (the
+        catalog's CNT labels), longest names first so 'Korea' does not match
+        inside 'North Korea'-style labels."""
+        names = {}
+        for cycle in ("2025", "2022", "2018"):
+            desc = catalog.describe("CNT", cycle=cycle)
+            desc = desc[desc.table_name.str.startswith("stu_qqq")]
+            if not desc.empty and desc.iloc[0].value_labels:
+                for k, v in json.loads(desc.iloc[0].value_labels).items():
+                    names.setdefault(k, v)
+        low = " " + re.sub(r"[^a-z0-9 ]", " ", text.lower()) + " "
+        # codes only as written in capitals: ARE, CAN, PER are also English words
+        caps = " " + re.sub(r"[^A-Za-z0-9 ]", " ", text) + " "
+        found = []
+        for code in codes:
+            if re.search(rf"\b{re.escape(code)}\b", caps):
+                found.append(code)
+                continue
+            label = names.get(code, "")
+            base = re.sub(r"\s*\(.*?\)\s*", " ", label).strip().lower()   # "Macao (China)" -> "macao"
+            for cand in {base, label.lower()}:
+                cand = re.sub(r"[^a-z0-9 ]", " ", cand).strip()
+                if len(cand) >= 4 and f" {cand} " in low:
+                    found.append(code)
+                    break
+        return found
+
     @staticmethod
     def _country_legend(shown: pd.DataFrame) -> str:
         """CNT code -> economy name for the codes in the shown table, so the
@@ -1072,20 +1166,20 @@ class Agent:
             return AgentResult(question, f"The analysis failed: {e}",
                                plan=plan, retrieved=hits, error=str(e), route="error")
 
-        shown = table.head(30).round(2)
+        shown, truncation, focus = self._summary_view(table, question, history)
         legend = self._country_legend(shown)
-        truncation = (
-            f"WARNING: the table has {len(table)} rows but only the first 30 are "
-            f"shown below. If the question needs rows beyond these (rankings, "
-            f"extremes, totals), say the full table is in the result — NEVER "
-            f"answer it from this partial view.\n"
-        ) if len(table) > 30 else ""
+        if focus and "rank" in table.columns:
+            positions = [line for line in focus.splitlines()[1:] if "rank" in line]
+            if positions:
+                provenance["notes"].append(
+                    "Position(s) located by the app in the ranked table: "
+                    + "; ".join(positions) + ".")
         summary_prompt = (
             f"QUESTION: {question}\n"
             f"PLANNED: {plan.get('explanation')}\n"
             f"METHOD: {provenance['method']}\n"
             f"NOTES: {'; '.join(provenance['notes']) or 'none'}\n"
-            f"{legend}{truncation}"
+            f"{legend}{focus}{truncation}"
             f"RESULT TABLE (CSV):\n{shown.to_csv(index=False)}"
         )
         answer = generate(summary_prompt, system=SUMMARY_SYSTEM)

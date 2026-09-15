@@ -2,6 +2,7 @@
 trend arithmetic, the Fay-BRR/Rubin combination on a synthetic replicate
 frame, the institution-name normalizer, and the SQL guards."""
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -138,3 +139,27 @@ def test_regions_expand_per_cycle_and_aliases():
     assert "JPN" in regions.REGIONS["Asia"] and "SAU" in regions.REGIONS["Asia"]
     with pytest.raises(ValueError, match="unknown region"):
         regions.expand(["Atlantis"], present)
+
+
+def test_summary_view_passes_full_ranking_and_focus_rows(monkeypatch):
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)          # no DB needed for these helpers
+    from explorer import catalog
+    labels = json.dumps({"KSV": "Kosovo", "SGP": "Singapore", "MAR": "Morocco"})
+    fake = pd.DataFrame({"variable": ["CNT"], "table_name": ["stu_qqq_2025"], "cycle": ["2025"],
+                         "label": ["Country"], "var_type": ["string"], "value_labels": [labels]})
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: fake if cycle == "2025" else fake.head(0))
+    codes = [f"C{i:02d}" for i in range(86)] + ["ARE", "MAR", "KSV", "SGP"]
+    est = list(range(90, 0, -1))
+    table = pd.DataFrame({"CNT": codes, "estimate": est, "se": 1.0, "n_pv": 10, "cycle": "2025"})
+    table.insert(0, "rank", range(1, 91))
+    shown, truncation, focus = agent._summary_view(table, "where is kosovo ranked? countries are ranked")
+    assert len(shown) == 90 and truncation == ""          # full compact ranking
+    assert "n_pv" not in shown.columns
+    assert "KSV: rank 89 of 90" in focus
+    assert "ARE:" not in focus                             # lowercase "are" is not the UAE
+    # a large unranked table keeps the window and the warning
+    table2 = table.drop(columns="rank")
+    shown2, truncation2, focus2 = agent._summary_view(table2, "compare Singapore and Morocco")
+    assert len(shown2) == 30 and "WARNING" in truncation2
+    assert "SGP:" in focus2 and "MAR:" in focus2 and "KSV:" not in focus2

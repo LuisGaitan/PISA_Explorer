@@ -7,7 +7,7 @@
  */
 "use strict";
 
-const METRICS = new Set(["estimate", "se", "n_pv", "change", "se_change", "cycle"]);
+const METRICS = new Set(["estimate", "se", "n_pv", "change", "se_change", "cycle", "rank"]);
 const CYCLE_COL = /^(estimate|se)_(\d{4})$/;          // estimate_2018, se_2025, …
 const isMetric = c => METRICS.has(c) || CYCLE_COL.test(c);
 /* Oldest → newest cycle: soft, base, strong blue (sequential = time order). */
