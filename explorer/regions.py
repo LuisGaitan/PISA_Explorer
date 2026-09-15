@@ -84,6 +84,53 @@ ALIASES: dict[str, str] = {
 }
 
 
+# Common names that differ from the OECD label in the codebook ("Chinese
+# Taipei", "Türkiye", "Korea", "Macao (China)"), so a question written the
+# everyday way still resolves to the economy that IS in the data.
+ECONOMY_ALIASES: dict[str, list[str]] = {
+    "TAP": ["taiwan", "chinese taipei", "taipei"],
+    "TUR": ["turkey", "turkiye", "türkiye"],
+    "KOR": ["south korea", "korea", "republic of korea"],
+    "ARE": ["uae", "united arab emirates", "emirates"],
+    "GBR": ["uk", "united kingdom", "britain", "great britain", "england", "scotland", "wales"],
+    "USA": ["usa", "united states"],
+    "VNM": ["vietnam", "viet nam"],
+    "MAC": ["macau", "macao"],
+    "HKG": ["hong kong"],
+    "QCI": ["b s j z", "bsjz", "beijing", "shanghai", "jiangsu", "zhejiang"],
+    "PSE": ["palestine", "palestinian authority", "palestinian"],
+    "KSV": ["kosovo"],
+    "MKD": ["north macedonia", "macedonia"],
+    "MDA": ["moldova"],
+    "CZE": ["czechia", "czech republic"],
+    "SVK": ["slovakia", "slovak republic"],
+    "NLD": ["netherlands", "holland"],
+    "BRN": ["brunei"],
+    "QKI": ["kurdistan", "iraq"],
+    "QTJ": ["dushanbe", "tajikistan"],
+    "QUA": ["ukraine", "ukrainian regions"],
+    "QUR": ["ukraine", "ukrainian regions"],
+    "UKR": ["ukraine"],
+    "QAZ": ["baku"],
+    "QMR": ["moscow"],
+    "QRT": ["tatarstan"],
+    "RUS": ["russia", "russian federation"],
+    "DOM": ["dominican republic"],
+    "CRI": ["costa rica"],
+    "SLV": ["el salvador"],
+    "BIH": ["bosnia", "bosnia and herzegovina"],
+    "IDN": ["indonesia"],
+    "SAU": ["saudi arabia", "saudi"],
+}
+
+
+# Economies whose 2018-only codes carry no value label in the SAS release.
+NAME_FALLBACK: dict[str, str] = {
+    "BIH": "Bosnia and Herzegovina", "BLR": "Belarus", "RUS": "Russian Federation",
+    "UKR": "Ukraine", "QMR": "Moscow region (Russia)", "QRT": "Tatarstan (Russia)",
+}
+
+
 def _norm(name: str) -> str:
     return re.sub(r"[^a-z ]", " ", name.lower()).replace("  ", " ").strip()
 

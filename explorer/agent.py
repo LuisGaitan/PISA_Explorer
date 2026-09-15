@@ -333,9 +333,39 @@ class Agent:
     def __init__(self):
         self.con = connect(read_only=True)
         self.coverage = self._coverage()
-        self.facts = self._facts_block()
         self.present = self._present_codes()
+        self.economy_names = self._economy_names()
+        self.facts = self._facts_block()
         self.regions_block = regions.prompt_block(self.present)
+
+    def _economy_names(self) -> dict[str, str]:
+        """CNT code -> economy name from the catalog's own value labels."""
+        names: dict[str, str] = dict(regions.NAME_FALLBACK)
+        for cycle in ("2025", "2022", "2018"):
+            desc = catalog.describe("CNT", cycle=cycle)
+            desc = desc[desc.table_name.str.startswith("stu_qqq")]
+            if not desc.empty and desc.iloc[0].value_labels:
+                for k, v in json.loads(desc.iloc[0].value_labels).items():
+                    names.setdefault(k, v)
+        return names
+
+    def _economies_block(self) -> str:
+        """The exact participant list per cycle, from the data — so the model
+        can never claim an economy is absent (or present) from memory."""
+        every = set().union(*self.present.values()) if self.present else set()
+        legend = "; ".join(f"{c} = {self.economy_names.get(c, c)}" for c in sorted(every))
+        lines = [f"ECONOMY CODES: {legend}"]
+        for cycle, codes in self.present.items():
+            lines.append(f"- In PISA {cycle} ({len(codes)}): {' '.join(sorted(codes))}")
+        if "2025" in self.present:
+            earlier = set().union(*(v for c, v in self.present.items() if c != "2025"))
+            new = sorted(self.present["2025"] - earlier)
+            gone = sorted(earlier - self.present["2025"])
+            lines.append("- First participated in 2025: " + ", ".join(
+                f"{c} ({self.economy_names.get(c, c)})" for c in new))
+            lines.append("- In earlier cycles but not in 2025: " + ", ".join(
+                f"{c} ({self.economy_names.get(c, c)})" for c in gone))
+        return "\n".join(lines)
 
     def _present_codes(self) -> dict[str, set[str]]:
         out = {}
@@ -394,7 +424,21 @@ class Agent:
             "expected 2027).\n"
             "When a direct_answer concerns what data exist or when they were "
             "released, use these facts verbatim; if unsure, say the app covers "
-            "PISA 2018, 2022 and 2025 and suggest asking a data question."
+            "PISA 2018, 2022 and 2025 and suggest asking a data question.\n\n"
+            + self._economies_block() +
+            "\nRULES ABOUT ECONOMIES: \"How did <economy> do?\" or any question "
+            "naming an economy that appears in the lists above is a DATA question "
+            "(data_question=true, intent=analyze) — never answer it from memory and "
+            "never say the app lacks data for an economy that is listed. If an "
+            "economy is NOT in any list, say exactly: \"<name> is not in the PISA "
+            "2018, 2022 or 2025 public-use databases loaded here\" — do not "
+            "speculate about other cycles or reasons. China as a whole is not in "
+            "the data: only B-S-J-Z (QCI: Beijing, Shanghai, Jiangsu, Zhejiang) in "
+            "2018 and 2025. Ukraine appears only as sets of regions (QUR 2022, QUA "
+            "2025) and Iraq only as the Kurdistan Region (QKI, 2025). Everyday names "
+            "map to these codes: Taiwan = TAP (Chinese Taipei), Turkey = TUR "
+            "(Türkiye), South Korea = KOR, UAE = ARE, UK = GBR, Vietnam = VNM, "
+            "Macau = MAC, Palestine = PSE, Czech Republic = CZE, Slovakia = SVK."
         )
 
     # Deterministic answer for "do you have the 2025 data?" — the one factual
@@ -414,6 +458,24 @@ class Agent:
                 "and student, family or school variables (correlation, regression, "
                 "quartile gaps) — ask, for example, “regress science on ESCS and "
                 "sense of belonging in Chile in 2025”.")
+
+    PARTICIPATION_WORDS = re.compile(
+        r"\b(participat\w*|take part|took part|taken part|included|in the data|"
+        r"have data|has data|any data|data (on|for|about)|covered|is .* in pisa|"
+        r"part of pisa|in pisa)\b", re.IGNORECASE)
+
+    def _participation_answer(self, codes: list[str]) -> str:
+        """Which loaded cycles each named economy appears in — from the data."""
+        parts = []
+        for code in codes:
+            cycles = sorted(c for c, present in self.present.items() if code in present)
+            name = self.economy_names.get(code, code)
+            parts.append(f"{name} ({code}): in PISA " + ", ".join(cycles)
+                         + (" only" if len(cycles) == 1 else ""))
+        return ("Yes — " + "; ".join(parts) + ". The public-use data for those "
+                "cycles are loaded here; ask for a statistic, for example “mean "
+                f"science score in {self.economy_names.get(codes[0], codes[0])} in "
+                f"{max(c for c, p in self.present.items() if codes[0] in p)}”.")
 
     def _coverage_answer(self) -> str:
         parts = [f"PISA {c} ({v['economies']} economies, {v['students']:,} students)"
@@ -567,7 +629,12 @@ class Agent:
                 cwhere = f"({cwhere}) AND {clause}" if cwhere else clause
             res = self._run_template(template, cplan, tbl, by, cwhere)
             if plan.get("include_oecd_average") and "CNT" in by:
-                avg = self._oecd_average_rows(res, tbl)
+                # "The OECD average" means all OECD members — when the question
+                # is filtered to a region or a few countries, the average must
+                # NOT be taken over just the members inside the filter.
+                basis = res if cwhere is None else \
+                    self._run_template(template, cplan, tbl, by, "OECD = 1")
+                avg = self._oecd_average_rows(basis, tbl)
                 if avg is not None:
                     res = pd.concat([res, avg], ignore_index=True)
             per_cycle[cycle] = res
@@ -1039,6 +1106,11 @@ class Agent:
                              + "\n".join(lines) + "\n")
         return shown, truncation, focus
 
+    def _economies_in_data(self, text: str) -> list[str]:
+        """Economies named in the text that exist in at least one loaded cycle."""
+        every = set().union(*self.present.values()) if self.present else set()
+        return self._economies_mentioned(text, sorted(every))
+
     def _economies_mentioned(self, text: str, codes) -> list[str]:
         """Codes of economies named in the text, by code or by name (the
         catalog's CNT labels), longest names first so 'Korea' does not match
@@ -1060,9 +1132,11 @@ class Agent:
                 continue
             label = names.get(code, "")
             base = re.sub(r"\s*\(.*?\)\s*", " ", label).strip().lower()   # "Macao (China)" -> "macao"
-            for cand in {base, label.lower()}:
+            cands = {base, label.lower(), *regions.ECONOMY_ALIASES.get(code, [])}
+            for cand in cands:
                 cand = re.sub(r"[^a-z0-9 ]", " ", cand).strip()
-                if len(cand) >= 4 and f" {cand} " in low:
+                cand = re.sub(r"\s+", " ", cand)
+                if len(cand) >= 3 and f" {cand} " in low:
                     found.append(code)
                     break
         return found
@@ -1137,13 +1211,28 @@ class Agent:
         context = self._transcript(history)
         route = generate_json(f"{context}Question: {question}",
                               system=TERMS_SYSTEM + self.facts)
+        # "Did X participate / do you have data on X?" — answered from the
+        # participant lists, never by the model, whichever way it was routed.
+        if self.PARTICIPATION_WORDS.search(question):
+            named = self._economies_in_data(question)
+            if named:
+                return AgentResult(question, self._participation_answer(named),
+                                   route="conversational")
         if not route.get("data_question"):
             if self.VIZ_WORDS.search(question):
                 return AgentResult(question, self.VIZ_ANSWER, route="conversational")
             if self.YEAR_RE.search(question) and self.COVERAGE_WORDS.search(question):
                 return AgentResult(question, self._coverage_answer(), route="conversational")
-            return AgentResult(question, route.get("direct_answer")
-                               or "Could you rephrase that?", route="conversational")
+            named = self._economies_in_data(question)
+            if not named:
+                return AgentResult(question, route.get("direct_answer")
+                                   or "Could you rephrase that?", route="conversational")
+            # The router called it conversational, but the question names an
+            # economy that IS in the data: the data answer, not the model's
+            # memory. Force the analysis path.
+            route = {"data_question": True, "intent": "analyze",
+                     "search_terms": route.get("search_terms")
+                     or ["science", "mathematics", "reading"]}
 
         if route.get("intent") == "explore":
             return self._explore(question, route.get("search_terms") or [])

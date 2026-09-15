@@ -163,3 +163,20 @@ def test_summary_view_passes_full_ranking_and_focus_rows(monkeypatch):
     shown2, truncation2, focus2 = agent._summary_view(table2, "compare Singapore and Morocco")
     assert len(shown2) == 30 and "WARNING" in truncation2
     assert "SGP:" in focus2 and "MAR:" in focus2 and "KSV:" not in focus2
+
+
+def test_economies_named_in_question_are_found_by_name_or_capital_code(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    agent = Agent.__new__(Agent)
+    agent.present = {"2025": {"RWA", "KEN", "ARE", "QCI"}, "2022": {"ARE"}}
+    labels = json.dumps({"RWA": "Rwanda", "KEN": "Kenya", "ARE": "United Arab Emirates",
+                         "QCI": "B-S-J-Z (China)"})
+    fake = pd.DataFrame({"variable": ["CNT"], "table_name": ["stu_qqq_2025"], "cycle": ["2025"],
+                         "label": ["Country"], "var_type": ["string"], "value_labels": [labels]})
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: fake if cycle == "2025" else fake.head(0))
+    assert agent._economies_in_data("How did rwanda do?") == ["RWA"]
+    assert agent._economies_in_data("compare KEN and RWA") == ["KEN", "RWA"]
+    assert agent._economies_in_data("how are things") == []          # "are" is not ARE
+    assert agent._economies_in_data("United Arab Emirates reading") == ["ARE"]
+    assert agent._economies_in_data("How did India do?") == []
