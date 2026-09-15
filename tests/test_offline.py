@@ -318,7 +318,13 @@ def test_trend_adds_the_link_error_variance_when_given():
     assert out2.change.iloc[0] == -10.0                     # estimates untouched
     from explorer import link_errors
     assert link_errors.domain_of("PV{pv}SCIE") == "SCIE" and link_errors.domain_of("ESCS") is None
-    assert link_errors.link_error("2022", "2025", "PV{pv}READ") is None or link_errors.loaded()
+    assert link_errors.loaded() and len(link_errors.LINK_ERRORS) == 9
+    assert link_errors.link_error("2022", "2025", "PV{pv}SCIE") == 3.116
+    assert link_errors.link_error("2018", "2022", "PV1MATH") == 2.24
+    assert link_errors.link_error("2022", "2025", "ESCS") is None
+    # proficiency-level shares have their own (unloaded) link errors
+    assert link_errors.link_error("2022", "2025", "CASE WHEN PV{pv}MATH < 420.07 THEN 100.0 ELSE 0.0 END") is None
+    assert link_errors.domain_of("CASE WHEN PV{pv}MATH < 420.07 THEN 100.0 ELSE 0.0 END") == "MATH"
 
 
 def test_gap_accepts_a_derived_two_group_expression():

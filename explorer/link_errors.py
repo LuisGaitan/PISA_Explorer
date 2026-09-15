@@ -17,19 +17,24 @@ link error and the provenance note says so.
 import re
 
 LINK_ERRORS: dict[tuple[str, str, str], float] = {
-    # ("2022", "2025", "MATH"): ...,
-    # ("2022", "2025", "READ"): ...,
-    # ("2022", "2025", "SCIE"): ...,
-    # ("2018", "2025", "MATH"): ...,
-    # ("2018", "2025", "READ"): ...,
-    # ("2018", "2025", "SCIE"): ...,
-    # ("2018", "2022", "MATH"): ...,
-    # ("2018", "2022", "READ"): ...,
-    # ("2018", "2022", "SCIE"): ...,
+    # OECD link errors (score points), one per cycle pair and domain; common
+    # to every economy. As published in PISA 2025 Results (Volume I) and PISA
+    # 2022 Results (Volume I), reproduced in the NCES PISA 2025 Technical
+    # Notes (Table 4) and PISA 2022 Technical Notes (Table 3).
+    ("2022", "2025", "MATH"): 1.220,
+    ("2022", "2025", "READ"): 1.094,
+    ("2022", "2025", "SCIE"): 3.116,
+    ("2018", "2025", "MATH"): 2.551,
+    ("2018", "2025", "READ"): 1.832,
+    ("2018", "2025", "SCIE"): 3.507,
+    ("2018", "2022", "MATH"): 2.24,
+    ("2018", "2022", "READ"): 1.47,
+    ("2018", "2022", "SCIE"): 1.61,
 }
 
-SOURCE = ("OECD, PISA 2025 Results (Volume I), Annex A5 (link errors); "
-          "PISA 2022 Results (Volume I), Annex A7")
+SOURCE = ("OECD link errors as published in PISA 2025 Results (Volume I) and "
+          "PISA 2022 Results (Volume I); values reproduced in the NCES PISA 2025 "
+          "Technical Notes, Table 4, and PISA 2022 Technical Notes, Table 3")
 
 DOMAIN_RE = re.compile(r"\bPV(?:\{pv\}|\d{1,2})(MATH|READ|SCIE)\b")
 DOMAIN_NAMES = {"MATH": "mathematics", "READ": "reading", "SCIE": "science"}
@@ -41,13 +46,23 @@ def domain_of(measure: str | None) -> str | None:
     return m.group(1) if m else None
 
 
+MEAN_SCORE_RE = re.compile(r"^\s*PV(?:\{pv\}|\d{1,2})(MATH|READ|SCIE)\s*$")
+
+
+def is_mean_score(measure: str | None) -> bool:
+    """True only for a plain plausible-value score. The published link errors
+    apply to changes in MEAN scores; proficiency-level shares ("% below
+    Level 2" = CASE WHEN PV… < 420.07 …) have their own link errors, which
+    are not loaded — those changes keep the sampling-only SE."""
+    return bool(MEAN_SCORE_RE.match(str(measure or "")))
+
+
 def link_error(first: str, last: str, measure: str | None) -> float | None:
-    """The published link error for a change from `first` to `last` in the
-    measure's domain, or None when unknown / not an achievement score."""
-    domain = domain_of(measure)
-    if domain is None:
+    """The published link error for a change in the mean of `measure` from
+    `first` to `last`, or None when unknown / not a mean achievement score."""
+    if not is_mean_score(measure):
         return None
-    return LINK_ERRORS.get((str(first), str(last), domain))
+    return LINK_ERRORS.get((str(first), str(last), domain_of(measure)))
 
 
 def loaded() -> bool:
