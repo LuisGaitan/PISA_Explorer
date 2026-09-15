@@ -516,3 +516,147 @@ def test_unknown_columns_use_the_whole_catalog_and_school_type_is_standardized(m
     assert Agent.SCHOOL_TYPE_WORDS.search("mexico public-private gap in schools") or \
         Agent.SCHOOL_TYPE_WORDS.search("difference between mexico's public and private schools")
     assert not Agent.SCHOOL_TYPE_WORDS.search("how did rwanda do?")
+
+
+
+# ---------- benchmark averages, named-economy backstop, "why no results" ----------
+
+def test_group_average_for_any_group_and_avg_rows_are_never_ranked(monkeypatch):
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    agent.present = {"2025": {"FRA", "DEU", "ESP", "USA", "BRA"}}
+    agent.economy_names = {}
+    monkeypatch.setattr(agent, "_oecd_codes", lambda c: {"FRA", "DEU", "ESP", "USA"})
+    assert agent._benchmarks({"include_oecd_average": True, "include_average_of": ["European Union", "OECD"]}) \
+        == ["OECD", "European Union"]
+    assert agent._benchmarks({"include_average_of": ["FRA", "DEU", "BRA"]}) == [("BRA", "DEU", "FRA")]
+    label, members = agent._average_members("EU", "2025")
+    assert label == "EU avg" and members == {"FRA", "DEU", "ESP"}
+    assert agent._average_members("OECD", "2025") == ("OECD avg", {"FRA", "DEU", "ESP", "USA"})
+    assert agent._average_members("Narnia", "2025") is None
+    res = pd.DataFrame({"CNT": ["FRA", "DEU", "ESP", "BRA"], "estimate": [450.0, 470.0, 460.0, 400.0],
+                        "se": [3.0, 4.0, 3.0, 2.0], "n_pv": 10})
+    avg = agent._group_average_rows(res, members, "EU avg")
+    assert avg.CNT.iloc[0] == "EU avg" and abs(avg.estimate.iloc[0] - 460.0) < 1e-9
+    assert abs(avg.se.iloc[0] - np.sqrt(9 + 16 + 9) / 3) < 1e-9
+    # blank-cell notes ignore benchmark rows
+    agent.present = {"2018": {"FRA"}, "2025": {"FRA"}}
+    table = pd.DataFrame({"CNT": ["FRA", "EU avg"], "estimate_2018": [1.0, np.nan], "se_2018": [1.0, np.nan],
+                          "estimate_2025": [2.0, 3.0], "se_2025": [1.0, 1.0]})
+    notes = agent._missing_estimate_notes(table, {"template": "weighted_mean", "measure": "ESCS"})
+    assert all("did not take part" not in n for n in notes)
+
+
+def test_named_economies_left_out_of_a_plan_are_stated(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    agent = Agent.__new__(Agent)
+    agent.present = {"2025": {"FRA", "DEU", "ESP", "USA"}}
+    labels = json.dumps({"FRA": "France", "DEU": "Germany", "ESP": "Spain", "USA": "United States"})
+    fake = pd.DataFrame({"variable": ["CNT"], "table_name": ["stu_qqq_2025"], "cycle": ["2025"],
+                         "label": ["Country"], "var_type": ["string"], "value_labels": [labels]})
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: fake if cycle == "2025" else fake.head(0))
+    monkeypatch.setattr(agent, "_oecd_codes", lambda c: {"FRA", "DEU", "ESP", "USA"})
+    q = "compare France with Germany and Spain in reading"
+    assert agent._dropped_economies(q, {"cycles": ["2025"], "where": "CNT = 'FRA'"}) == ["DEU", "ESP"]
+    assert agent._dropped_economies(q, {"cycles": ["2025"], "where": "CNT IN ('FRA','DEU','ESP')"}) == []
+    assert agent._dropped_economies(q, {"cycles": ["2025"]}) == []                     # all economies
+    assert agent._dropped_economies("France vs the EU average", {"cycles": ["2025"], "where": "CNT = 'FRA'",
+                                                                 "include_average_of": ["European Union"]}) == []
+    assert agent._dropped_economies("compare Germany and Spain with the EU average",
+                                    {"cycles": ["2025"], "where": "CNT = 'DEU'",
+                                     "include_average_of": ["European Union"]}) == []   # Spain is in the EU average
+
+
+def test_why_no_results_is_answered_from_coverage_and_the_oecd_reason(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    W = Agent.WHY_MISSING_WORDS
+    assert W.search("Why can’t I see mathematics and reading results for Uzbekistan?")
+    assert W.search("why are there no math scores for Vietnam in 2018")
+    assert not W.search("why is Uzbekistan's science score so low?")
+    assert not W.search("what is the reading score of Uzbekistan?")
+    agent = Agent.__new__(Agent)
+    agent.present = {"2022": {"FIN"}, "2025": {"UZB", "FIN"}}
+    agent.economy_names = {"UZB": "Uzbekistan", "FIN": "Finland"}
+    def cov(var, table):
+        if table == "stu_qqq_2025" and var in ("PV1MATH", "PV1READ"):
+            return {"n_economies": 90, "n_with_data": 89, "partial": True, "with_data": set(), "missing": {"UZB"}}
+        return {"n_economies": 90, "n_with_data": 90, "partial": False, "with_data": None, "missing": None}
+    monkeypatch.setattr(catalog, "coverage", cov)
+    ans = agent._missing_results_answer(["UZB"])
+    assert "did not take part in PISA 2022" in ans
+    assert "results for science only" in ans and "mathematics and reading plausible values were not released" in ans
+    assert "Data Adjudication" in ans and "not collected" not in ans
+    assert "all three domains" in agent._missing_results_answer(["FIN"])
+
+
+
+def test_adversarial_guards_qci_ranking_and_null_groups():
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    assert agent._qci_note("How does Shanghai compare to Singapore?", {"where": "CNT IN ('QCI','SGP')"})
+    assert agent._qci_note("Singapore vs Japan", {"where": "CNT IN ('SGP','JPN')"}) is None
+    assert agent._qci_note("B-S-J-Z vs Singapore", {"where": "CNT IN ('QCI','SGP')"}) is None
+    plan = {"top_n": 1, "sort_by": "estimate"}
+    agent._keep_full_ranking("Rank Latin American countries by the gap and name the largest", plan)
+    assert plan["top_n"] is None and plan["_ranking_kept"]
+    plan2 = {"top_n": 1, "sort_by": "estimate"}
+    agent._keep_full_ranking("which country has the largest gap?", plan2)
+    assert plan2["top_n"] == 1
+    res = pd.DataFrame({"CNT": ["CHL"] * 3, "SC013Q01TA": [1.0, 2.0, np.nan],
+                        "estimate": [-17.0, -21.4, -30.2], "se": [5.8, 3.1, 12.0], "n_pv": 10})
+    kept, dropped = Agent._drop_null_groups(res, ["CNT", "SC013Q01TA"])
+    assert len(kept) == 2 and dropped == {"SC013Q01TA": 1}
+    same, none = Agent._drop_null_groups(res.dropna(), ["CNT"])
+    assert len(same) == 2 and none == {}
+
+
+
+def test_pure_count_questions_are_intercepted_but_mixed_ones_are_planned():
+    from explorer.agent import Agent
+    C, O = Agent.COUNT_WORDS, Agent.OTHER_STAT_WORDS
+    assert C.search("How many students were tested in Uzbekistan in 2025?") and not O.search("How many students were tested in Uzbekistan in 2025?")
+    mixed = "How many students were tested in Uzbekistan in 2025 and what percentage were girls?"
+    assert C.search(mixed) and O.search(mixed)          # goes to the planner; sample size rides along
+    assert not C.search("what is the mean science score in Brazil?")
+
+
+
+def test_proportion_rows_state_their_category(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    labels = json.dumps({"0": "Female/Other", "1": "Male"})
+    fake = pd.DataFrame({"variable": ["MALE"], "table_name": ["stu_qqq_2025"], "cycle": ["2025"],
+                         "label": ["Derived gender"], "var_type": ["double"], "value_labels": [labels]})
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: fake)
+    assert Agent._category_label("MALE", 0, "stu_qqq_2025") == "MALE = 0 (Female/Other)"
+    assert Agent._category_label("MALE", 1.0, "stu_sch_2025") == "MALE = 1 (Male)"
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: fake.head(0))
+    assert Agent._category_label("IMMIG", 2, "stu_qqq_2022") == "IMMIG = 2"
+
+
+
+def test_false_not_collected_claims_are_corrected_from_coverage(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    agent = Agent.__new__(Agent)
+    agent.present = {"2018": {"USA", "CAN"}, "2025": {"USA", "CAN"}}
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: pd.DataFrame(
+        {"variable": [var], "table_name": ["stu_qqq_2025"], "cycle": ["2025"], "label": [var],
+         "var_type": ["double"], "value_labels": [None]}) if var in ("ST004D01T", "MALE") else pd.DataFrame(
+        columns=["variable", "table_name", "cycle", "label", "var_type", "value_labels"]))
+    def cov(var, table):
+        if var == "ST004D01T" and table == "stu_qqq_2025":
+            return {"n_economies": 90, "n_with_data": 76, "partial": True, "with_data": set(), "missing": {"CAN"}}
+        return {"n_economies": 90, "n_with_data": 90, "partial": False, "with_data": None, "missing": None}
+    monkeypatch.setattr(catalog, "coverage", cov)
+    plan = {"template": "gap", "where": "CNT = 'USA'", "cycles": ["2018", "2025"],
+            "substitution_note": "For 2025 the MALE flag is used as ST004D01T was not collected for the US in 2025."}
+    agent._verify_substitution_claims(plan)
+    assert "ST004D01T" in plan["_claim_corrected"] and "standard convention" in plan["substitution_note"]
+    # Canada really lacks ST004D01T in 2025: the note stands
+    plan2 = {"template": "gap", "where": "CNT = 'CAN'", "cycles": ["2025"],
+             "substitution_note": "MALE is used as ST004D01T was not collected for Canada in 2025."}
+    agent._verify_substitution_claims(plan2)
+    assert "_claim_corrected" not in plan2 and "not collected" in plan2["substitution_note"]

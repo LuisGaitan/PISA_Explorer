@@ -156,8 +156,10 @@ economy unless a card says so; the substitution_note should just say that
 
 PISA 2025 SPECIFICS: 90 economies (80 in 2018/2022). Science was the major
 domain; the same proficiency-level cutoffs apply in every cycle (the scales are
-linked). Uzbekistan (UZB) has science PVs only in 2025 (no MATH, no READ —
-its rows show no estimate for those domains). Extra 2025 PVs:
+linked). Uzbekistan (UZB) took all three tests in 2025 but the OECD released
+only its SCIENCE results (mathematics and reading plausible values are not in
+the public database — its rows show no estimate for those domains; never say
+they were "not collected"). Extra 2025 PVs:
 science competency subscales PV{{pv}}SEPS / PV{{pv}}SEDE / PV{{pv}}SEID,
 environmental science PV{{pv}}SENV, and the new "Learning in the Digital World"
 domain PV{{pv}}CMPS (computational problem solving), PV{{pv}}CPPK
@@ -236,6 +238,18 @@ Reply with ONLY this JSON:
             PLUS the OECD average: the system appends a CNT = "OECD avg" row —
             the official convention, the unweighted mean of OECD member
             countries' estimates; requires "CNT" in by),
+ "include_average_of": [str, ...]|null   (BENCHMARK rows: "OECD" and/or a
+            region name from the REGIONS list — "European Union", "Latin
+            America and the Caribbean", "Nordic countries" … — or an explicit
+            list of CNT codes for an ad-hoc group; the system appends one
+            "<group> avg" row per cycle (unweighted mean of the member
+            economies present in that cycle, same convention as the OECD
+            average). "France vs the EU average" => where = "CNT = 'FRA'",
+            include_average_of = ["European Union"]. NEVER build an average
+            by listing members in `where` — that only returns the members'
+            rows. A benchmark the user established earlier in the
+            conversation stays in every later plan of that conversation
+            until the user drops it; requires "CNT" in by),
  "by": [grouping columns, usually ["CNT"]],
  "regions": [str, ...]|null   (a geographic/institutional group the user
             names — "Latin America", "Asia", "the EU", "Nordic countries",
@@ -308,6 +322,12 @@ A two-group difference whose groups are SETS of codes (immigrant = IMMIG
 instead) => template gap with group_col = a CASE expression yielding 1/0,
 e.g. "CASE WHEN IMMIG = 1 THEN 1 WHEN IMMIG IN (2, 3) THEN 0 END",
 minuend=1, subtrahend=0, and group_label = "non-immigrant minus immigrant".
+Sample sizes ("how many students were tested / sampled in X") come with
+EVERY answer automatically (the provenance lists sampled students and the
+weighted 15-year-old population per table): never write raw_sql to count
+students — plan the other statistic the question asks for (or weighted_mean
+of PV{{pv}}SCIE when nothing else is asked) and say in the explanation that
+the sample size accompanies the answer.
 A period longer than the loaded cycles ("past decade", "since 2015/2012")
 => analyze 2018-2025 and say in the explanation that earlier cycles are not
 loaded here.
@@ -351,7 +371,18 @@ notes say a variable was not collected for an economy, say exactly that (it
 was not administered there), never that the economy "has no well-being" or
 similar. If the notes say the OECD did not RELEASE an economy's results for
 a cycle, say that — never that the economy "did not administer" or "did not
-participate in" the assessment."""
+participate in" the assessment. QCI is "B-S-J-Z (China)", the four provinces
+Beijing, Shanghai, Jiangsu and Zhejiang together: never call it Shanghai,
+Beijing or China. Rows whose group value is missing were excluded (see
+notes): never describe an excluded group as an "overall" figure. If the
+prompt lists SAMPLE SIZES, use them when the question asks how many students
+were tested or sampled; they count the students inside the question's filter
+(the economies and groups in the table, per table), never the whole cycle —
+"6,573 students sampled in Chile", not "in the 2025 cycle". A percentage
+table's `category` column states exactly which group the percentage refers
+to (e.g. "MALE = 0 (Female/Other)" = the share who are girls): report that
+group's share as given and never subtract it from 100 to describe the other
+group unless the table also holds that row."""
 
 
 class CoverageError(ValueError):
@@ -401,6 +432,7 @@ class AgentResult:
             "limitation": bool(plan.get("limitation_note")),
             "answer": (self.answer or "")[:4000],
             "oecd_average": bool(plan.get("include_oecd_average")),
+            "benchmarks": plan.get("include_average_of"),
             "missing_rows": any("no estimate" in n for n in prov.get("notes", [])),
             "error": self.error,
             "answer_chars": len(self.answer or ""),
@@ -510,6 +542,11 @@ class Agent:
             "AI literacy as part of PISA 2025.\n"
             "- Not loaded: the 2025 Foreign Language Assessment (OECD release "
             "expected 2027).\n"
+            "- Benchmarks: any per-country result can carry an OECD-average row "
+            "and/or a regional average row (EU, Latin America, Nordic countries, "
+            "…) — ask e.g. \"compare France with the EU average in reading\"; a "
+            "benchmark named once is kept for the rest of the conversation. There "
+            "is no separate settings panel.\n"
             "- ABOUT THIS APP: PISA Explorer is an independent, open-source web "
             "app (MIT licence, github.com/LuisGaitan/PISA_Explorer) built by Luis "
             "Gaitan at the University of Pennsylvania Graduate School of "
@@ -810,7 +847,7 @@ class Agent:
                 present = self.present.get(m.group(1)) if m else None
                 if not present:
                     continue
-                absent_rows = mask[col] & ~cnt.isin(present) & (cnt != "OECD avg")
+                absent_rows = mask[col] & ~cnt.isin(present) & ~cnt.str.endswith(" avg")
                 if absent_rows.any():
                     codes = sorted(set(cnt[absent_rows]))
                     notes.append(f"PISA {m.group(1)}: {self._names(codes)} did not take "
@@ -822,7 +859,7 @@ class Agent:
             domain = link_errors.domain_of(measure)
             if domain and "CNT" in table.columns:
                 rows = table["CNT"].astype(str)[mask.any(axis=1)]
-                who = self._names(sorted(set(rows) - {"OECD avg"})[:12])
+                who = self._names(sorted(c for c in set(rows) if not c.endswith(" avg"))[:12])
                 notes.append(
                     f"{n_missing} row(s) have no {link_errors.DOMAIN_NAMES[domain]} "
                     f"estimate ({who}): those economies took part, but the OECD did "
@@ -865,6 +902,117 @@ class Agent:
             plan["group_col"] = "SC013Q01TA"
             plan["instrument"] = "stu_sch"
             plan["_school_type_switched"] = True
+
+    # ---------- small deterministic guards found by adversarial testing ----------
+
+    FALSE_CLAIM_WORDS = re.compile(
+        r"(not|n[’']t|never) (collected|administered|available|released|present|provided|"
+        r"asked|included)|(is|was|were) (missing|unavailable|absent)", re.IGNORECASE)
+
+    def _verify_substitution_claims(self, plan: dict) -> None:
+        """A substitution_note that says a variable was not collected for the
+        named economies is checked against the coverage table; when the
+        economies do have it, the false clause is replaced by the plain
+        convention statement (the MALE flag is a convention, not a gap)."""
+        note = str(plan.get("substitution_note") or "")
+        if not note or not self.FALSE_CLAIM_WORDS.search(note):
+            return
+        named = set(re.findall(r"'([A-Z]{3})'", str(plan.get("where") or "")))
+        if not named:
+            return
+        cycles = [str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]]
+        instrument = plan.get("instrument") or "stu_qqq"
+        # only the variable(s) named as the SUBJECT of a "not collected" claim
+        # (the 80 characters before each claim), not every code in the note
+        claimed = set()
+        for m in self.FALSE_CLAIM_WORDS.finditer(note):
+            window = note[max(0, m.start() - 80):m.start()]
+            subjects = [t for t in re.findall(r"\b[A-Z][A-Z0-9_]{3,}\b", window)
+                        if not catalog.describe(t).empty]
+            if subjects:
+                claimed.add(subjects[-1])        # the nearest code is the claim's subject
+        claimed = sorted(claimed)
+        false = []
+        for var in claimed:
+            have_all = True
+            for cycle in cycles:
+                present = named & self.present.get(cycle, set())
+                if not present:
+                    continue
+                cov = self._coverage_for(var, instrument, cycle)
+                if cov is None:
+                    have_all = False        # unknown: do not judge
+                    break
+                if cov["partial"] and present & cov["missing"]:
+                    have_all = False
+                    break
+            if have_all:
+                false.append(var)
+        if not false:
+            return
+        if "ST004D01T" in false:
+            plan["substitution_note"] = (
+                "PISA 2025 uses the derived MALE flag (1 = Male, 0 = Female/Other) for "
+                "gender in every economy — the standard convention, not a missing-data "
+                "workaround; 2018 and 2022 use ST004D01T (1 = Female, 2 = Male).")
+        else:
+            plan["substitution_note"] = (
+                f"{', '.join(sorted(false))} is available for the economies in this "
+                "question; the planner's substitution was not needed for coverage reasons.")
+        plan["_claim_corrected"] = sorted(false)
+
+    @staticmethod
+    def _category_label(variable: str, value, table: str) -> str:
+        """'MALE = 0 (Female/Other)': the code plus its codebook label."""
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        text = f"{variable} = {value}"
+        try:
+            desc = catalog.describe(variable, cycle=table.rsplit("_", 1)[-1])
+            desc = desc[desc.table_name.isin(Agent.underlying_tables(table))]
+            if not desc.empty and desc.iloc[0].value_labels:
+                labels = json.loads(desc.iloc[0].value_labels)
+                key = str(int(value)) if isinstance(value, (int, float)) and float(value).is_integer() else str(value)
+                label = labels.get(key) or labels.get(f"{key}.0")
+                if label:
+                    text += f" ({label})"
+        except Exception:  # noqa: BLE001 — a label is a nicety, never a failure
+            pass
+        return text
+
+    CHINA_WORDS = re.compile(r"\b(shanghai|beijing|jiangsu|zhejiang|china|chinese)\b", re.I)
+    RANK_WORDS = re.compile(r"\b(rank|ranks|ranked|ranking|rankings|order)\b", re.I)
+
+    def _qci_note(self, question: str, plan: dict) -> str | None:
+        text = f"{plan.get('where') or ''} {plan.get('regions') or ''}"
+        if "QCI" in text and self.CHINA_WORDS.search(question or "") \
+                and not re.search(r"\bB-S-J-Z\b", question or "", re.I):
+            return ("QCI is B-S-J-Z (China): the four provinces Beijing, Shanghai, Jiangsu "
+                    "and Zhejiang assessed together. Shanghai (or any single province) is "
+                    "not reported separately, and China as a whole is not in PISA; the "
+                    "figures are for the four-province group.")
+        return None
+
+    def _keep_full_ranking(self, question: str, plan: dict) -> None:
+        """"Rank X and name the largest" asks for the ranking; a planner top_n of
+        1 would throw the table away and leave only the winner."""
+        if plan.get("top_n") == 1 and plan.get("sort_by") and self.RANK_WORDS.search(question or ""):
+            plan["top_n"] = None
+            plan["_ranking_kept"] = True
+
+    @staticmethod
+    def _drop_null_groups(res: pd.DataFrame, by) -> tuple[pd.DataFrame, dict]:
+        """Rows whose grouping value is missing are not a group (OECD practice
+        drops them); returned separately so provenance can say so."""
+        dropped = {}
+        for col in by:
+            if col == "CNT" or col not in res.columns:
+                continue
+            null = res[col].isna()
+            if null.any():
+                dropped[col] = int(null.sum())
+                res = res[~null]
+        return res, dropped
 
     # ---------- several measures at once ----------
 
@@ -923,6 +1071,101 @@ class Agent:
                   ("explanation", "clarify", "limitation_note", "substitution_note")}
         text = json.dumps(fields, default=str).upper()
         return [name for name, token in named if token not in text]
+
+    def _dropped_economies(self, question: str, plan: dict) -> list[str]:
+        """Economies the question names that the plan neither filters to, nor
+        covers through a region or a benchmark group — stated, never dropped."""
+        named = self._economies_in_data(question)
+        if len(named) < 2:
+            return []
+        cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
+        where = str(plan.get("where") or "")
+        if not where and not plan.get("regions"):
+            return []                       # an all-economies plan covers everyone
+        covered = set(re.findall(r"'([A-Z]{3})'", where))
+        for c in cycles:
+            for info in (self._region_filter(plan, [c]) or {}).values():
+                covered |= set(info["codes"])
+            for bench in self._benchmarks(plan):
+                resolved = self._average_members(bench, c)
+                if resolved:
+                    covered |= resolved[1]
+        return [c for c in named if c not in covered]
+
+    # "Why can't I see maths results for Uzbekistan?" — answered from the
+    # coverage table plus the OECD's own stated reasons, never improvised.
+    WHY_MISSING_WORDS = re.compile(
+        r"\bwhy\b.{0,80}\b(no|not|can[’']?t|cannot|don[’']?t|doesn[’']?t|isn[’']?t|aren[’']?t|missing|absent|blank|empty|unavailable|"
+        r"omitted|excluded|withheld)\b.{0,80}\b(results?|scores?|data|estimates?|values?|pvs?|"
+        r"plausible values)\b|\bwhy (is|are) (there )?(no|not any)\b|"
+        r"\b(no|missing|blank|without) (math\w*|reading|science) (results?|scores?|data) for\b",
+        re.IGNORECASE | re.DOTALL)
+    RELEASE_REASONS = {
+        ("UZB", "2025"): ("The OECD's PISA 2025 Technical Report (Data Adjudication chapter) "
+                          "states that the adjudication group identified inconsistencies in "
+                          "the reading and mathematics response data for Uzbekistan that "
+                          "required further investigation before they could be considered fit "
+                          "for reporting; only the science results were released."),
+    }
+    DOMAIN_PV = {"MATH": "PV1MATH", "READ": "PV1READ", "SCIE": "PV1SCIE"}
+
+    def _missing_results_answer(self, codes: list[str]) -> str:
+        parts = []
+        for code in codes:
+            name = self.economy_names.get(code, code)
+            for cycle in sorted(self.present):
+                if code not in self.present[cycle]:
+                    parts.append(f"{name} ({code}) did not take part in PISA {cycle}.")
+                    continue
+                have, lack = [], []
+                for dom, pv in self.DOMAIN_PV.items():
+                    cov = catalog.coverage(pv, f"stu_qqq_{cycle}")
+                    (lack if cov and cov["partial"] and code in cov["missing"] else have).append(
+                        link_errors.DOMAIN_NAMES[dom])
+                if not lack:
+                    parts.append(f"PISA {cycle}: {name} has results in all three domains "
+                                 f"({', '.join(have)}); ask for them directly.")
+                    continue
+                line = (f"PISA {cycle}: {name} took part, but the public-use database holds "
+                        f"its results for {', '.join(have) or 'no domain'} only — the "
+                        f"{' and '.join(lack)} plausible values were not released by the OECD, "
+                        "so this app cannot compute them.")
+                reason = self.RELEASE_REASONS.get((code, cycle))
+                line += f" {reason}" if reason else (" The OECD did not publish a reason in the "
+                                                     "documents held here.")
+                parts.append(line)
+        return " ".join(parts)
+
+    # "How many students were tested in X?" with nothing else asked — a fact
+    # read from the tables, not a plan.
+    COUNT_WORDS = re.compile(
+        r"\bhow many (students|pupils|children|kids|schools|participants)\b|"
+        r"\bnumber of (students|pupils|schools|participants) (tested|sampled|assessed|"
+        r"participat\w*|took part|surveyed)|\bsample sizes?\b", re.IGNORECASE)
+    OTHER_STAT_WORDS = re.compile(
+        r"\b(percent\w*|share|proportion|average|mean|score|scores|gap|trend|rank\w*|"
+        r"correlat\w*|compare|comparison|girls|boys|female|male|below|above|level)\b",
+        re.IGNORECASE)
+
+    def _count_answer(self, codes: list[str], question: str) -> str:
+        years = set(self.YEAR_RE.findall(question))
+        parts = []
+        for code in codes:
+            name = self.economy_names.get(code, code)
+            for cycle in sorted(self.present):
+                if years and cycle not in years:
+                    continue
+                if code not in self.present[cycle]:
+                    parts.append(f"{name} ({code}) did not take part in PISA {cycle}.")
+                    continue
+                n, schools, wsum = self.con.sql(
+                    f"SELECT count(*), count(DISTINCT CNTSCHID), sum(W_FSTUWT) "
+                    f"FROM stu_qqq_{cycle} WHERE CNT = '{code}'").fetchone()
+                parts.append(f"PISA {cycle}: {name} ({code}) — {int(n):,} students sampled in "
+                             f"{int(schools):,} schools, representing an estimated "
+                             f"{int(round(wsum)):,} 15-year-olds (sum of final student weights).")
+        return " ".join(parts) + (" Sample sizes also accompany every analysis in its "
+                                  "provenance card." if parts else "")
 
     # "What does PISA measure?" — the overview is a fact about the data, not
     # a catalog search.
@@ -1258,8 +1501,10 @@ class Agent:
             plan["_no_trend"] = len(cycles) < 2     # no change is computed
         # Several measures for the same groups ("math, reading and ESCS for
         # Argentina"): run each and stack the rows with a `measure` column.
+        self._keep_full_ranking(str(plan.get("_question") or ""), plan)
         measures_all = self._measure_list(plan)
         multi = len(measures_all) > 1
+        benchmarks = self._benchmarks(plan)
         per_cycle: dict[str, pd.DataFrame] = {}
         for cycle in cycles:
             tbl = f"{instrument}_{cycle}"
@@ -1282,15 +1527,29 @@ class Agent:
                     continue
                 mplan = {**cplan, "measure": expr} if expr is not None else cplan
                 res = self._run_template(template, mplan, tbl, by, cwhere)
-                if plan.get("include_oecd_average") and "CNT" in by:
-                    # "The OECD average" means all OECD members — when the question
-                    # is filtered to a region or a few countries, the average must
+                res, dropped_groups = self._drop_null_groups(res, by)
+                for col, n in dropped_groups.items():
+                    plan.setdefault("_null_groups", {}).setdefault(col, {})[cycle] = n
+                if benchmarks and "CNT" in by:
+                    # "The OECD / EU average" means ALL members of the group — when
+                    # the question is filtered to a few countries, the average must
                     # NOT be taken over just the members inside the filter.
-                    basis = res if cwhere is None else \
-                        self._run_template(template, mplan, tbl, by, "OECD = 1")
-                    avg = self._oecd_average_rows(basis, tbl)
-                    if avg is not None:
-                        res = pd.concat([res, avg], ignore_index=True)
+                    for bench in benchmarks:
+                        resolved = self._average_members(bench, cycle)
+                        if resolved is None:
+                            plan.setdefault("_unknown_benchmarks", []).append(str(bench))
+                            continue
+                        label_b, members = resolved
+                        if not members:
+                            continue
+                        clause = "CNT IN (" + ", ".join(f"'{c}'" for c in sorted(members)) + ")"
+                        basis = res if cwhere is None else \
+                            self._run_template(template, mplan, tbl, by, clause)
+                        avg = self._group_average_rows(basis, members, label_b)
+                        if avg is not None:
+                            res = pd.concat([res, avg], ignore_index=True)
+                            plan.setdefault("_benchmark_members", {}).setdefault(
+                                cycle, {})[label_b] = sorted(members)
                 if label is not None:
                     res.insert(1 if "CNT" in res.columns else 0, "measure", label)
                 parts.append(res)
@@ -1329,6 +1588,8 @@ class Agent:
                     "no data match this question in any requested cycle — "
                     f"filter {where or 'none'}; check the economy's participation "
                     "(for example El Salvador joined PISA in 2022).")
+        if len(cycles) >= 2:
+            plan["_trend_cycles"] = (cycles[0], cycles[-1])
         if len(cycles) >= 2 and multi:
             # one trend per measure: each domain has its own link error
             pieces, les = [], {}
@@ -1362,7 +1623,7 @@ class Agent:
                              if c in table.columns), None)
             if rank_col:
                 table = table.reset_index(drop=True)
-                economies = table["CNT"].astype(str) != "OECD avg"   # the average is not a rank
+                economies = ~table["CNT"].astype(str).str.endswith(" avg")   # averages are not ranked
                 ranks = table.loc[economies, rank_col].rank(ascending=False, method="min")
                 table.insert(0, "rank", ranks.reindex(table.index).astype("Int64"))
         if plan.get("top_n"):
@@ -1373,13 +1634,59 @@ class Agent:
         prov["notes"].extend(self._missing_estimate_notes(table, plan))
         return table, prov
 
-    def _oecd_average_rows(self, res: pd.DataFrame, tbl: str) -> pd.DataFrame | None:
-        """Official OECD-average convention: the UNWEIGHTED mean of member
-        countries' estimates (each country counts equally — not a pooled
-        student-weighted mean, which would overweight populous countries).
-        Countries are independent samples, so SE = sqrt(sum SE_i^2) / N."""
-        members = {r[0] for r in self.con.sql(
-            f"SELECT DISTINCT CNT FROM {tbl} WHERE OECD = 1").fetchall()}
+    AVG_SHORT = {"European Union": "EU", "Latin America and the Caribbean": "LatAm",
+                 "Nordic countries": "Nordic", "Middle East and North Africa": "MENA",
+                 "Sub-Saharan Africa": "SSA", "Southeast Asia": "SE Asia",
+                 "East Asia": "E Asia", "Central Asia": "C Asia", "North America": "N America",
+                 "South America": "S America", "Central America": "C America",
+                 "Baltic states": "Baltic", "Western Balkans": "W Balkans"}
+
+    def _benchmarks(self, plan: dict) -> list:
+        """Benchmark groups a plan asks for: "OECD", region names, or an
+        explicit list of codes — deduplicated, in plan order."""
+        out = []
+        if plan.get("include_oecd_average"):
+            out.append("OECD")
+        raw = plan.get("include_average_of")
+        if isinstance(raw, str):
+            raw = [raw]
+        if isinstance(raw, list):
+            codes = [str(x).upper() for x in raw if isinstance(x, str) and re.fullmatch(r"[A-Za-z]{3}", str(x))]
+            names = [x for x in raw if isinstance(x, str) and not re.fullmatch(r"[A-Za-z]{3}", x)]
+            if len(codes) >= 2 and len(codes) == len(raw):
+                out.append(tuple(sorted(set(codes))))        # ad-hoc group
+            else:
+                out.extend(names)
+                if len(codes) >= 2:
+                    out.append(tuple(sorted(set(codes))))
+        seen, uniq = set(), []
+        for b in out:
+            key = b if isinstance(b, tuple) else str(b).strip().lower()
+            if key not in seen:
+                seen.add(key); uniq.append(b)
+        return uniq
+
+    def _average_members(self, bench, cycle: str) -> tuple[str, set[str]] | None:
+        """(row label, member codes present in `cycle`) for a benchmark, or
+        None when the name is not a known group."""
+        present = self.present.get(cycle, set())
+        if isinstance(bench, tuple):
+            return "Group avg", set(bench) & present
+        if str(bench).strip().lower() == "oecd":
+            return "OECD avg", self._oecd_codes(cycle)
+        canon = regions.canonical(str(bench))
+        if canon is None:
+            return None
+        codes = set(regions.expand([canon], {cycle: present})[cycle]["codes"])
+        return f"{self.AVG_SHORT.get(canon, canon)} avg", codes
+
+    def _group_average_rows(self, res: pd.DataFrame, members: set[str],
+                            label: str) -> pd.DataFrame | None:
+        """Official OECD-average convention, for any group: the UNWEIGHTED mean
+        of member economies' estimates (each economy counts equally — not a
+        pooled student-weighted mean, which would overweight populous
+        countries). Economies are independent samples, so SE = sqrt(sum
+        SE_i^2) / N."""
         sub = res[res["CNT"].isin(members)]
         if sub.empty:
             return None
@@ -1399,7 +1706,7 @@ class Agent:
         else:
             avg = agg(sub).to_frame().T
         avg["n_pv"] = avg["n_pv"].astype(int)
-        avg.insert(0, "CNT", "OECD avg")
+        avg.insert(0, "CNT", label)
         return avg
 
     def _run_template(self, template: str, plan: dict, tbl: str,
@@ -1414,9 +1721,14 @@ class Agent:
             # that is exactly weighted_mean of the 0/100 measure.
             return weighted_mean(self.con, tbl, plan["measure"], by=by, where=where)
         if template == "weighted_proportion":
-            return weighted_proportion(
+            res = weighted_proportion(
                 self.con, tbl, plan["variable"], plan["value"], by=by,
                 where=where, valid_values=plan.get("valid_values"))
+            # Say WHICH category the percentage is — "MALE = 0 (Female/Other)" —
+            # so a summary can never invert it (49% girls is not 49% boys).
+            res.insert(1 if "CNT" in res.columns else 0, "category",
+                       self._category_label(plan["variable"], plan["value"], tbl))
+            return res
         if template == "gap":
             group_col = str(plan["group_col"])
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", group_col):
@@ -1576,10 +1888,38 @@ class Agent:
         if "{pv}" in pv_fields:
             method += " Point estimate averaged over 10 plausible values (Rubin's rules)."
         notes = []
-        if plan.get("include_oecd_average"):
+        members_by_cycle = plan.get("_benchmark_members") or {}
+        if members_by_cycle:
+            labels = sorted({lab for d in members_by_cycle.values() for lab in d})
+            detail = "; ".join(
+                f"{lab}: " + ", ".join(
+                    f"PISA {c} = {len(d[lab])} economies" for c, d in sorted(members_by_cycle.items()) if lab in d)
+                for lab in labels)
+            notes.append(f"The \"{'\", \"'.join(labels)}\" row(s) follow the official OECD-average "
+                         "convention: the unweighted mean of the member economies' estimates "
+                         f"(SE = sqrt(sum of member SEs squared) / N), over all members present "
+                         f"in each cycle, not only those in the question's filter ({detail}).")
+        elif plan.get("include_oecd_average"):
             notes.append('The "OECD avg" row follows the official convention: '
                          "the unweighted mean of OECD member countries' "
                          "estimates (SE = sqrt(sum of country SEs squared) / N).")
+        for col, per_cycle_n in sorted((plan.get("_null_groups") or {}).items()):
+            desc = catalog.describe(col)
+            label = desc.iloc[-1].label if not desc.empty else col
+            cycles_txt = ", ".join(f"PISA {c}" for c in sorted(per_cycle_n))
+            notes.append(f"Students with no value on {label} ({col}) — no response, or no "
+                         f"school questionnaire for their school — are excluded from the "
+                         f"groups in {cycles_txt}, following OECD practice; there is no "
+                         "\"overall\" row in this table.")
+        qci = self._qci_note(str(plan.get("_question") or ""), plan)
+        if qci:
+            notes.append(qci)
+        if plan.get("_ranking_kept"):
+            notes.append("The full ranking is shown (the question asked for a ranking as "
+                         "well as the top economy).")
+        for bench in plan.get("_unknown_benchmarks") or []:
+            notes.append(f"NOT DONE: \"{bench}\" is not a group this app knows (OECD or a "
+                         "region from its fixed list), so no average row was added for it.")
         if plan.get("substitution_note") and not plan.get("_school_type_switched"):
             notes.append(f"VARIABLE SUBSTITUTION: {plan['substitution_note']}")
         if plan.get("_school_type_switched"):
@@ -1589,7 +1929,7 @@ class Agent:
                          "flag (57 economies in 2025) was not used.")
         cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
         if len(cycles) >= 2 and not plan.get("_no_trend"):
-            first, last = cycles[0], cycles[-1]
+            first, last = plan.get("_trend_cycles") or (cycles[0], cycles[-1])
             method += (f" Cross-cycle change = {last} minus {first}: independent "
                        f"samples, SE = sqrt(SE{first[2:]}^2 + SE{last[2:]}^2).")
             le = plan.get("_link_error")
@@ -1894,7 +2234,7 @@ class Agent:
         summary can say 'B-S-J-Z (China)' instead of the bare code 'QCI'."""
         if "CNT" not in shown.columns:
             return ""
-        codes = [c for c in shown["CNT"].dropna().astype(str).unique() if c != "OECD avg"]
+        codes = [c for c in shown["CNT"].dropna().astype(str).unique() if not c.endswith(" avg")]
         if not codes:
             return ""
         names: dict[str, str] = {}
@@ -1962,6 +2302,16 @@ class Agent:
             return AgentResult(question, self._link_error_answer(), route="conversational")
         if self.OVERVIEW_WORDS.search(question):
             return AgentResult(question, self._overview_answer(), route="conversational")
+        if self.WHY_MISSING_WORDS.search(question):
+            named = self._economies_in_data(question)
+            if named:
+                return AgentResult(question, self._missing_results_answer(named),
+                                   route="conversational")
+        if self.COUNT_WORDS.search(question) and not self.OTHER_STAT_WORDS.search(question):
+            named = self._economies_in_data(question)
+            if named:
+                return AgentResult(question, self._count_answer(named, question),
+                                   route="conversational")
         if self.COVERAGE_RATE_WORDS.search(question):
             return AgentResult(question, self._coverage_rate_answer(), route="conversational")
         route = generate_json(f"{context}Question: {question}",
@@ -2001,6 +2351,7 @@ class Agent:
         )
         plan["_question"] = question
         self._prefer_reported_school_type(plan)
+        self._verify_substitution_claims(plan)
         dropped = self._dropped_measures(question, plan)
         if dropped and plan.get("action") != "clarify":
             note = ("Also asked but not computed in this answer: " + ", ".join(dropped)
@@ -2008,6 +2359,14 @@ class Agent:
                       "or one at a time.")
             plan["limitation_note"] = (f"{plan['limitation_note']} {note}"
                                        if plan.get("limitation_note") else note)
+        if plan.get("action") != "clarify":
+            left_out = self._dropped_economies(question, plan)
+            if left_out:
+                note = ("Economies named in the question but not in this table: "
+                        f"{self._names(left_out)} — ask again naming them as rows, or as a "
+                        "group average (e.g. “… with the EU average”).")
+                plan["limitation_note"] = (f"{plan['limitation_note']} {note}"
+                                           if plan.get("limitation_note") else note)
         if plan.get("action") == "clarify":
             return AgentResult(question, self._plain(plan.get("clarify"))
                                or "I need more detail to answer that.",
@@ -2043,10 +2402,18 @@ class Agent:
                 provenance["notes"].append(
                     "Position(s) located by the app in the ranked table: "
                     + "; ".join(positions) + ".")
+        sample_line = "; ".join(
+            f"{smp['table']}: {smp['students']:,} students sampled"
+            + (f", representing {smp['weighted_students']:,} 15-year-olds (sum of weights)"
+               if smp.get("weighted_students") else "")
+            for smp in provenance.get("sample") or [] if smp.get("students") is not None)
+        sample_block = (f"SAMPLE SIZES (within the question's filter): {sample_line}" + chr(10)
+                        if sample_line else "")
         summary_prompt = (
             f"QUESTION: {question}\n"
             f"PLANNED: {plan.get('explanation')}\n"
             f"METHOD: {provenance['method']}\n"
+            f"{sample_block}"
             f"NOTES: {'; '.join(provenance['notes']) or 'none'}\n"
             f"{legend}{focus}{truncation}"
             f"RESULT TABLE (CSV):\n{shown.to_csv(index=False)}"
