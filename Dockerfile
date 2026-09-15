@@ -12,7 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY pipeline/ pipeline/
 COPY explorer/ explorer/
 
-# Data: Parquet tables, the variable catalog, and the ESCS trend file.
+# Data: Parquet tables, the variable catalog (incl. coverage.parquet from
+# pipeline/build_coverage.py), and the ESCS trend file.
 # (data/pisa.duckdb is NOT copied — it is rebuilt right here.)
 COPY data/parquet/ data/parquet/
 COPY data/catalog/ data/catalog/

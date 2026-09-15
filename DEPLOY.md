@@ -100,6 +100,13 @@ gcloud run deploy pisa-explorer `
 and limits.) Repeat the full archive route only when the data or the pipeline
 changes, then point `_DATA_IMAGE` in `cloudbuild.code.yaml` at the new data tag.
 
+The code-only image also carries `data/catalog/coverage.parquet` (which
+economies collected each questionnaire variable, per cycle — built by
+`python pipeline/build_coverage.py` in a few seconds from the local DuckDB).
+`.gcloudignore.code` re-includes exactly that file from the otherwise
+excluded `data/`; if it is missing locally the Docker `COPY` fails the build
+rather than shipping an image without coverage checks.
+
 ## Data updates (e.g. adding a PISA cycle)
 
 Adding PISA 2025 changed the data, so the live `v1` data image (2018 + 2022
@@ -107,7 +114,8 @@ only) cannot be reused by a code-only build: the 2025 views would be missing
 and every 2025 question would fail. After a data change:
 
 1. rebuild locally: `python pipeline/convert.py`, `build_db.py`,
-   `build_catalog.py`, `validate.py` (and `check_2025_published.py`);
+   `build_catalog.py`, `build_coverage.py`, `validate.py` (and
+   `check_2025_published.py`);
 2. run the **full archive route** above with a new tag (e.g. `v3`), then
    `gcloud run deploy --image ...:v3`;
 3. set the tag in `_DATA_IMAGE` in `cloudbuild.code.yaml` (the project ID

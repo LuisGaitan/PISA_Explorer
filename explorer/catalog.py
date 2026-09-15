@@ -116,6 +116,40 @@ def describe(variable: str, cycle: str | None = None) -> pd.DataFrame:
     return hits[["variable", "table_name", "cycle", "label", "var_type", "value_labels"]]
 
 
+@functools.lru_cache(maxsize=1)
+def _load_coverage() -> pd.DataFrame | None:
+    """data/catalog/coverage.parquet (pipeline/build_coverage.py); None when
+    it has not been built — coverage checks then simply switch off."""
+    path = CATALOG_DIR / "coverage.parquet"
+    if not path.exists():
+        return None
+    return pd.read_parquet(path)
+
+
+def coverage(variable: str, table: str) -> dict | None:
+    """Which economies actually collected `variable` in `table`.
+
+    Returns None when nothing is known (no coverage file, or the variable is
+    not in that table). Otherwise: n_economies, n_with_data, partial (True
+    when some economies have no values at all), with_data and missing (sets
+    of CNT codes; both None when the variable is complete)."""
+    df = _load_coverage()
+    if df is None:
+        return None
+    hit = df[(df.variable.str.upper() == variable.upper()) & (df.table_name == table)]
+    if hit.empty:
+        return None
+    r = hit.iloc[0]
+    partial = isinstance(r.with_data, str)
+    return {
+        "n_economies": int(r.n_economies),
+        "n_with_data": int(r.n_with_data),
+        "partial": partial,
+        "with_data": set(r.with_data.split()) if partial else None,
+        "missing": set(r.missing.split()) if partial and isinstance(r.missing, str) else (set() if partial else None),
+    }
+
+
 def comparability(variable: str) -> pd.DataFrame:
     """Cross-cycle availability of a variable across shared instruments."""
     df = pd.read_parquet(CATALOG_DIR / "comparability.parquet")

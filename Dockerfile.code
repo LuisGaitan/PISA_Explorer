@@ -14,6 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY pipeline/ pipeline/
 COPY explorer/ explorer/
+# Per-economy coverage of questionnaire variables (pipeline/build_coverage.py):
+# small and rebuilt with the code, so it rides along here rather than waiting
+# for the next data image. .gcloudignore.code re-includes exactly this file.
+COPY data/catalog/coverage.parquet data/catalog/coverage.parquet
 
 # Re-register views in case pipeline/build_db.py changed (data itself is
 # untouched; this takes ~1 s).

@@ -40,7 +40,13 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 STATIC_TYPES = {".html": "text/html; charset=utf-8",
                 ".js": "application/javascript; charset=utf-8",
                 ".css": "text/css; charset=utf-8",
-                ".png": "image/png"}
+                ".png": "image/png",
+                ".svg": "image/svg+xml"}
+# Browsers and link-preview crawlers request these at the site root.
+ROOT_ICONS = {"/favicon.ico": "favicon.png",
+              "/favicon.png": "favicon.png",
+              "/apple-touch-icon.png": "apple-touch-icon.png",
+              "/apple-touch-icon-precomposed.png": "apple-touch-icon.png"}
 
 RATE_LIMIT = int(os.environ.get("PISA_RATE_LIMIT", "20"))
 GLOBAL_RATE = int(os.environ.get("PISA_GLOBAL_RATE", "200"))
@@ -138,7 +144,8 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in (extra_headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":      # HEAD: headers only, same Content-Length
+            self.wfile.write(body)
 
     def _send_json(self, status: int, payload: dict, **kw) -> None:
         try:
@@ -188,14 +195,29 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- GET ----------
 
+    def _origin(self) -> str:
+        """Scheme + host this request arrived on, for absolute URLs in the
+        page's link-preview tags (crawlers ignore relative og:image)."""
+        proto = self.headers.get("X-Forwarded-Proto") or "http"
+        host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "localhost"
+        return f"{proto}://{host}"
+
+    def do_HEAD(self):
+        # Share sheets and link-preview bots probe with HEAD; the stdlib
+        # server answers 501 unless told otherwise. Same headers as GET.
+        self.do_GET()
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path in ("/", "/index.html"):
             _, cookie = self._sid()
             html = (STATIC_DIR / "index.html").read_bytes()
+            html = html.replace(b"__ORIGIN__", self._origin().encode("ascii", "ignore"))
             self._send(200, html, "text/html; charset=utf-8", extra_headers=cookie)
         elif path == "/admin":
             self._serve_static("admin.html")
+        elif path in ROOT_ICONS:
+            self._serve_static(ROOT_ICONS[path])
         elif path.startswith("/static/"):
             self._serve_static(path[len("/static/"):])
         elif path == "/api/health":

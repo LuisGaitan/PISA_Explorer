@@ -189,3 +189,119 @@ def test_estimator_handles_empty_input_without_crashing():
     assert reps.empty and list(reps.columns) == ["CNT", "pv", "rep", "value"]
     out = combine(reps, by=("CNT",))
     assert out.empty and list(out.columns) == ["CNT", "estimate", "se", "n_pv"]
+
+
+# ---------- coverage of optional questionnaires ----------
+
+def _coverage_agent(monkeypatch, coverage: dict):
+    """An Agent with no DB, a fixed participant list and a fake coverage table
+    keyed by (variable, table)."""
+    from explorer.agent import Agent
+    from explorer import catalog
+    agent = Agent.__new__(Agent)
+    agent.present = {"2022": {"USA", "ESP", "FRA", "DEU"}, "2018": {"USA", "ESP", "FRA", "DEU"}}
+    agent.economy_names = {"USA": "United States", "ESP": "Spain", "FRA": "France", "DEU": "Germany"}
+    labels = {"EXPWB": "Experienced Well-being (Previous Day) (WLE)", "PV1MATH": "Math PV 1",
+              "SWBP": "Subjective well-being: Positive affect (WLE)"}
+
+    def fake_describe(var, cycle=None):
+        return pd.DataFrame({"variable": [var], "table_name": [f"stu_qqq_{cycle or '2022'}"],
+                             "cycle": [cycle or "2022"], "label": [labels.get(var, var)],
+                             "var_type": ["double"], "value_labels": [None]})
+
+    def fake_coverage(var, table):
+        row = coverage.get((var, table))
+        if row is None:
+            return None
+        with_data = set(row)
+        every = {"USA", "ESP", "FRA", "DEU"} | with_data
+        return {"n_economies": len(every), "n_with_data": len(with_data),
+                "partial": with_data != every, "with_data": with_data if with_data != every else None,
+                "missing": (every - with_data) if with_data != every else None}
+
+    monkeypatch.setattr(catalog, "describe", fake_describe)
+    monkeypatch.setattr(catalog, "coverage", fake_coverage)
+    return agent
+
+
+def test_coverage_guard_blocks_a_cycle_the_named_economy_never_collected(monkeypatch):
+    cov = {("EXPWB", "stu_qqq_2022"): ["ESP", "FRA"], ("PV1MATH", "stu_qqq_2022"): ["USA", "ESP", "FRA", "DEU"]}
+    agent = _coverage_agent(monkeypatch, cov)
+    plan = {"template": "correlation", "x": "EXPWB", "y": "PV{pv}MATH", "where": "CNT IN ('USA')"}
+    findings = agent._coverage_check(plan, ["2022"], "stu_qqq", {}, {})
+    assert list(findings) == ["2022"]
+    f = findings["2022"][0]
+    assert f["variable"] == "EXPWB" and f["blocked"] and f["named_missing"] == ["USA"]
+    msg = agent._coverage_message(findings)
+    assert "United States (USA) did not administer" in msg and "2 of 4 economies" in msg
+    assert "Spain (ESP)" in msg                       # economies with data are listed
+    note = agent._coverage_note(f)
+    assert "omitted" in note and "PISA 2022" in note
+    # one of two named economies lacking it => not blocked, but noted
+    plan2 = {**plan, "where": "CNT IN ('USA', 'ESP')"}
+    f2 = agent._coverage_check(plan2, ["2022"], "stu_qqq", {}, {})["2022"][0]
+    assert not f2["blocked"] and f2["named_missing"] == ["USA"]
+    assert "NOT collected for United States (USA)" in agent._coverage_note(f2)
+    # a complete variable never produces a finding
+    plan3 = {"template": "weighted_mean", "measure": "PV{pv}MATH", "where": "CNT IN ('USA')"}
+    assert agent._coverage_check(plan3, ["2022"], "stu_qqq", {}, {}) == {}
+
+
+def test_coverage_cards_flag_named_economies_and_offer_alternatives(monkeypatch):
+    cov = {("EXPWB", "stu_qqq_2022"): ["ESP", "FRA"],
+           ("SWBP", "stu_qqq_2018"): ["USA", "ESP", "FRA", "DEU"]}
+    agent = _coverage_agent(monkeypatch, cov)
+    hits = pd.DataFrame({"variable": ["EXPWB", "SWBP"], "table_name": ["stu_qqq_2022", "stu_qqq_2018"],
+                         "cycle": ["2022", "2018"],
+                         "label": ["Experienced Well-being (Previous Day) (WLE)",
+                                   "Subjective well-being: Positive affect (WLE)"],
+                         "n_value_labels": [0, 0], "score": [50.0, 40.0]})
+    cards = agent._cards(hits, named=["USA"])
+    assert "stu_qqq_2022: NOT collected for USA" in cards
+    assert "SWBP" in cards and "NOT collected for USA (collected in 4" not in cards
+    alts = agent._coverage_alternatives(hits, {"USA"}, {"EXPWB"})
+    assert alts == ["Subjective well-being: Positive affect (WLE) (SWBP; PISA 2018)"]
+
+
+def test_user_facing_text_drops_planner_notation():
+    from explorer.agent import Agent
+    text = ("Please choose: 1) COOPAGR and PV{pv}MATH, or 2) IC174Q10JA and "
+            "PV1MATH; `PV{pv}SCIE` too")
+    out = Agent._plain(text)
+    assert "{pv}" not in out and "PV1MATH" not in out and "`" not in out
+    assert out.count("mathematics score") == 2 and "science score" in out
+    assert Agent._plain(None) == ""
+
+
+def test_gender_override_direction_is_aligned_to_the_main_plan():
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    # main plan: female minus male (1 - 2); override says male minus female (1 - 0)
+    plan = {"template": "gap", "group_col": "ST004D01T", "minuend": 1, "subtrahend": 2,
+            "cycle_overrides": {"2025": {"group_col": "MALE", "minuend": 1, "subtrahend": 0}}}
+    overrides = {k: v for k, v in plan["cycle_overrides"].items()}
+    agent._align_gender_direction(plan, overrides)
+    assert overrides["2025"] == {"group_col": "MALE", "minuend": 0, "subtrahend": 1}
+    assert plan["cycle_overrides"]["2025"]["minuend"] == 0          # same dict object
+    assert plan["_direction_fixed"] and "re-aligned" in plan["_direction_fixed"][0]
+    # a consistent override is left alone
+    plan2 = {"template": "gap", "group_col": "ST004D01T", "minuend": 2, "subtrahend": 1,
+             "cycle_overrides": {"2025": {"group_col": "MALE", "minuend": 1, "subtrahend": 0}}}
+    ov2 = dict(plan2["cycle_overrides"])
+    agent._align_gender_direction(plan2, ov2)
+    assert ov2["2025"] == {"group_col": "MALE", "minuend": 1, "subtrahend": 0}
+    assert "_direction_fixed" not in plan2
+
+
+def test_blank_estimates_distinguish_non_participation_from_missing_variables():
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    agent.present = {"2018": {"MEX", "BRA"}, "2022": {"MEX", "BRA", "SLV"}}
+    agent.economy_names = {"SLV": "El Salvador", "MEX": "Mexico", "BRA": "Brazil"}
+    table = pd.DataFrame({"CNT": ["MEX", "BRA", "SLV"],
+                          "estimate_2018": [408.0, 383.0, np.nan], "se_2018": [2.0, 2.0, np.nan],
+                          "estimate_2022": [395.0, np.nan, 343.0], "se_2022": [2.0, np.nan, 2.0]})
+    notes = agent._missing_estimate_notes(table)
+    assert notes[0].startswith("PISA 2018: El Salvador (SLV) did not take part")
+    assert "1 row(s) have no estimate" in notes[1]          # Brazil's blank 2022 cell is a real gap
+    assert agent._missing_estimate_notes(table.dropna()) == []

@@ -1,7 +1,12 @@
 # Upload context for the code-only build: everything except data and secrets.
+# Exception: the small coverage table (data/catalog/coverage.parquet) ships
+# with the code — gitignore-style re-inclusion needs the parent kept visible.
 .git/
 .env
 __pycache__/
 *.pyc
-data/
+data/*
+!data/catalog/
+data/catalog/*
+!data/catalog/coverage.parquet
 *.log

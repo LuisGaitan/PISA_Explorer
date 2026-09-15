@@ -123,7 +123,14 @@ URY) release only the derived flag MALE (1=Male, 0=Female/Other), which is
 complete for all 90 economies — so for 2025 use MALE (gap: group_col="MALE",
 minuend=1, subtrahend=0; dummy: "CASE WHEN MALE = 1 THEN 1 ELSE 0 END"). In a
 plan that spans 2018/2022 AND 2025, keep ST004D01T in the main fields and put
-the 2025 variant in cycle_overrides (see below).
+the 2025 variant in cycle_overrides (see below). Using MALE in 2025 is the
+standard convention for EVERY economy (it is complete for all 90), not a
+missing-data workaround. The contrast must point the SAME way in every
+cycle: male minus female is minuend=2, subtrahend=1 with ST004D01T and
+minuend=1, subtrahend=0 with MALE (the app re-aligns a mismatch, but plan it
+right) — do not claim ST004D01T was not collected for an
+economy unless a card says so; the substitution_note should just say that
+2025 uses the derived MALE flag.
 
 PISA 2025 SPECIFICS: 90 economies (80 in 2018/2022). Science was the major
 domain; the same proficiency-level cutoffs apply in every cycle (the scales are
@@ -239,7 +246,33 @@ Rules: a COMPOUND question (a computable analysis plus a "why" / "which
 factors" / "what explains it" part) => action="analyze" the computable part
 and fill limitation_note — never answer with action="clarify" just because
 one part is out of reach; a partial answer with a stated limitation beats a
-question back to the user. Comparisons across cycles => list every cycle
+question back to the user.
+COVERAGE: a card line "NOT collected for X" or "collected in only N of K
+economies" means the variable belongs to an optional questionnaire (or a
+national option) that only those economies administered — for the others
+every value is missing and the estimate would be empty. Never plan such a
+variable for an economy that did not collect it. Instead: (a) if SOME of the
+named economies collected it, analyze those and list the others in
+limitation_note ("not collected for X") — a partial answer beats a question
+back; (b) if a DIRECT measure of the same construct exists for the economy in
+another cycle (e.g. the 2018 well-being indices SWBP / BELONG when 2022 EXPWB
+or 2025 has nothing direct), use that cycle and say so in the explanation —
+this outranks the "no cycle named = 2025" default; (c) only when no card
+measures the construct for the economy in any cycle, action="clarify" and
+tell the user which economies do have it. A variable that measures a
+DIFFERENT construct is not a substitute: never present, say, a conflict-
+resolution item as a "proxy for well-being". State coverage facts only as the
+cards give them: never claim a variable "was not collected" for an economy
+unless its card says NOT collected for that economy.
+Several explanatory variables against ONE outcome ("association between A, B
+and math scores") => action="analyze" with template regression, predictors =
+every variable named (with predictor_names) — never a question asking which
+one to analyze first. If they cannot enter one regression, run correlation on
+the first and put the rest in limitation_note.
+The "clarify" text is shown verbatim to a non-technical reader: plain
+language, variables named by their label with the code in parentheses, no
+{{pv}}, no SQL, no JSON.
+Comparisons across cycles => list every cycle
 asked about, in chronological order ("over time" / "trend" / "since 2018" =>
 all three unless the user narrows it); the system runs the template per
 cycle, reports every cycle side by side, and adds the change from the FIRST
@@ -261,7 +294,8 @@ measure, e.g. "% below Level 2 in math" => measure =
 
 SUMMARY_SYSTEM = """You summarize PISA analysis results for a general audience.
 Write 2-5 sentences. Cite the key numbers with their standard errors like
-"465 points (SE 4.0)". Treat |estimate| > 1.96*SE as statistically significant
+"465 points (SE 4.0)". Copy every number exactly as it appears in the table
+— never round further (an index of 0.28 with SE 0.02 stays 0.28 and 0.02). Treat |estimate| > 1.96*SE as statistically significant
 and say so in plain language. In a multi-cycle table the columns are
 estimate_<cycle> per cycle and `change` = last cycle minus first cycle;
 describe the path over time (e.g. 2018 → 2022 → 2025), not just the endpoints.
@@ -272,7 +306,20 @@ you would any other cycle). Never attribute a change or a difference to causes, 
 policies that are not in the table: if the notes say causes cannot be
 established from PISA, say that explicitly in one sentence and point to what
 the app can estimate instead. If a substitution_note or method note is present,
-state it plainly. Do not invent numbers not in the table."""
+state it plainly. Do not invent numbers not in the table. Name variables by
+their labels in plain words, never by codes like PV1MATH or ST004D01T. If the
+notes say a variable was not collected for an economy, say exactly that (it
+was not administered there), never that the economy "has no well-being" or
+similar."""
+
+
+class CoverageError(ValueError):
+    """Every requested cycle lacks a plan variable for every named economy —
+    the honest answer is a statement of coverage, not an empty table."""
+
+    def __init__(self, message: str, provenance: dict | None = None):
+        super().__init__(message)
+        self.provenance = provenance
 
 
 @dataclass
@@ -528,13 +575,21 @@ class Agent:
         return hits.sort_values(["score", "variable", "table_name"],
                                 ascending=[False, True, True])
 
-    @staticmethod
-    def _cards(hits: pd.DataFrame) -> str:
+    # Fewer than this many economies lacking a variable is noise (a national
+    # item dropped by a couple of countries), not an optional questionnaire.
+    COVERAGE_NOISE = 8
+    COVERAGE_LIST_MAX = 40
+
+    @classmethod
+    def _cards(cls, hits: pd.DataFrame, named=()) -> str:
         """One card per variable, listing every table it exists in — so the
         planner sees cross-cycle availability at a glance (and a variable
-        absent from a cycle is visibly absent)."""
+        absent from a cycle is visibly absent). `named` = economy codes the
+        question names: a table where they never collected the variable is
+        flagged on the card."""
         if hits is None or hits.empty:
             return "(no extra variables retrieved)"
+        named = set(named or ())
         lines = []
         for var, group in hits.groupby("variable", sort=False):
             group = group.sort_values("table_name")
@@ -547,7 +602,233 @@ class Agent:
                 values = f" [values: {', '.join(shown)}]"
             tables = ", ".join(group.table_name)
             lines.append(f"- {var} ({tables}): {latest.label}{values}")
+            for tbl in group.table_name:
+                line = cls._coverage_line(var, tbl, named)
+                if line:
+                    lines.append("    " + line)
         return "\n".join(lines)
+
+    @classmethod
+    def _coverage_line(cls, var: str, table: str, named: set) -> str:
+        cov = catalog.coverage(var, table)
+        if not cov or not cov["partial"]:
+            return ""
+        n, k = cov["n_with_data"], cov["n_economies"]
+        named_missing = sorted(named & cov["missing"])
+        if named_missing:
+            return (f"{table}: NOT collected for {' '.join(named_missing)} "
+                    f"(collected in {n} of {k} economies) — do not use it for them")
+        if n <= cls.COVERAGE_LIST_MAX:
+            return (f"{table}: collected in only {n} of {k} economies: "
+                    f"{' '.join(sorted(cov['with_data']))}")
+        if k - n >= cls.COVERAGE_NOISE:
+            return (f"{table}: collected in {n} of {k} economies (not in: "
+                    f"{' '.join(sorted(cov['missing']))})")
+        return ""
+
+    # The two gender codings in the data: the same groups, different codes.
+    GENDER_CODES = {"ST004D01T": {"1": "female", "2": "male"},
+                    "MALE": {"1": "male", "0": "female"}}
+
+    def _align_gender_direction(self, plan: dict, overrides: dict) -> None:
+        """A per-cycle override that swaps ST004D01T for MALE must keep the
+        SAME direction (male minus female, or the reverse) — otherwise the
+        cross-cycle change adds a sign flip to the real change. The main
+        plan's direction wins; a corrected override is recorded for provenance."""
+        main_col = str(plan.get("group_col") or "")
+        if main_col not in self.GENDER_CODES:
+            return
+        main = self.GENDER_CODES[main_col]
+        want = (main.get(str(plan.get("minuend"))), main.get(str(plan.get("subtrahend"))))
+        if None in want or want[0] == want[1]:
+            return
+        for cycle, ov in overrides.items():
+            col = str(ov.get("group_col") or main_col)
+            if col not in self.GENDER_CODES:
+                continue
+            inv = {v: k for k, v in self.GENDER_CODES[col].items()}
+            have = (str(ov.get("minuend", plan.get("minuend"))),
+                    str(ov.get("subtrahend", plan.get("subtrahend"))))
+            if have != (inv[want[0]], inv[want[1]]):
+                caster = type(plan.get("minuend")) if isinstance(plan.get("minuend"), int) else str
+                ov["group_col"] = col
+                ov["minuend"] = caster(inv[want[0]])
+                ov["subtrahend"] = caster(inv[want[1]])
+                plan.setdefault("_direction_fixed", []).append(
+                    f"PISA {cycle}: the gender override pointed the other way "
+                    f"({col}: {have[0]} - {have[1]}); the app re-aligned it to "
+                    f"the main plan ({want[0]} minus {want[1]}) so the "
+                    f"cross-cycle change is comparable.")
+
+    def _missing_estimate_notes(self, table: pd.DataFrame) -> list[str]:
+        """Blank estimates explained: an economy that was not in a cycle is
+        said so; anything else is a variable not administered / no valid
+        responses for that group."""
+        estimate_cols = [c for c in table.columns if ESTIMATE_COL.match(c)]
+        if not estimate_cols:
+            return []
+        mask = table[estimate_cols].isna().copy()
+        notes = []
+        if "CNT" in table.columns:
+            cnt = table["CNT"].astype(str)
+            for col in estimate_cols:
+                m = re.fullmatch(r"estimate_(\d{4})", col)
+                present = self.present.get(m.group(1)) if m else None
+                if not present:
+                    continue
+                absent_rows = mask[col] & ~cnt.isin(present) & (cnt != "OECD avg")
+                if absent_rows.any():
+                    codes = sorted(set(cnt[absent_rows]))
+                    notes.append(f"PISA {m.group(1)}: {self._names(codes)} did not take "
+                                 f"part in that cycle — those cells are blank because the "
+                                 f"economy was not assessed, not because a variable is missing.")
+                    mask.loc[absent_rows, col] = False
+        n_missing = int(mask.any(axis=1).sum())
+        if n_missing:
+            notes.append(
+                f"{n_missing} row(s) have no estimate — the variable was not "
+                "administered (or has no valid responses) for those groups; "
+                "they are listed in the table but excluded from the chart.")
+        return notes
+
+    # ---------- coverage guard (offline-testable, no LLM) ----------
+
+    COVERAGE_FIELDS = ("measure", "variable", "group_col", "quart_variable",
+                       "x", "y", "row_var", "col_var", "predictors")
+
+    def _plan_variables(self, plan: dict) -> list[str]:
+        """Identifiers used as analysis variables (not filters/grouping)."""
+        text = " ".join(str(plan.get(k) or "") for k in self.COVERAGE_FIELDS)
+        text = text.replace("{pv}", "1")
+        tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text))
+        return sorted(t for t in tokens if len(t) >= 3 and t.upper() == t)
+
+    def _coverage_check(self, plan: dict, cycles: list[str], instrument: str,
+                        region_codes: dict, overrides: dict) -> dict[str, list[dict]]:
+        """Per cycle: plan variables that some economies never collected.
+        A finding is `blocked` when EVERY economy the plan names lacks the
+        variable in that cycle — the cycle cannot yield an estimate."""
+        out: dict[str, list[dict]] = {}
+        for cycle in cycles:
+            cplan = {**plan, **overrides.get(cycle, {})}
+            table = f"{instrument}_{cycle}"
+            named = set(re.findall(r"'([A-Z]{3})'", str(cplan.get("where") or "")))
+            if cycle in region_codes:
+                named |= set(region_codes[cycle]["codes"])
+            present = self.present.get(cycle)
+            if present:
+                named &= present
+            findings = []
+            for var in self._plan_variables(cplan):
+                cov = catalog.coverage(var, table)
+                if not cov or not cov["partial"]:
+                    continue
+                named_missing = sorted(named & cov["missing"])
+                if not named_missing and \
+                        cov["n_economies"] - cov["n_with_data"] < self.COVERAGE_NOISE:
+                    continue
+                desc = catalog.describe(var, cycle=cycle)
+                label = desc.iloc[0].label if not desc.empty else var
+                findings.append({
+                    "variable": var, "label": label, "cycle": cycle,
+                    "n_with_data": cov["n_with_data"], "n_economies": cov["n_economies"],
+                    "with_data": sorted(cov["with_data"]), "missing": sorted(cov["missing"]),
+                    "named": sorted(named), "named_missing": named_missing,
+                    "blocked": bool(named) and len(named_missing) == len(named),
+                })
+            if findings:
+                out[cycle] = findings
+        return out
+
+    def _names(self, codes) -> str:
+        return ", ".join(f"{self.economy_names.get(c, c)} ({c})" for c in codes)
+
+    def _code_list(self, codes) -> str:
+        codes = list(codes)
+        if len(codes) <= self.COVERAGE_LIST_MAX:
+            return self._names(codes)
+        return f"{len(codes)} economies"
+
+    def _coverage_note(self, f: dict) -> str:
+        head = (f"PISA {f['cycle']}: {f['label']} ({f['variable']}) was collected in "
+                f"{f['n_with_data']} of {f['n_economies']} economies")
+        if f["blocked"]:
+            return (f"{head} (an optional questionnaire / national option); "
+                    f"{self._names(f['named_missing'])} did not administer it, so "
+                    f"that cycle has no estimate and is omitted. Economies with data "
+                    f"in {f['cycle']}: {self._code_list(f['with_data'])}.")
+        if f["named_missing"]:
+            return (f"{head}; it was NOT collected for "
+                    f"{self._names(f['named_missing'])} — those rows have no "
+                    f"estimate (the variable was not administered there, which "
+                    f"says nothing about the students).")
+        if f["n_with_data"] <= self.COVERAGE_LIST_MAX:
+            return (f"{head} (an optional questionnaire): only "
+                    f"{self._code_list(f['with_data'])} have estimates; every "
+                    f"other economy shows no estimate, so a ranking covers only them.")
+        return (f"{head}; not collected in {self._code_list(f['missing'])} — those "
+                f"economies show no estimate and are absent from any ranking.")
+
+    def _coverage_message(self, findings: dict) -> str:
+        """User-facing statement when every requested cycle is blocked."""
+        parts = []
+        last = None
+        for cycle in sorted(findings):
+            for f in findings[cycle]:
+                if not f["blocked"]:
+                    continue
+                who = self._names(f["named_missing"])
+                parts.append(
+                    f"{f['label']} ({f['variable']}) was collected in only "
+                    f"{f['n_with_data']} of {f['n_economies']} economies in PISA "
+                    f"{cycle}. It belongs to an optional questionnaire that {who} "
+                    f"did not administer, so no estimate exists for {who} in that "
+                    f"cycle and none can be computed here.")
+                last = f
+        if last is not None:
+            parts.append(f"Economies with data in PISA {last['cycle']}: "
+                         f"{self._code_list(last['with_data'])}.")
+        return " ".join(parts)
+
+    def _coverage_alternatives(self, hits: pd.DataFrame, named: set,
+                               exclude: set, limit: int = 5) -> list[str]:
+        """Retrieved variables that the named economies DID collect (from the
+        coverage table — never from the model), best-ranked first."""
+        if hits is None or hits.empty:
+            return []
+        out = []
+        for var, group in hits.groupby("variable", sort=False):
+            if var in exclude:
+                continue
+            cycles_ok = []
+            for _, r in group.iterrows():
+                cov = catalog.coverage(var, r.table_name)
+                if cov is None:
+                    continue
+                if not cov["partial"] or not (named & cov["missing"]):
+                    cycles_ok.append(str(r.cycle))
+            if cycles_ok:
+                label = group.iloc[-1].label
+                out.append(f"{label} ({var}; PISA {', '.join(sorted(set(cycles_ok)))})")
+            if len(out) >= limit:
+                break
+        return out
+
+    # User-facing text must not carry the planner's SQL/PV notation.
+    PV_CODE = re.compile(r"\bPV(?:\{pv\}|\d{1,2})([A-Z]{4})\b")
+    DOMAIN_NAMES = {"MATH": "mathematics score", "READ": "reading score",
+                    "SCIE": "science score", "CMPS": "Learning in the Digital World score",
+                    "CPPK": "computational practices score", "CMOD": "computational modelling score",
+                    "CPRO": "computational problem-solving score",
+                    "SEPS": "science (explain phenomena) subscale",
+                    "SEDE": "science (design/evaluate) subscale",
+                    "SEID": "science (interpret data) subscale",
+                    "SENV": "environmental science subscale"}
+
+    @classmethod
+    def _plain(cls, text: str) -> str:
+        text = cls.PV_CODE.sub(lambda m: cls.DOMAIN_NAMES.get(m.group(1), f"{m.group(1)} score"), text or "")
+        return text.replace("{pv}", "").replace("`", "")
 
     # ---------- execution (offline-testable, no LLM) ----------
 
@@ -610,6 +891,7 @@ class Agent:
             for value in ov.values():
                 if isinstance(value, str):
                     self._check_fragment(value)
+        self._align_gender_direction(plan, overrides)
 
         if template == "raw_sql":
             table = self._run_raw_sql(plan["sql"])
@@ -618,8 +900,21 @@ class Agent:
 
         tables = [f"{instrument}_{c}" for c in cycles]
         region_codes = self._region_filter(plan, cycles)
+        # Optional-questionnaire coverage: a variable the named economies never
+        # collected in a cycle cannot yield an estimate — that cycle is stated
+        # (provenance) and skipped; if no cycle is left, the answer is the
+        # coverage statement itself, never a summary of an empty table.
+        findings = self._coverage_check(plan, cycles, instrument, region_codes, overrides)
+        plan["_coverage"] = findings
+        blocked = [c for c, fs in findings.items() if any(f["blocked"] for f in fs)]
+        if blocked:
+            cycles = [c for c in cycles if c not in blocked]
+            if not cycles:
+                raise CoverageError(self._coverage_message(findings),
+                                    self._provenance(plan, tables))
         per_cycle: dict[str, pd.DataFrame] = {}
-        for cycle, tbl in zip(cycles, tables):
+        for cycle in cycles:
+            tbl = f"{instrument}_{cycle}"
             cplan = {**plan, **overrides.get(cycle, {})}
             cwhere = cplan.get("where") or None
             if cycle in region_codes:
@@ -696,14 +991,7 @@ class Agent:
         table = table.reset_index(drop=True)
 
         prov = self._provenance(plan, tables)
-        estimate_cols = [c for c in table.columns if ESTIMATE_COL.match(c)]
-        n_missing = int(table[estimate_cols].isna().any(axis=1).sum()) \
-            if estimate_cols else 0
-        if n_missing:
-            prov["notes"].append(
-                f"{n_missing} row(s) have no estimate — the variable was not "
-                "administered (or has no valid responses) for those groups; "
-                "they are listed in the table but excluded from the chart.")
+        prov["notes"].extend(self._missing_estimate_notes(table))
         return table, prov
 
     def _oecd_average_rows(self, res: pd.DataFrame, tbl: str) -> pd.DataFrame | None:
@@ -944,6 +1232,10 @@ class Agent:
             notes.append(f"PISA {cycle}: no data for {who}{joined}; that cycle is "
                          "omitted from the table and the change is computed between "
                          "the cycles that have data.")
+        notes.extend(plan.get("_direction_fixed") or [])
+        for cycle in sorted(plan.get("_coverage") or {}):
+            for f in plan["_coverage"][cycle]:
+                notes.append(self._coverage_note(f))
         if plan.get("limitation_note"):
             notes.append(f"NOT DONE: {plan['limitation_note']}")
         if self.WHY_WORDS.search(str(plan.get("_question") or "")) \
@@ -1260,19 +1552,36 @@ class Agent:
             return self._explore(question, route.get("search_terms") or [])
 
         hits = self._retrieve(route.get("search_terms") or [])
+        named = self._economies_in_data(question)
         plan = generate_json(
-            f"{context}QUESTION: {question}\n\nVARIABLE CARDS:\n{self._cards(hits)}",
+            f"{context}QUESTION: {question}\n\nVARIABLE CARDS:\n{self._cards(hits, named)}",
             system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
                                       regions=self.regions_block),
         )
         plan["_question"] = question
         if plan.get("action") == "clarify":
-            return AgentResult(question, plan.get("clarify")
+            return AgentResult(question, self._plain(plan.get("clarify"))
                                or "I need more detail to answer that.",
                                plan=plan, retrieved=hits, route="clarify")
 
         try:
             table, provenance = self.execute(plan)
+        except CoverageError as e:
+            answer = str(e)
+            findings = plan.get("_coverage") or {}
+            lacking = {c for fs in findings.values() for f in fs for c in f["named_missing"]}
+            blocked_vars = {f["variable"] for fs in findings.values() for f in fs if f["blocked"]}
+            alts = self._coverage_alternatives(hits, lacking, blocked_vars)
+            if alts:
+                answer += (f" Variables on this topic that {self._names(sorted(lacking))} "
+                           f"did collect: {'; '.join(alts)}. Ask again naming one of them.")
+            else:
+                answer += (" None of the variables retrieved for this topic has data "
+                           f"for {self._names(sorted(lacking))}.")
+            return AgentResult(question, answer, plan=plan, retrieved=hits,
+                               provenance=e.provenance,
+                               notes=(e.provenance or {}).get("notes", []),
+                               route="coverage")
         except Exception as e:
             return AgentResult(question, f"The analysis failed: {e}",
                                plan=plan, retrieved=hits, error=str(e), route="error")
@@ -1293,7 +1602,7 @@ class Agent:
             f"{legend}{focus}{truncation}"
             f"RESULT TABLE (CSV):\n{shown.to_csv(index=False)}"
         )
-        answer = generate(summary_prompt, system=SUMMARY_SYSTEM)
+        answer = self._plain(generate(summary_prompt, system=SUMMARY_SYSTEM))
         return AgentResult(question, answer.strip(), plan=plan, table=table,
                            provenance=provenance, retrieved=hits,
                            notes=provenance["notes"])
