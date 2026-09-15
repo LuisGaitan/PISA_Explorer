@@ -365,9 +365,13 @@ def test_method_and_coverage_rate_questions_are_intercepted():
     assert L.search("Your analysis puts Brazil's science score change as significant whereas the OECD analysis marks it as non-significant. Why is that?")
     assert not L.search("How did countries in Latin America perform in PISA 2025 vs OECD?")
     assert C.search("how did coverage of 15-year-olds change in Latin American countries between 2022 and 2025?")
-    assert C.search("how much of the difference is attributable to expansion of coverage in Latin American countries?") is None or True
     assert C.search("do you have data on coverage rates?")
     assert not C.search("do you have the 2025 data?")
+    # audit: neither interceptor may swallow ordinary data questions
+    assert not L.search("what is the difference between Brazil and the OECD results?")
+    assert not L.search("compare Brazil with the OECD average in science")
+    assert not C.search("what percentage of 15-year-olds are below Level 2 in math?")
+    assert not C.search("what share of students in Brazil are in the top quartile?")
     agent = Agent.__new__(Agent)
     assert "Annex A5" in agent._link_error_answer() and "Annex A2" in agent._coverage_rate_answer()
 
@@ -379,7 +383,9 @@ def test_blank_plausible_values_are_described_as_not_released():
     agent.economy_names = {"VNM": "Viet Nam", "FIN": "Finland"}
     table = pd.DataFrame({"CNT": ["VNM", "FIN"], "estimate_2018": [np.nan, 520.0], "se_2018": [np.nan, 2.0],
                           "estimate_2022": [470.0, 510.0], "se_2022": [3.0, 2.0]})
-    notes = agent._missing_estimate_notes(table, "PV{pv}SCIE")
+    notes = agent._missing_estimate_notes(table, {"template": "weighted_mean", "measure": "PV{pv}SCIE"})
+    gap_notes = agent._missing_estimate_notes(table, {"template": "gap", "measure": "PV{pv}SCIE"})
+    assert "did not release" not in gap_notes[0]                 # a blank gap cell is an empty group
     assert len(notes) == 1 and "did not release" in notes[0] and "Viet Nam (VNM)" in notes[0]
     assert "not administered" not in notes[0]
     f = {"variable": "PV1SCIE", "label": "Science PV", "cycle": "2018", "n_with_data": 79, "n_economies": 80,
@@ -437,3 +443,76 @@ def test_joined_view_exists_in_the_local_database():
     n_stu = con.execute("SELECT count(*) FROM stu_qqq_2022").fetchone()[0]
     n_view = con.execute("SELECT count(*) FROM stu_sch_2022").fetchone()[0]
     assert n_stu == n_view                                           # LEFT JOIN: no row lost or duplicated
+
+
+
+# ---------- several measures, dropped-measure backstop, overview ----------
+
+def test_plan_with_measures_list_validates_and_labels(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    Agent._validate_plan({"template": "weighted_mean", "measures": ["PV{pv}MATH", "ESCS"]})
+    with pytest.raises(ValueError):
+        Agent._validate_plan({"template": "weighted_mean"})
+    agent = Agent.__new__(Agent)
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: pd.DataFrame(
+        {"variable": [var], "table_name": ["stu_qqq_2025"], "cycle": ["2025"],
+         "label": ["Index of economic, social and cultural status"], "var_type": ["double"], "value_labels": [None]}))
+    plan = {"template": "weighted_mean", "measures": ["PV{pv}MATH", "PV{pv}READ", "ESCS", "PV{pv}MATH"]}
+    lst = agent._measure_list(plan)
+    assert [l for l, _ in lst] == ["Mathematics score", "Reading score",
+                                   "Index of economic, social and cultural status (ESCS)"]
+    single = {"template": "weighted_mean", "measures": ["PV{pv}SCIE"]}
+    assert agent._measure_list(single) == [] and single["measure"] == "PV{pv}SCIE"
+    assert agent._measure_list({"template": "gap", "measures": ["a", "b"]}) == []
+
+
+def test_requested_measures_left_out_of_a_plan_are_named():
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    q = "give me mathematics, reading and socioeconomic status for Argentina"
+    plan = {"template": "weighted_mean", "measure": "PV{pv}MATH", "where": "CNT = 'ARG'"}
+    assert agent._dropped_measures(q, plan) == ["reading", "socio-economic status (ESCS)"]
+    full = {"template": "weighted_mean", "measures": ["PV{pv}MATH", "PV{pv}READ", "ESCS"]}
+    assert agent._dropped_measures(q, full) == []
+    assert agent._dropped_measures("math gender gap in Germany", plan) == []     # one measure named
+    assert agent._dropped_measures("reading by ESCS quartile in Chile",
+                                   {"template": "quartile_means", "measure": "PV{pv}READ",
+                                    "quart_variable": "ESCS"}) == []
+
+
+def test_overview_question_is_intercepted_but_topic_searches_are_not():
+    from explorer.agent import Agent
+    O = Agent.OVERVIEW_WORDS
+    assert O.search("what variables is pisa measuring in latam?")
+    assert O.search("What does PISA measure?")
+    assert not O.search("find me data related to well-being from 2025 data")
+    assert not O.search("what data do you have about bullying?")
+    agent = Agent.__new__(Agent)
+    agent.coverage = {"2018": {}, "2022": {}, "2025": {}}
+    ans = agent._overview_answer()
+    assert "mathematics, reading and science" in ans and "Learning in the Digital World" in ans
+
+
+
+def test_unknown_columns_use_the_whole_catalog_and_school_type_is_standardized(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    agent = Agent.__new__(Agent)
+    monkeypatch.setattr(agent, "_table_columns", lambda t: {"CNT", "PV1MATH", "ESCS", "W_FSTUWT"})
+    known = {"GLOBMIND": ["stu_qqq_2018"], "PV1MATH": ["stu_qqq_2025"], "ESCS": ["stu_qqq_2025"]}
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: pd.DataFrame(
+        {"variable": [var] * len(known.get(var, [])), "table_name": known.get(var, []),
+         "cycle": ["2018"] * len(known.get(var, [])), "label": [var] * len(known.get(var, [])),
+         "var_type": ["double"] * len(known.get(var, [])), "value_labels": [None] * len(known.get(var, []))}))
+    # a 2018-only index is recognised as a variable even when checking the 2025 table
+    assert agent._unknown_columns("GLOBMIND", "stu_qqq_2025") == ["GLOBMIND"]
+    assert agent._unknown_columns("CASE WHEN PV{pv}MATH < 420.07 THEN 100.0 ELSE 0.0 END", "stu_qqq_2025") == []
+    with pytest.raises(ValueError, match="exists only in 2018"):
+        agent._check_columns({"template": "weighted_mean", "measure": "GLOBMIND"}, "stu_qqq_2025")
+    plan = {"template": "gap", "group_col": "PRIVATESCH", "minuend": 2, "subtrahend": 1, "instrument": "stu_sch"}
+    agent._prefer_reported_school_type(plan)
+    assert plan["group_col"] == "SC013Q01TA" and plan["_school_type_switched"]
+    assert Agent.SCHOOL_TYPE_WORDS.search("mexico public-private gap in schools") or \
+        Agent.SCHOOL_TYPE_WORDS.search("difference between mexico's public and private schools")
+    assert not Agent.SCHOOL_TYPE_WORDS.search("how did rwanda do?")
