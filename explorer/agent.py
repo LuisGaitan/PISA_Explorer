@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import catalog, llm
+from . import catalog, llm, regions
 from .analysis import (
     correlation,
     crosstab,
@@ -201,6 +201,12 @@ Reply with ONLY this JSON:
             the official convention, the unweighted mean of OECD member
             countries' estimates; requires "CNT" in by),
  "by": [grouping columns, usually ["CNT"]],
+ "regions": [str, ...]|null   (a geographic/institutional group the user
+            names — "Latin America", "Asia", "the EU", "Nordic countries",
+            "OECD" — chosen from the REGIONS list below; the system expands it
+            to the exact economies present in each cycle and states them. Use
+            this INSTEAD of enumerating a region's codes in `where`; combine
+            with `where` only for extra conditions),
  "where": SQL boolean filter or null, e.g. "CNT IN ('USA','KOR')",
  "sql": str|null  (raw_sql only: one read-only SELECT; use this ONLY when no
         template fits — raw SQL gets no automatic weighting/PV/BRR treatment),
@@ -208,8 +214,19 @@ Reply with ONLY this JSON:
         (for ranking/top-N/bottom-N questions: the system sorts the result and
         keeps top_n rows, so the reported rows ARE the answer),
  "substitution_note": str|null,
+ "limitation_note": str|null   (when the question also asks for something no
+            template can deliver — causes, "factors behind" a change, reasons,
+            predictions, policy effects — still run the computable part and
+            state here, in one or two sentences, what was NOT done and why:
+            PISA is a repeated cross-section, so it cannot establish what
+            caused a change; within a cycle the app can estimate associations
+            with the regression, correlation or quartile_gap templates),
  "explanation": one sentence of what will be computed
 }}
+
+REGIONS available for the `regions` field (members present per cycle):
+{regions}
+"OECD" is also accepted (the data's own OECD membership flag).
 
 Reply with EXACTLY ONE JSON object — never a JSON array, never multiple plans.
 A request to compare the averages of two DIFFERENT variables side by side has
@@ -218,11 +235,16 @@ first, or (if the user insists on both at once) raw_sql computing both
 weighted means per group as sum(W_FSTUWT * var) / sum(W_FSTUWT) — and note in
 the explanation that raw SQL carries no standard errors.
 
-Rules: comparisons across cycles => list every cycle asked about, in
-chronological order ("over time" / "trend" / "since 2018" => all three unless
-the user narrows it); the system runs the template per cycle, reports every
-cycle side by side, and adds the change from the FIRST to the LAST listed
-cycle. A question that names no cycle means the latest one (2025) — say so in
+Rules: a COMPOUND question (a computable analysis plus a "why" / "which
+factors" / "what explains it" part) => action="analyze" the computable part
+and fill limitation_note — never answer with action="clarify" just because
+one part is out of reach; a partial answer with a stated limitation beats a
+question back to the user. Comparisons across cycles => list every cycle
+asked about, in chronological order ("over time" / "trend" / "since 2018" =>
+all three unless the user narrows it); the system runs the template per
+cycle, reports every cycle side by side, and adds the change from the FIRST
+to the LAST listed cycle. When the question names no achievement domain, use
+science (the 2025 major domain) and say so in the explanation. A question that names no cycle means the latest one (2025) — say so in
 the explanation. Achievement questions always use the PV{{pv}} form. Filter to
 the countries the user names; if none named, ask yourself whether all
 economies (80 in 2018/2022, 90 in 2025) is really wanted — for rankings it is.
@@ -245,7 +267,10 @@ estimate_<cycle> per cycle and `change` = last cycle minus first cycle;
 describe the path over time (e.g. 2018 → 2022 → 2025), not just the endpoints.
 All three cycles — including PISA 2025, released in 2026 — are real, published
 survey results: never describe 2025 figures as projections, forecasts or
-expectations. If a substitution_note or method note is present,
+expectations. Never attribute a change or a difference to causes, factors or
+policies that are not in the table: if the notes say causes cannot be
+established from PISA, say that explicitly in one sentence and point to what
+the app can estimate instead. If a substitution_note or method note is present,
 state it plainly. Do not invent numbers not in the table."""
 
 
@@ -283,6 +308,9 @@ class AgentResult:
             "rows": int(len(self.table)) if self.table is not None else 0,
             "raw_sql": plan.get("template") == "raw_sql",
             "substitution": bool(plan.get("substitution_note")),
+            "regions": plan.get("regions"),
+            "limitation": bool(plan.get("limitation_note")),
+            "answer": (self.answer or "")[:4000],
             "oecd_average": bool(plan.get("include_oecd_average")),
             "missing_rows": any("no estimate" in n for n in prov.get("notes", [])),
             "error": self.error,
@@ -305,6 +333,35 @@ class Agent:
         self.con = connect(read_only=True)
         self.coverage = self._coverage()
         self.facts = self._facts_block()
+        self.present = self._present_codes()
+        self.regions_block = regions.prompt_block(self.present)
+
+    def _present_codes(self) -> dict[str, set[str]]:
+        out = {}
+        for cycle in self.coverage:
+            out[cycle] = {r[0] for r in self.con.sql(
+                f"SELECT DISTINCT CNT FROM stu_qqq_{cycle}").fetchall()}
+        return out
+
+    def _oecd_codes(self, cycle: str) -> set[str]:
+        return {r[0] for r in self.con.sql(
+            f"SELECT DISTINCT CNT FROM stu_qqq_{cycle} WHERE OECD = 1").fetchall()}
+
+    def _region_filter(self, plan: dict, cycles: list[str]) -> dict[str, dict]:
+        """Deterministic expansion of plan['regions'] per cycle: the region's
+        members present in that cycle's table (and those absent from it)."""
+        names = [str(n) for n in (plan.get("regions") or []) if str(n).strip()]
+        if not names:
+            return {}
+        oecd = [n for n in names if n.strip().lower() == "oecd"]
+        other = [n for n in names if n not in oecd]
+        present = {c: self.present.get(c, set()) for c in cycles}
+        out = regions.expand(other, present) if other else \
+            {c: {"codes": [], "absent": []} for c in cycles}
+        for c in cycles:
+            if oecd:
+                out[c]["codes"] = sorted(set(out[c]["codes"]) | self._oecd_codes(c))
+        return out
 
     def _coverage(self) -> dict[str, dict]:
         out = {}
@@ -345,6 +402,17 @@ class Agent:
         r"\b(available|access|have|has|include|includes|contain|loaded|released|"
         r"release|yet|cover|covers|coverage|which (years|cycles)|what (years|cycles))\b",
         re.IGNORECASE)
+
+    WHY_WORDS = re.compile(
+        r"\b(why|factor|factors|cause|causes|caused|reason|reasons|explain|explains|"
+        r"behind|driver|drivers|due to|because|attributable|impact of|effect of)\b",
+        re.IGNORECASE)
+    WHY_NOTE = ("PISA is a repeated cross-sectional survey of different students "
+                "each cycle: it can show what changed, not what caused the change. "
+                "Within a cycle the app can estimate associations between scores "
+                "and student, family or school variables (correlation, regression, "
+                "quartile gaps) — ask, for example, “regress science on ESCS and "
+                "sense of belonging in Chile in 2025”.")
 
     def _coverage_answer(self) -> str:
         parts = [f"PISA {c} ({v['economies']} economies, {v['students']:,} students)"
@@ -486,10 +554,16 @@ class Agent:
             return table, prov
 
         tables = [f"{instrument}_{c}" for c in cycles]
+        region_codes = self._region_filter(plan, cycles)
         per_cycle: dict[str, pd.DataFrame] = {}
         for cycle, tbl in zip(cycles, tables):
             cplan = {**plan, **overrides.get(cycle, {})}
             cwhere = cplan.get("where") or None
+            if cycle in region_codes:
+                codes = region_codes[cycle]["codes"]
+                clause = ("CNT IN (" + ", ".join(f"'{c}'" for c in codes) + ")"
+                          if codes else "FALSE")
+                cwhere = f"({cwhere}) AND {clause}" if cwhere else clause
             res = self._run_template(template, cplan, tbl, by, cwhere)
             if plan.get("include_oecd_average") and "CNT" in by:
                 avg = self._oecd_average_rows(res, tbl)
@@ -756,10 +830,34 @@ class Agent:
                          "are absent, not zero. Check the code (e.g. B-S-J-Z "
                          "(China) is QCI, Chinese Taipei is TAP).")
 
+        cycles_for_regions = [t.rsplit("_", 1)[-1] for t in tables] or cycles
+        region_codes = self._region_filter(plan, cycles_for_regions) if tables else {}
+        if region_codes:
+            names = ", ".join(str(n) for n in plan.get("regions") or [])
+            for cycle in cycles_for_regions:
+                info = region_codes[cycle]
+                line = (f"Region \"{names}\" in PISA {cycle} = {len(info['codes'])} "
+                        f"economies: {', '.join(info['codes']) or 'none'}")
+                if info["absent"]:
+                    line += (f"; not in the {cycle} data: {', '.join(info['absent'])}")
+                notes.append(line + ".")
+        if plan.get("limitation_note"):
+            notes.append(f"NOT DONE: {plan['limitation_note']}")
+        if self.WHY_WORDS.search(str(plan.get("_question") or "")) \
+                and not plan.get("limitation_note"):
+            notes.append(self.WHY_NOTE)
+
         sample = []
         for tbl in tables:
             try:
-                clause = f" WHERE {where}" if where else ""
+                cycle = tbl.rsplit("_", 1)[-1]
+                clause_where = where
+                if cycle in region_codes:
+                    codes = region_codes[cycle]["codes"]
+                    reg = ("CNT IN (" + ", ".join(f"'{c}'" for c in codes) + ")"
+                           if codes else "FALSE")
+                    clause_where = f"({where}) AND {reg}" if where else reg
+                clause = f" WHERE {clause_where}" if clause_where else ""
                 n, wsum = self.con.sql(
                     f"SELECT count(*), sum(W_FSTUWT) FROM {tbl}{clause}").fetchone()
                 sample.append({"table": tbl, "students": int(n),
@@ -771,7 +869,9 @@ class Agent:
             "source": SOURCE_LINE,
             "tables": tables or ["(raw SQL — see query)"],
             "variables": self._referenced_variables(plan, tables),
-            "filter": where or "none (all rows)",
+            "filter": (where or "none (all rows)")
+                      + (f" + region(s): {', '.join(str(n) for n in plan['regions'])}"
+                         if plan.get("regions") else ""),
             "method": method.strip(),
             "sample": sample,
             "sql": plan.get("sql") if raw else None,
@@ -957,8 +1057,10 @@ class Agent:
         hits = self._retrieve(route.get("search_terms") or [])
         plan = generate_json(
             f"{context}QUESTION: {question}\n\nVARIABLE CARDS:\n{self._cards(hits)}",
-            system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS)),
+            system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
+                                      regions=self.regions_block),
         )
+        plan["_question"] = question
         if plan.get("action") == "clarify":
             return AgentResult(question, plan.get("clarify")
                                or "I need more detail to answer that.",

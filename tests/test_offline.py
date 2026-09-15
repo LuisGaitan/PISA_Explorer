@@ -122,3 +122,19 @@ def test_catalog_search_prefers_phrase_over_scattered_tokens(monkeypatch):
     top = catalog.search("life satisfaction", limit=3).variable.tolist()
     assert top[0] == "ST016Q01NA"                   # satisf~ stem + "life"
     assert catalog.search("belonging", limit=2).variable.tolist()[0] == "BELONG"
+
+
+def test_regions_expand_per_cycle_and_aliases():
+    from explorer import regions
+    present = {"2018": {"ARG", "BRA", "CHL", "PAN", "JAM", "USA"},
+               "2025": {"ARG", "BRA", "CHL", "GTM", "PRY", "SLV", "USA"}}
+    out = regions.expand(["Latin America"], present)
+    assert out["2018"]["codes"] == ["ARG", "BRA", "CHL", "JAM", "PAN"]
+    assert out["2025"]["codes"] == ["ARG", "BRA", "CHL", "GTM", "PRY", "SLV"]
+    assert "GTM" in out["2018"]["absent"] and "JAM" in out["2025"]["absent"]
+    assert regions.canonical("LatAm") == "Latin America and the Caribbean"
+    assert regions.canonical("the EU") is None or regions.canonical("EU") == "European Union"
+    assert regions.canonical("Nordics") == "Nordic countries"
+    assert "JPN" in regions.REGIONS["Asia"] and "SAU" in regions.REGIONS["Asia"]
+    with pytest.raises(ValueError, match="unknown region"):
+        regions.expand(["Atlantis"], present)

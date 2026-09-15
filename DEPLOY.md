@@ -140,7 +140,8 @@ gcloud run services update pisa-explorer --region us-central1 --update-env-vars 
 - Events (one Firestore document per question, collection `events`) record:
   institution, session, question, route (data / clarify / conversational /
   error), template, instrument, cycles, countries, variables, rows, raw-SQL
-  and substitution flags, latency and LLM-call counts, and — reported by the
+  and substitution flags, regions, the answer text (first 4,000 characters),
+  latency and LLM-call counts, and — reported by the
   browser — which chart form rendered, device width / mobile, thumbs up/down
   with comment, and CSV exports. Firestore is enabled per project:
   `gcloud firestore databases create --location=us-central1 --type=firestore-native`

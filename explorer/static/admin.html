@@ -114,7 +114,7 @@ document.getElementById("admincode").addEventListener("keydown", e => { if (e.ke
 document.getElementById("refresh").addEventListener("click", load);
 document.getElementById("days").addEventListener("change", load);
 document.getElementById("exportbtn").addEventListener("click", () => {
-  const cols = ["ts", "kind", "institution", "session", "question", "route", "template", "instrument", "cycles", "countries", "variables", "rows", "chart", "vote", "comment", "error", "total_ms", "llm_calls", "llm_ms", "mobile", "width", "exported"];
+  const cols = ["ts", "kind", "institution", "session", "question", "answer", "route", "template", "instrument", "cycles", "regions", "countries", "variables", "rows", "limitation", "chart", "vote", "comment", "error", "total_ms", "llm_calls", "llm_ms", "mobile", "width", "exported"];
   const esc = v => { const s = v == null ? "" : (Array.isArray(v) ? v.join("|") : String(v)); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const lines = [cols.join(",")].concat(EVENTS.map(e => cols.map(c => esc(e[c])).join(",")));
   const a = document.createElement("a");
@@ -200,9 +200,11 @@ function render() {
   }) : el("span", "muted", "none"));
 
   $main.appendChild(el("h2", null, `Recent questions (${Math.min(asks.length, 200)})`));
-  $main.appendChild(el("div", "card")).appendChild(table(["When", "Institution", "Question", "Route / template", "Chart", "Vote", "s"], asks.slice(0, 200), e => {
+  $main.appendChild(el("div", "card")).appendChild(table(["When", "Institution", "Question", "Answer", "Route / template", "Chart", "Vote", "s"], asks.slice(0, 200), e => {
     const tr = el("tr"); tr.appendChild(el("td", null, when(e.ts))); tr.appendChild(el("td", null, e.institution));
-    tr.appendChild(el("td", "q", short(e.question))); tr.appendChild(el("td", null, e.route === "data" ? (e.template || "") : e.route));
+    tr.appendChild(el("td", "q", short(e.question)));
+    const a = el("td", "q", short(e.answer, 160)); if (e.answer) a.title = e.answer; tr.appendChild(a);
+    tr.appendChild(el("td", null, e.route === "data" ? (e.template || "") : e.route));
     tr.appendChild(el("td", null, e.chart || "")); const v = el("td", e.vote ? "vote-" + e.vote : "", e.vote === "up" ? "👍" : e.vote === "down" ? "👎" : ""); tr.appendChild(v);
     tr.appendChild(el("td", null, e.total_ms ? (e.total_ms / 1000).toFixed(1) : "")); return tr;
   }));

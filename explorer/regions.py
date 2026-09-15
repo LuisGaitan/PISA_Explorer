@@ -1,0 +1,135 @@
+"""Fixed geographic and institutional groupings of PISA economies.
+
+PISA has no region variable, and asking a language model to enumerate "Latin
+American countries" produced a different, incomplete list each time. Here the
+membership is fixed in code; the planner names a region and `expand()` turns
+it into the exact CNT codes present in each cycle's table, so a region means
+the same thing in every answer and never includes an economy that is not in
+the data.
+
+Groupings follow common usage (World Bank / UN geoscheme) restricted to
+economies that have taken part in PISA 2018, 2022 or 2025. An economy may sit
+in more than one region (Mexico is Latin American and North American;
+Türkiye is European and Middle Eastern). "OECD" comes from the data's own
+OECD flag, not from this file.
+"""
+
+import re
+
+REGIONS: dict[str, list[str]] = {
+    "Latin America and the Caribbean": [
+        "ARG", "BRA", "CHL", "COL", "CRI", "DOM", "ECU", "GTM", "JAM", "MEX",
+        "PAN", "PER", "PRY", "SLV", "URY"],
+    "South America": ["ARG", "BRA", "CHL", "COL", "ECU", "PER", "PRY", "URY"],
+    "Central America": ["CRI", "GTM", "PAN", "SLV"],
+    "Caribbean": ["DOM", "JAM"],
+    "North America": ["CAN", "MEX", "USA"],
+    "East Asia": ["HKG", "JPN", "KOR", "MAC", "MNG", "QCI", "TAP"],
+    "Southeast Asia": ["BRN", "IDN", "KHM", "MYS", "PHL", "SGP", "THA", "VNM"],
+    "Central Asia": ["KAZ", "KGZ", "QTJ", "UZB"],
+    "Caucasus": ["ARM", "AZE", "GEO", "QAZ"],
+    "Middle East": ["ARE", "ISR", "JOR", "LBN", "PSE", "QAT", "QKI", "SAU", "TUR"],
+    "North Africa": ["MAR"],
+    "Sub-Saharan Africa": ["KEN", "MUS", "RWA", "ZMB"],
+    "Europe": [
+        "ALB", "AUT", "BEL", "BGR", "BIH", "BLR", "CHE", "CZE", "DEU", "DNK",
+        "ESP", "EST", "FIN", "FRA", "GBR", "GRC", "HRV", "HUN", "IRL", "ISL",
+        "ITA", "KSV", "LTU", "LUX", "LVA", "MDA", "MKD", "MLT", "MNE", "NLD",
+        "NOR", "POL", "PRT", "QMR", "QRT", "QUA", "QUR", "ROU", "RUS", "SRB",
+        "SVK", "SVN", "SWE", "TUR", "UKR"],
+    "European Union": [
+        "AUT", "BEL", "BGR", "CZE", "DEU", "DNK", "ESP", "EST", "FIN", "FRA",
+        "GRC", "HRV", "HUN", "IRL", "ITA", "LTU", "LUX", "LVA", "MLT", "NLD",
+        "POL", "PRT", "ROU", "SVK", "SVN", "SWE"],
+    "Nordic countries": ["DNK", "FIN", "ISL", "NOR", "SWE"],
+    "Baltic states": ["EST", "LTU", "LVA"],
+    "Western Balkans": ["ALB", "BIH", "KSV", "MKD", "MNE", "SRB"],
+    "Oceania": ["AUS", "NZL"],
+}
+# Unions expressed through the parts above.
+REGIONS["Asia"] = sorted(set(REGIONS["East Asia"] + REGIONS["Southeast Asia"]
+                             + REGIONS["Central Asia"] + REGIONS["Caucasus"]
+                             + REGIONS["Middle East"]))
+REGIONS["Middle East and North Africa"] = sorted(set(REGIONS["Middle East"]
+                                                     + REGIONS["North Africa"]))
+REGIONS["Africa"] = sorted(set(REGIONS["North Africa"] + REGIONS["Sub-Saharan Africa"]))
+REGIONS["Americas"] = sorted(set(REGIONS["Latin America and the Caribbean"]
+                                 + REGIONS["North America"]))
+
+ALIASES: dict[str, str] = {
+    "latin america": "Latin America and the Caribbean",
+    "latin american": "Latin America and the Caribbean",
+    "latin america and caribbean": "Latin America and the Caribbean",
+    "latam": "Latin America and the Caribbean",
+    "lac": "Latin America and the Caribbean",
+    "eu": "European Union",
+    "european union": "European Union",
+    "mena": "Middle East and North Africa",
+    "middle east": "Middle East",
+    "gulf": "Middle East",
+    "nordic": "Nordic countries",
+    "nordics": "Nordic countries",
+    "scandinavia": "Nordic countries",
+    "baltic": "Baltic states",
+    "baltics": "Baltic states",
+    "balkans": "Western Balkans",
+    "western balkans": "Western Balkans",
+    "east asian": "East Asia",
+    "southeast asian": "Southeast Asia",
+    "south east asia": "Southeast Asia",
+    "central asian": "Central Asia",
+    "sub saharan africa": "Sub-Saharan Africa",
+    "subsaharan africa": "Sub-Saharan Africa",
+    "australia and new zealand": "Oceania",
+}
+
+
+def _norm(name: str) -> str:
+    return re.sub(r"[^a-z ]", " ", name.lower()).replace("  ", " ").strip()
+
+
+def canonical(name: str) -> str | None:
+    """Resolve a user/planner region name to a REGIONS key, or None."""
+    key = _norm(name)
+    if key in ALIASES:
+        return ALIASES[key]
+    for region in REGIONS:
+        if _norm(region) == key:
+            return region
+    for region in REGIONS:            # "Latin America" inside the full name
+        if key and key in _norm(region):
+            return region
+    return None
+
+
+def expand(names: list[str], present: dict[str, set[str]]) -> dict[str, dict]:
+    """Per cycle, the region members present in that cycle's data.
+
+    Returns {cycle: {"codes": [..present..], "absent": [..members not in
+    that cycle..]}}; raises ValueError for an unknown region name."""
+    members: set[str] = set()
+    for name in names:
+        region = canonical(name)
+        if region is None:
+            raise ValueError(f"unknown region {name!r}; known regions: "
+                             + ", ".join(sorted(REGIONS)))
+        members |= set(REGIONS[region])
+    out = {}
+    for cycle, codes in present.items():
+        out[cycle] = {"codes": sorted(members & codes),
+                      "absent": sorted(members - codes)}
+    return out
+
+
+def prompt_block(present: dict[str, set[str]]) -> str:
+    """The region list the planner is shown, with per-cycle coverage."""
+    lines = []
+    for region, members in REGIONS.items():
+        cov = []
+        for cycle, codes in present.items():
+            n = len(set(members) & codes)
+            if n:
+                cov.append(f"{cycle}: {n}")
+        lines.append(f"- {region} ({len(members)} economies; in data — "
+                     + ", ".join(cov) + ")")
+    return "\n".join(lines)

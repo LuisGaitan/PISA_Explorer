@@ -149,6 +149,15 @@ compares cycles: the template runs per cycle (any two or all three of 2018,
 2022, 2025), the table shows every cycle side by side, and `change` is the
 last cycle minus the first. A question that names no cycle means 2025.
 
+Regions are fixed in code, not improvised by the model: "Latin America",
+"Asia", "the EU", "Nordic countries", "Sub-Saharan Africa" and the other groups
+in `explorer/regions.py` expand to the exact economies present in each cycle,
+and the provenance lists them (and which members are absent from a cycle).
+Questions that also ask *why* ("what factors were behind it") get the
+computable part answered plus an explicit note that PISA, a repeated
+cross-section, cannot establish causes — with a pointer to the association
+templates.
+
 Where a variable differs by cycle the plan carries `cycle_overrides` — a
 per-cycle replacement of plan fields that is always stated in the provenance.
 The standing example is gender: `ST004D01T` (1 = female, 2 = male) in 2018

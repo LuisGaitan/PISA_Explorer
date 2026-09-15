@@ -287,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
             })
             del session["history"][:-6]
             turn = len(session["history"])
-        event_id = _events.create({
+        event_id = _events.create({     # analytics() now includes the answer text
             "kind": "ask", "session": sid[:12], "institution": institution,
             "turn": turn,
             **result.analytics(),
