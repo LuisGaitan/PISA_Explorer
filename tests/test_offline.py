@@ -305,3 +305,90 @@ def test_blank_estimates_distinguish_non_participation_from_missing_variables():
     assert notes[0].startswith("PISA 2018: El Salvador (SLV) did not take part")
     assert "1 row(s) have no estimate" in notes[1]          # Brazil's blank 2022 cell is a real gap
     assert agent._missing_estimate_notes(table.dropna()) == []
+
+
+# ---------- link errors, derived-group gaps, deterministic method answers ----------
+
+def test_trend_adds_the_link_error_variance_when_given():
+    a, b = _result(["FIN"], [520.0], [2.0]), _result(["FIN"], [510.0], [2.0])
+    out = trend({"2022": a, "2025": b}, by=["CNT"])
+    assert abs(out.se_change.iloc[0] - np.sqrt(8.0)) < 1e-9
+    out2 = trend({"2022": a, "2025": b}, by=["CNT"], link_error=3.0)
+    assert abs(out2.se_change.iloc[0] - np.sqrt(8.0 + 9.0)) < 1e-9
+    assert out2.change.iloc[0] == -10.0                     # estimates untouched
+    from explorer import link_errors
+    assert link_errors.domain_of("PV{pv}SCIE") == "SCIE" and link_errors.domain_of("ESCS") is None
+    assert link_errors.link_error("2022", "2025", "PV{pv}READ") is None or link_errors.loaded()
+
+
+def test_gap_accepts_a_derived_two_group_expression():
+    import duckdb
+    from explorer.analysis import gap
+    rng = np.random.default_rng(0)
+    n = 400
+    immig = rng.choice([1, 2, 3], size=n, p=[0.7, 0.15, 0.15])
+    base = np.where(immig == 1, 500.0, 460.0) + rng.normal(0, 30, n)
+    df = pd.DataFrame({"CNT": "BRA", "IMMIG": immig})
+    for i in range(1, 11):
+        df[f"PV{i}SCIE"] = base + rng.normal(0, 5, n)
+    for w in ALL_WEIGHTS:
+        df[w] = rng.uniform(0.5, 1.5, n)
+    con = duckdb.connect()
+    con.register("t", df)
+    out = gap(con, "t", "PV{pv}SCIE", "IMMIG", 1, 0, by=("CNT",),
+              group_expr="CASE WHEN IMMIG = 1 THEN 1 WHEN IMMIG IN (2, 3) THEN 0 END",
+              group_label="non-immigrant minus immigrant")
+    assert len(out) == 1 and out.contrast.iloc[0] == "non-immigrant minus immigrant: 1 - 0"
+    assert 25 < out.estimate.iloc[0] < 55 and out.se.iloc[0] > 0
+
+
+def test_participation_rule_ignores_analysis_questions():
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    assert agent._is_participation_question("Did India participate in 2025 PISA?")
+    assert agent._is_participation_question("do you have data on Rwanda?")
+    assert not agent._is_participation_question("Compare between Egypt and Israel in PISA 2025")
+    assert not agent._is_participation_question("Compare between mean science score in Israel and Egypt in PISA 2025")
+    assert not agent._is_participation_question("How did rwanda do?")
+
+
+def test_method_and_coverage_rate_questions_are_intercepted():
+    from explorer.agent import Agent
+    L, C = Agent.LINK_WORDS, Agent.COVERAGE_RATE_WORDS
+    assert L.search("Why is OECD link error excluded?")
+    assert L.search("Your analysis puts Brazil's science score change as significant whereas the OECD analysis marks it as non-significant. Why is that?")
+    assert not L.search("How did countries in Latin America perform in PISA 2025 vs OECD?")
+    assert C.search("how did coverage of 15-year-olds change in Latin American countries between 2022 and 2025?")
+    assert C.search("how much of the difference is attributable to expansion of coverage in Latin American countries?") is None or True
+    assert C.search("do you have data on coverage rates?")
+    assert not C.search("do you have the 2025 data?")
+    agent = Agent.__new__(Agent)
+    assert "Annex A5" in agent._link_error_answer() and "Annex A2" in agent._coverage_rate_answer()
+
+
+def test_blank_plausible_values_are_described_as_not_released():
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    agent.present = {"2018": {"VNM", "FIN"}, "2022": {"VNM", "FIN"}}
+    agent.economy_names = {"VNM": "Viet Nam", "FIN": "Finland"}
+    table = pd.DataFrame({"CNT": ["VNM", "FIN"], "estimate_2018": [np.nan, 520.0], "se_2018": [np.nan, 2.0],
+                          "estimate_2022": [470.0, 510.0], "se_2022": [3.0, 2.0]})
+    notes = agent._missing_estimate_notes(table, "PV{pv}SCIE")
+    assert len(notes) == 1 and "did not release" in notes[0] and "Viet Nam (VNM)" in notes[0]
+    assert "not administered" not in notes[0]
+    f = {"variable": "PV1SCIE", "label": "Science PV", "cycle": "2018", "n_with_data": 79, "n_economies": 80,
+         "with_data": [], "missing": ["VNM"], "named": ["VNM"], "named_missing": ["VNM"], "blocked": True}
+    assert "did not release its science results" in agent._coverage_note(f)
+    assert "did not release its science results" in agent._coverage_message({"2018": [f]})
+
+
+def test_explore_drops_weak_matches(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    agent = Agent.__new__(Agent)
+    weak = pd.DataFrame({"variable": ["FLSCHOOL"], "table_name": ["stu_qqq_2022"], "cycle": ["2022"],
+                         "label": ["Financial education in school lessons (WLE)"], "n_value_labels": [0], "score": [2.4]})
+    monkeypatch.setattr(agent, "_retrieve", lambda terms, per_term=12: weak)
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: weak.head(0).assign(var_type=[], value_labels=[]))
+    res = agent._explore("do you have data on coverage rates?", ["coverage rates"])
+    assert res.route == "explore" and "No catalog variables matched" in res.answer

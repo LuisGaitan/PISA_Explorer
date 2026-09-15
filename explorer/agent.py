@@ -38,6 +38,7 @@ from .analysis import (
 )
 from .db import connect
 from .llm import generate, generate_json
+from . import link_errors
 
 MAX_CARDS = 40
 MAX_RESULT_ROWS = 500
@@ -272,6 +273,14 @@ the first and put the rest in limitation_note.
 The "clarify" text is shown verbatim to a non-technical reader: plain
 language, variables named by their label with the code in parentheses, no
 {{pv}}, no SQL, no JSON.
+A two-group difference whose groups are SETS of codes (immigrant = IMMIG
+2 or 3 vs non-immigrant = IMMIG 1; top vs bottom ESCS quarter is quartile_gap
+instead) => template gap with group_col = a CASE expression yielding 1/0,
+e.g. "CASE WHEN IMMIG = 1 THEN 1 WHEN IMMIG IN (2, 3) THEN 0 END",
+minuend=1, subtrahend=0, and group_label = "non-immigrant minus immigrant".
+A period longer than the loaded cycles ("past decade", "since 2015/2012")
+=> analyze 2018-2025 and say in the explanation that earlier cycles are not
+loaded here.
 Comparisons across cycles => list every cycle
 asked about, in chronological order ("over time" / "trend" / "since 2018" =>
 all three unless the user narrows it); the system runs the template per
@@ -310,7 +319,9 @@ state it plainly. Do not invent numbers not in the table. Name variables by
 their labels in plain words, never by codes like PV1MATH or ST004D01T. If the
 notes say a variable was not collected for an economy, say exactly that (it
 was not administered there), never that the economy "has no well-being" or
-similar."""
+similar. If the notes say the OECD did not RELEASE an economy's results for
+a cycle, say that — never that the economy "did not administer" or "did not
+participate in" the assessment."""
 
 
 class CoverageError(ValueError):
@@ -469,6 +480,16 @@ class Agent:
             "AI literacy as part of PISA 2025.\n"
             "- Not loaded: the 2025 Foreign Language Assessment (OECD release "
             "expected 2027).\n"
+            "- ABOUT THIS APP: PISA Explorer is an independent, open-source web "
+            "app (MIT licence, github.com/LuisGaitan/PISA_Explorer) built by Luis "
+            "Gaitan at the University of Pennsylvania Graduate School of "
+            "Education, supported by the Penn GSE Learning Analytics and "
+            "Artificial Intelligence program. It is NOT an OECD product and not "
+            "affiliated with the OECD; it analyzes the OECD's public-use "
+            "databases with the official methodology (final student weights, "
+            "10 plausible values, 80 Fay-BRR replicate weights). Answer "
+            "questions about the tool's author, purpose or affiliation only "
+            "from this line.\n"
             "When a direct_answer concerns what data exist or when they were "
             "released, use these facts verbatim; if unsure, say the app covers "
             "PISA 2018, 2022 and 2025 and suggest asking a data question.\n\n"
@@ -507,9 +528,75 @@ class Agent:
                 "sense of belonging in Chile in 2025”.")
 
     PARTICIPATION_WORDS = re.compile(
-        r"\b(participat\w*|take part|took part|taken part|included|in the data|"
-        r"have data|has data|any data|data (on|for|about)|covered|is .* in pisa|"
-        r"part of pisa|in pisa)\b", re.IGNORECASE)
+        r"\b(participat\w*|take part|took part|taken part|"
+        r"(have|has|any|got) data (on|for|about)|(is|are|was|were) \w+( \w+)? "
+        r"(included|covered|in the (data|database|dataset)|part of pisa|in pisa))\b",
+        re.IGNORECASE)
+    # A question that asks for a statistic is never a participation question,
+    # even when it says "in PISA 2025" ("compare Egypt and Israel in PISA 2025").
+    ANALYSIS_WORDS = re.compile(
+        r"\b(compare|comparison|mean|average|score|scores|rank|ranked|ranking|"
+        r"gap|trend|difference|correlat\w*|percent\w*|share|proportion|top|"
+        r"highest|lowest|best|worst|how (did|has|have|many|much)|regress\w*)\b",
+        re.IGNORECASE)
+
+    def _is_participation_question(self, question: str) -> bool:
+        return bool(self.PARTICIPATION_WORDS.search(question)) and \
+            not self.ANALYSIS_WORDS.search(question)
+
+    # "Why is the link error excluded?" / "the OECD says this change is not
+    # significant" — a methods question the model must not improvise on.
+    LINK_WORDS = re.compile(
+        r"link(ing)? error|equating error|scale linking|"
+        r"oecd('s)? (analysis|report|reports|results|publication|table|tables|volume)"
+        r".{0,100}(significan|differ)|(significan|differ).{0,100}"
+        r"oecd('s)? (analysis|report|reports|results|publication|table|tables|volume)",
+        re.IGNORECASE | re.DOTALL)
+
+    def _link_error_answer(self) -> str:
+        status = ("This version applies the published link errors, so trend "
+                  "significance here matches the OECD's reports."
+                  if link_errors.loaded() else
+                  "This version does not yet apply them: the constants live in a "
+                  "published table, not in the microdata, and have not been "
+                  "loaded, so the change SEs shown here are slightly understated.")
+        return (
+            "Within a cycle, every estimate and standard error in this app "
+            "reproduces the OECD's figures (final student weights, 10 plausible "
+            "values, 80 Fay-BRR replicates). Across cycles the OECD adds one more "
+            "term: the link error, the uncertainty from re-linking each cycle's "
+            "scale to the previous one. It is a published constant per pair of "
+            "cycles and domain (PISA 2025 Results Volume I, Annex A5), and the OECD "
+            "computes SE(change) = sqrt(SE_first² + SE_last² + link_error²). "
+            + status +
+            " The practical effect: a change whose estimate is only just beyond "
+            "1.96 SE here (for example Brazil's +5.5 points in science, SE 2.7, "
+            "2022→2025) can be reported as not statistically significant by the "
+            "OECD once the link error is added, while larger changes agree. "
+            "Point estimates are unaffected. Every trend answer's provenance "
+            "card states whether the link error is included.")
+
+    # "Coverage rate" is Coverage Index 3 (the share of 15-year-olds the
+    # sample represents) — a published table, not a variable in the files.
+    COVERAGE_RATE_WORDS = re.compile(
+        r"coverage (rate|rates|index|indices|of (the )?(15|fifteen|target|population)|"
+        r"of pisa)|coverage index|\bci ?3\b|population coverage|exclusion rate|"
+        r"exclusion rates|(proportion|share|percentage) of (the )?(15|fifteen)[- ]year[- ]olds",
+        re.IGNORECASE)
+
+    def _coverage_rate_answer(self) -> str:
+        return (
+            "Coverage rates (Coverage Index 3: the share of an economy's 15-year-old "
+            "population represented by the PISA sample, after school- and "
+            "student-level exclusions) are not variables in the public-use "
+            "databases loaded here, so this app cannot compute or compare them. "
+            "The OECD publishes them per economy and cycle in PISA 2025 Results "
+            "(Volume I), Annex A2, and in the Technical Report's sampling-outcomes "
+            "chapter. What the microdata do support: the number of sampled students "
+            "and the sum of final student weights (the enrolled 15-year-old "
+            "population each sample represents), shown in the provenance card of "
+            "every answer. A change in coverage between cycles cannot be separated "
+            "from the change in scores with this app.")
 
     def _participation_answer(self, codes: list[str]) -> str:
         """Which loaded cycles each named economy appears in — from the data."""
@@ -615,6 +702,10 @@ class Agent:
             return ""
         n, k = cov["n_with_data"], cov["n_economies"]
         named_missing = sorted(named & cov["missing"])
+        if named_missing and link_errors.domain_of(var):
+            return (f"{table}: the OECD did not release {' '.join(named_missing)}'s "
+                    f"{link_errors.DOMAIN_NAMES[link_errors.domain_of(var)]} results "
+                    "(took part; no plausible values) — no estimate possible for them")
         if named_missing:
             return (f"{table}: NOT collected for {' '.join(named_missing)} "
                     f"(collected in {n} of {k} economies) — do not use it for them")
@@ -660,7 +751,8 @@ class Agent:
                     f"the main plan ({want[0]} minus {want[1]}) so the "
                     f"cross-cycle change is comparable.")
 
-    def _missing_estimate_notes(self, table: pd.DataFrame) -> list[str]:
+    def _missing_estimate_notes(self, table: pd.DataFrame,
+                                measure: str | None = None) -> list[str]:
         """Blank estimates explained: an economy that was not in a cycle is
         said so; anything else is a variable not administered / no valid
         responses for that group."""
@@ -685,10 +777,22 @@ class Agent:
                     mask.loc[absent_rows, col] = False
         n_missing = int(mask.any(axis=1).sum())
         if n_missing:
-            notes.append(
-                f"{n_missing} row(s) have no estimate — the variable was not "
-                "administered (or has no valid responses) for those groups; "
-                "they are listed in the table but excluded from the chart.")
+            domain = link_errors.domain_of(measure)
+            if domain and "CNT" in table.columns:
+                rows = table["CNT"].astype(str)[mask.any(axis=1)]
+                who = self._names(sorted(set(rows) - {"OECD avg"})[:12])
+                notes.append(
+                    f"{n_missing} row(s) have no {link_errors.DOMAIN_NAMES[domain]} "
+                    f"estimate ({who}): those economies took part, but the OECD did "
+                    f"not release their {link_errors.DOMAIN_NAMES[domain]} results in "
+                    "the public database for that cycle (no plausible values — e.g. "
+                    "Viet Nam 2018 in every domain, Uzbekistan 2025 in mathematics "
+                    "and reading). They are listed in the table but excluded from the chart.")
+            else:
+                notes.append(
+                    f"{n_missing} row(s) have no estimate — the variable was not "
+                    "administered (or has no valid responses) for those groups; "
+                    "they are listed in the table but excluded from the chart.")
         return notes
 
     # ---------- coverage guard (offline-testable, no LLM) ----------
@@ -752,6 +856,14 @@ class Agent:
     def _coverage_note(self, f: dict) -> str:
         head = (f"PISA {f['cycle']}: {f['label']} ({f['variable']}) was collected in "
                 f"{f['n_with_data']} of {f['n_economies']} economies")
+        domain = link_errors.domain_of(f["variable"])
+        if domain and f["named_missing"]:
+            dom = link_errors.DOMAIN_NAMES[domain]
+            tail = ("that cycle has no estimate and is omitted." if f["blocked"]
+                    else "those rows have no estimate.")
+            return (f"PISA {f['cycle']}: {self._names(f['named_missing'])} took part, "
+                    f"but the OECD did not release its {dom} results in the public "
+                    f"database (no plausible values), so {tail}")
         if f["blocked"]:
             return (f"{head} (an optional questionnaire / national option); "
                     f"{self._names(f['named_missing'])} did not administer it, so "
@@ -778,6 +890,15 @@ class Agent:
                 if not f["blocked"]:
                     continue
                 who = self._names(f["named_missing"])
+                domain = link_errors.domain_of(f["variable"])
+                if domain:
+                    dom = link_errors.DOMAIN_NAMES[domain]
+                    parts.append(
+                        f"{who} took part in PISA {cycle}, but the OECD did not "
+                        f"release its {dom} results in the public database (no "
+                        f"plausible values), so no {dom} estimate exists for that cycle.")
+                    last = None
+                    continue
                 parts.append(
                     f"{f['label']} ({f['variable']}) was collected in only "
                     f"{f['n_with_data']} of {f['n_economies']} economies in PISA "
@@ -963,7 +1084,9 @@ class Agent:
                     f"filter {where or 'none'}; check the economy's participation "
                     "(for example El Salvador joined PISA in 2022).")
         if len(cycles) >= 2:
-            table = trend(per_cycle, by=[c for c in by] + extra_keys)
+            le = link_errors.link_error(cycles[0], cycles[-1], plan.get("measure"))
+            plan["_link_error"] = le
+            table = trend(per_cycle, by=[c for c in by] + extra_keys, link_error=le)
         else:
             table = per_cycle[cycles[0]].assign(cycle=cycles[0])
 
@@ -991,7 +1114,7 @@ class Agent:
         table = table.reset_index(drop=True)
 
         prov = self._provenance(plan, tables)
-        prov["notes"].extend(self._missing_estimate_notes(table))
+        prov["notes"].extend(self._missing_estimate_notes(table, plan.get("measure")))
         return table, prov
 
     def _oecd_average_rows(self, res: pd.DataFrame, tbl: str) -> pd.DataFrame | None:
@@ -1039,9 +1162,20 @@ class Agent:
                 self.con, tbl, plan["variable"], plan["value"], by=by,
                 where=where, valid_values=plan.get("valid_values"))
         if template == "gap":
-            self._check_identifier(plan["group_col"])
-            return gap(self.con, tbl, plan["measure"], plan["group_col"],
-                       plan["minuend"], plan["subtrahend"], by=by, where=where)
+            group_col = str(plan["group_col"])
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", group_col):
+                return gap(self.con, tbl, plan["measure"], group_col,
+                           plan["minuend"], plan["subtrahend"], by=by, where=where)
+            # A derived two-group split (immigrant vs non-immigrant, …):
+            # a CASE expression yielding the two codes compared.
+            self._check_fragment(group_col)
+            if not re.match(r"^\s*CASE\b", group_col, re.IGNORECASE):
+                raise ValueError("group_col must be a column name or a CASE "
+                                 f"expression, not {group_col!r}")
+            return gap(self.con, tbl, plan["measure"], group_col,
+                       plan["minuend"], plan["subtrahend"], by=by, where=where,
+                       group_expr=group_col,
+                       group_label=str(plan.get("group_label") or "derived group"))
         if template == "quartile_means":
             self._check_fragment(plan["quart_variable"])
             return quartile_means(self.con, tbl, plan["measure"],
@@ -1196,8 +1330,22 @@ class Agent:
             first, last = cycles[0], cycles[-1]
             method += (f" Cross-cycle change = {last} minus {first}: independent "
                        f"samples, SE = sqrt(SE{first[2:]}^2 + SE{last[2:]}^2).")
-            notes.append("Trend SEs exclude the OECD link error (scale equating "
-                         "uncertainty); they are slightly understated.")
+            le = plan.get("_link_error")
+            domain = link_errors.domain_of(plan.get("measure"))
+            if le:
+                method += f" Plus the OECD link error ({le} points) for {last} vs {first}."
+                notes.append(f"Trend SEs include the OECD link error for "
+                             f"{link_errors.DOMAIN_NAMES[domain]} {first}→{last} "
+                             f"({le} score points; {link_errors.SOURCE}), so "
+                             "significance of changes matches the OECD's reports.")
+            else:
+                notes.append("Trend SEs exclude the OECD link error (scale equating "
+                             "uncertainty), a published constant per cycle pair and "
+                             "domain that is not in the microdata; they are slightly "
+                             "understated, so a change whose estimate is only just "
+                             "beyond 1.96 SE here may be reported as not significant "
+                             "by the OECD. Ask “why is the link error excluded?” for "
+                             "details.")
         for cycle, ov in sorted((plan.get("cycle_overrides") or {}).items()):
             if isinstance(ov, dict) and ov:
                 fields = ", ".join(f"{k} = {v}" for k, v in ov.items())
@@ -1296,6 +1444,7 @@ class Agent:
                                r"not applicable|invalid|no response|not reached|"
                                r"^missing", re.IGNORECASE)
     MAX_EXPLORE_ROWS = 40
+    EXPLORE_MIN_SCORE = 8.0     # one whole-word label match on a real concept
 
     def _explore(self, question: str, terms: list[str]) -> AgentResult:
         """Answer 'what data is there about X' from the catalog itself: one
@@ -1303,6 +1452,8 @@ class Agent:
         instruments) it exists in, and its response codes. Deterministic —
         no plan, no statistic, no LLM summary that could invent variables."""
         hits = self._retrieve(terms, per_term=12)
+        if not hits.empty:      # weak, scattered token matches are not "data on X"
+            hits = hits[hits.score >= self.EXPLORE_MIN_SCORE]
         years = sorted(set(self.YEAR_RE.findall(question)))
         if years and not hits.empty:
             hits = hits[hits.cycle.isin(years)]
@@ -1336,10 +1487,13 @@ class Agent:
         scope = f"PISA {', '.join(years)}" if years else "PISA 2018, 2022 and 2025"
         topic = ", ".join(t for t in terms if not self.YEAR_RE.fullmatch(t)) or "that topic"
         if table.empty:
-            answer = (f"No catalog variables matched “{topic}” in {scope}. Try "
-                      "other words for the construct (PISA labels use the OECD's "
-                      "wording, e.g. “sense of belonging”, “bullying”, “life "
-                      "satisfaction”).")
+            answer = (f"No catalog variables matched “{topic}” in {scope}. The "
+                      "public-use files hold questionnaire responses, derived "
+                      "indices and test results — not the published report tables "
+                      "(coverage or exclusion rates, OECD averages, trend tables). "
+                      "Try other words for the construct (PISA labels use the "
+                      "OECD's wording, e.g. “sense of belonging”, “bullying”, "
+                      "“life satisfaction”).")
         else:
             top = "; ".join(f"{r.variable} ({r.label[:60]}{'…' if len(r.label) > 60 else ''})"
                             for r in table.head(5).itertuples())
@@ -1523,11 +1677,17 @@ class Agent:
 
     def _ask(self, question: str, history: list | None) -> AgentResult:
         context = self._transcript(history)
+        # Methods and coverage-rate questions have one correct answer; the
+        # app gives it before any model is consulted.
+        if self.LINK_WORDS.search(question):
+            return AgentResult(question, self._link_error_answer(), route="conversational")
+        if self.COVERAGE_RATE_WORDS.search(question):
+            return AgentResult(question, self._coverage_rate_answer(), route="conversational")
         route = generate_json(f"{context}Question: {question}",
                               system=TERMS_SYSTEM + self.facts)
         # "Did X participate / do you have data on X?" — answered from the
         # participant lists, never by the model, whichever way it was routed.
-        if self.PARTICIPATION_WORDS.search(question):
+        if self._is_participation_question(question):
             named = self._economies_in_data(question)
             if named:
                 return AgentResult(question, self._participation_answer(named),

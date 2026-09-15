@@ -46,9 +46,25 @@ def weighted_proportion(con, table, variable, value, by=(), where=None,
 
 
 def gap(con, table, measure, group_col, minuend, subtrahend, by=(),
-        where=None) -> pd.DataFrame:
+        where=None, group_expr: str | None = None,
+        group_label: str | None = None) -> pd.DataFrame:
     """Difference in the weighted mean between two groups (e.g. gender gap),
-    with the statistically correct SE (replicate-wise differencing)."""
+    with the statistically correct SE (replicate-wise differencing).
+
+    `group_expr`: a SQL expression defining the two groups when they are not
+    a single column's codes — e.g. non-immigrant (IMMIG = 1) vs immigrant
+    (IMMIG in 2, 3): "CASE WHEN IMMIG = 1 THEN 1 WHEN IMMIG IN (2, 3) THEN 0
+    END" with minuend=1, subtrahend=0. `group_col` is then only a label."""
+    if group_expr:
+        from .estimator import _pv_list, fetch_frame, replicates_from_frame
+        exprs = _pv_list(measure)
+        cols = [f"m_{i}" for i in range(1, len(exprs) + 1)]
+        df = fetch_frame(con, table, exprs, by=by, where=where,
+                         extra={"_grp": group_expr})
+        reps = replicates_from_frame(df, cols, by=("_grp", *by))
+        out = contrast(reps, "_grp", minuend, subtrahend, by=tuple(by))
+        out.insert(0, "contrast", f"{group_label or group_col}: {minuend} - {subtrahend}")
+        return out
     reps = replicate_estimates(
         con, table, measure, by=(group_col, *by), where=where
     )
@@ -311,6 +327,7 @@ def regression(con, table, y, xs, by=(), where=None,
 
 
 def trend(results, result_2022: pd.DataFrame | None = None,
+          link_error: float | None = None,
           by=()) -> pd.DataFrame:
     """Cross-cycle table for already-combined results with matching groups.
 
@@ -348,8 +365,11 @@ def trend(results, result_2022: pd.DataFrame | None = None,
                       .drop(columns="_k"))
     first, last = cycles[0], cycles[-1]
     merged["change"] = merged[f"estimate_{last}"] - merged[f"estimate_{first}"]
+    # Independent samples: var_first + var_last (+ the OECD link error for
+    # the cycle pair and domain when it is known — see explorer/link_errors.py)
     merged["se_change"] = np.sqrt(merged[f"se_{first}"] ** 2
-                                  + merged[f"se_{last}"] ** 2)
+                                  + merged[f"se_{last}"] ** 2
+                                  + float(link_error or 0.0) ** 2)
     cols = keys + [c for cycle in cycles
                    for c in (f"estimate_{cycle}", f"se_{cycle}")] \
         + ["change", "se_change"]
