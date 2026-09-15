@@ -180,3 +180,12 @@ def test_economies_named_in_question_are_found_by_name_or_capital_code(monkeypat
     assert agent._economies_in_data("how are things") == []          # "are" is not ARE
     assert agent._economies_in_data("United Arab Emirates reading") == ["ARE"]
     assert agent._economies_in_data("How did India do?") == []
+
+
+def test_estimator_handles_empty_input_without_crashing():
+    from explorer.estimator import ALL_WEIGHTS, combine, replicates_from_frame
+    empty = pd.DataFrame(columns=["CNT", "m_1"] + ALL_WEIGHTS)
+    reps = replicates_from_frame(empty, ["m_1"], by=("CNT",))
+    assert reps.empty and list(reps.columns) == ["CNT", "pv", "rep", "value"]
+    out = combine(reps, by=("CNT",))
+    assert out.empty and list(out.columns) == ["CNT", "estimate", "se", "n_pv"]

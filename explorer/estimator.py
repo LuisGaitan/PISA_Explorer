@@ -111,6 +111,8 @@ def replicates_from_frame(
         for col, val in zip(by, key):
             frame[col] = val
         frames.append(frame)
+    if not frames:      # no rows matched (e.g. an economy absent from this cycle)
+        return pd.DataFrame(columns=list(by) + ["pv", "rep", "value"])
     out = pd.concat(frames, ignore_index=True)
     return out[list(by) + ["pv", "rep", "value"]]
 
@@ -119,6 +121,8 @@ def combine(replicates: pd.DataFrame, by: tuple[str, ...] = ()) -> pd.DataFrame:
     """Rubin + Fay-BRR combination of a replicate frame (possibly of derived
     statistics). Returns [*by, estimate, se, n_pv]."""
     group_cols = list(by) if by else []
+    if replicates.empty:
+        return pd.DataFrame(columns=group_cols + ["estimate", "se", "n_pv"])
 
     def _one(group: pd.DataFrame) -> pd.Series:
         main = group[group.rep == 0].set_index("pv").value  # T_v per PV

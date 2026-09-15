@@ -158,6 +158,8 @@ def correlation(con, table, x, y, by=(), where=None) -> pd.DataFrame:
         for col, val in zip(by, key):
             frame[col] = val
         frames.append(frame)
+    if not frames:
+        return combine(pd.DataFrame(columns=list(by) + ['pv', 'rep', 'value']), by=())
     reps = pd.concat(frames, ignore_index=True)
     return combine(reps, by=tuple(by))
 
@@ -193,6 +195,8 @@ def _percentile_replicates(con, table, measure, by=(), where=None,
                 for c, val in zip(by, key):
                     frame[c] = val
                 frames.append(frame)
+    if not frames:
+        return pd.DataFrame(columns=list(by) + ['percentile', 'pv', 'rep', 'value'])
     return pd.concat(frames, ignore_index=True)
 
 
@@ -300,6 +304,8 @@ def regression(con, table, y, xs, by=(), where=None,
                 for c, val in zip(by, key):
                     frame[c] = val
                 frames.append(frame)
+    if not frames:
+        return combine(pd.DataFrame(columns=list(by) + ['term', 'pv', 'rep', 'value']), by=())
     reps = pd.concat(frames, ignore_index=True)
     return combine(reps, by=(*by, "term"))
 

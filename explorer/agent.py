@@ -655,6 +655,18 @@ class Agent:
         if template == "crosstab":
             extra_keys = [k for k in extra_keys
                           if k in per_cycle[cycles[0]].columns]
+        # A cycle with no rows for this filter (an economy that had not yet
+        # joined PISA, a construct not administered) is reported, not run.
+        empty_cycles = [c for c in cycles if per_cycle[c].empty]
+        if empty_cycles:
+            plan["_empty_cycles"] = empty_cycles
+            per_cycle = {c: r for c, r in per_cycle.items() if not r.empty}
+            cycles = [c for c in cycles if c not in empty_cycles]
+            if not cycles:
+                raise ValueError(
+                    "no data match this question in any requested cycle — "
+                    f"filter {where or 'none'}; check the economy's participation "
+                    "(for example El Salvador joined PISA in 2022).")
         if len(cycles) >= 2:
             table = trend(per_cycle, by=[c for c in by] + extra_keys)
         else:
@@ -922,6 +934,16 @@ class Agent:
                 if info["absent"]:
                     line += (f"; not in the {cycle} data: {', '.join(info['absent'])}")
                 notes.append(line + ".")
+        for cycle in plan.get("_empty_cycles") or []:
+            named = self._economies_in_data(str(plan.get("where") or ""))
+            who = ", ".join(self.economy_names.get(c, c) for c in named) or "this filter"
+            joined = ""
+            if len(named) == 1:
+                first = min(c for c, p in self.present.items() if named[0] in p)
+                joined = f" ({who} first took part in PISA {first})"
+            notes.append(f"PISA {cycle}: no data for {who}{joined}; that cycle is "
+                         "omitted from the table and the change is computed between "
+                         "the cycles that have data.")
         if plan.get("limitation_note"):
             notes.append(f"NOT DONE: {plan['limitation_note']}")
         if self.WHY_WORDS.search(str(plan.get("_question") or "")) \
