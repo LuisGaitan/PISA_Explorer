@@ -114,7 +114,7 @@ document.getElementById("admincode").addEventListener("keydown", e => { if (e.ke
 document.getElementById("refresh").addEventListener("click", load);
 document.getElementById("days").addEventListener("change", load);
 document.getElementById("exportbtn").addEventListener("click", () => {
-  const cols = ["ts", "kind", "institution", "session", "question", "answer", "route", "template", "instrument", "cycles", "regions", "countries", "variables", "rows", "limitation", "chart", "vote", "comment", "error", "total_ms", "llm_calls", "llm_ms", "mobile", "width", "exported"];
+  const cols = ["ts", "kind", "institution", "session", "question", "answer", "route", "template", "instrument", "cycles", "regions", "countries", "variables", "rows", "limitation", "guards", "summary_mode", "prose_issues", "build", "chart", "vote", "comment", "error", "total_ms", "llm_calls", "llm_ms", "mobile", "width", "exported"];
   const esc = v => { const s = v == null ? "" : (Array.isArray(v) ? v.join("|") : String(v)); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const lines = [cols.join(",")].concat(EVENTS.map(e => cols.map(c => esc(e[c])).join(",")));
   const a = document.createElement("a");
@@ -177,7 +177,25 @@ function render() {
   grid.appendChild(countBars(count(rendered, e => e.chart), "Chart forms rendered"));
   grid.appendChild(countBars(count(dataAsks, e => e.countries).slice(0, 15), "Countries asked about (top 15)"));
   grid.appendChild(countBars(count(dataAsks, e => e.variables).slice(0, 15), "Variables used (top 15)"));
+  // Which deterministic guards (intercepts, plan hooks, summary checks) fired.
+  // A guard with many 👎 next to it is hijacking questions; one that never
+  // fires can be retired. Format: "name · n (👎 k)".
+  const guardRows = count(asks, e => e.guards).map(([g, n]) => {
+    const downs = asks.filter(e => Array.isArray(e.guards) && e.guards.includes(g) && e.vote === "down").length;
+    return [downs ? `${g} (👎 ${downs})` : g, n];
+  });
+  grid.appendChild(countBars(guardRows.slice(0, 20), "Guards fired (top 20)"));
+  grid.appendChild(countBars(count(dataAsks, e => e.summary_mode || "–"), "Summary mode (llm = AI draft passed the check; app-authored = it did not)"));
+  grid.appendChild(countBars(count(dataAsks, e => e.build || "–"), "Build that answered"));
   $main.appendChild(grid);
+
+  const rejected = dataAsks.filter(e => Array.isArray(e.prose_issues) && e.prose_issues.length);
+  $main.appendChild(el("h2", null, `AI drafts rejected by the prose check (${rejected.length}) — what the model got wrong`));
+  $main.appendChild(el("div", "card")).appendChild(rejected.length ? table(["When", "Institution", "Question", "Problems in the first draft", "Final"], rejected, e => {
+    const tr = el("tr"); tr.appendChild(el("td", null, when(e.ts))); tr.appendChild(el("td", null, e.institution));
+    tr.appendChild(el("td", "q", short(e.question))); tr.appendChild(el("td", "q", short(e.prose_issues.join("; "), 300)));
+    tr.appendChild(el("td", null, e.summary_mode || "")); return tr;
+  }) : el("span", "muted", "none"));
 
   const downs = asks.filter(e => e.vote === "down");
   $main.appendChild(el("h2", null, `Thumbs-down answers (${downs.length})`));

@@ -15,6 +15,12 @@ import urllib.request
 from .db import REPO_ROOT
 
 DEFAULT_MODEL = os.environ.get("PISA_LLM_MODEL", "gemini-2.5-flash")
+# Greedy decoding by default. The router and planner are classifiers that
+# fill a schema: at 0.2 the same question produced different search terms,
+# variables and even templates from run to run, which made two users' answers
+# to one question differ and made regression tests flaky. Reproducibility is
+# part of exactness; override with PISA_LLM_TEMPERATURE only for experiments.
+DEFAULT_TEMPERATURE = float(os.environ.get("PISA_LLM_TEMPERATURE", "0"))
 _ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
@@ -92,9 +98,11 @@ def generate(
     system: str | None = None,
     json_mode: bool = False,
     model: str = DEFAULT_MODEL,
-    temperature: float = 0.2,
+    temperature: float | None = None,
 ) -> str:
     """One non-streaming generation call; returns the text of the reply."""
+    if temperature is None:
+        temperature = DEFAULT_TEMPERATURE
     body: dict = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": temperature},

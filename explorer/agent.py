@@ -22,7 +22,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import catalog, llm, regions
+from . import catalog, llm, regions, standards
+from . import summary as summ
+from .version import BUILD, stamp
 from .analysis import (
     correlation,
     crosstab,
@@ -325,7 +327,13 @@ unless its card says NOT collected for that economy.
 Several explanatory variables against ONE outcome ("association between A, B
 and math scores") => action="analyze" with template regression, predictors =
 every variable named (with predictor_names) — never a question asking which
-one to analyze first. If they cannot enter one regression, run correlation on
+one to analyze first. A gap, quartile_gap, correlation or regression asked
+for SEVERAL subjects ("the gap in each subject", "math and reading") => run
+it for the first subject named (science when none is named) and list the
+other subjects in limitation_note — never clarify to ask which one first.
+"What is behind / what explains a decline" => the trend of the score itself
+(weighted_mean over the cycles) with limitation_note; a regression across
+cycles does not answer it (its intercept is not the mean score). If they cannot enter one regression, run correlation on
 the first and put the rest in limitation_note.
 The "clarify" text is shown verbatim to a non-technical reader: plain
 language, variables named by their label with the code in parentheses, no
@@ -404,7 +412,10 @@ group's share as given and never subtract it from 100 to describe the other
 group unless the table also holds that row. When the `change` column is blank
 for a measure, the notes explain that the index is standardized within each
 cycle: report each cycle's level and explicitly say the change is not
-comparable — never write that it rose, fell or changed significantly."""
+comparable — never write that it rose, fell or changed significantly. In a
+regression table the "(intercept)" row is the predicted score when every
+predictor is 0 — never call it the country's performance or mean score;
+report the predictor coefficients as associations."""
 
 
 class CoverageError(ValueError):
@@ -428,6 +439,9 @@ class AgentResult:
     notes: list[str] = field(default_factory=list)
     route: str = "data"          # conversational | clarify | explore | data | error
     timing: dict = field(default_factory=dict)   # total_ms, llm_calls, llm_ms
+    guards: list[str] = field(default_factory=list)   # intercepts/hooks that fired
+    summary_mode: str | None = None    # llm | llm-retry | app-authored
+    prose_issues: list[str] = field(default_factory=list)   # first draft's problems
 
     def analytics(self) -> dict:
         """The loggable, PII-free summary of this exchange (question text
@@ -458,6 +472,10 @@ class AgentResult:
             "missing_rows": any("no estimate" in n for n in prov.get("notes", [])),
             "error": self.error,
             "answer_chars": len(self.answer or ""),
+            "guards": list(self.guards),
+            "summary_mode": self.summary_mode,
+            "prose_issues": list(self.prose_issues)[:10],
+            "build": BUILD,
             **self.timing,
         }
 
@@ -479,6 +497,16 @@ class Agent:
         self.economy_names = self._economy_names()
         self.facts = self._facts_block()
         self.regions_block = regions.prompt_block(self.present)
+        self._fired: list[str] = []
+
+    # Every intercept and post-hoc hook that changes an answer records its
+    # name here; the list rides on the event so the admin dashboard shows
+    # which guards fire, how often, and with what feedback. A guard that
+    # never fires can be retired; one that fires with thumbs-down is a hijack.
+    def _fire(self, name: str) -> None:
+        fired = self.__dict__.setdefault("_fired", [])
+        if name not in fired:
+            fired.append(name)
 
     def _economy_names(self) -> dict[str, str]:
         """CNT code -> economy name from the catalog's own value labels."""
@@ -905,34 +933,71 @@ class Agent:
                     "they are listed in the table but excluded from the chart.")
         return notes
 
-    # ---------- school type: the principal-reported item is the standard ----------
-
-    SCHOOL_TYPE_WORDS = re.compile(r"\b(public|private|state|government)\b.{0,40}\bschool|"
-                                   r"\bschool.{0,40}\b(public|private|type)\b", re.I)
+    # ---------- standard variables (explorer/standards.py) ----------
 
     def _with_standard_cards(self, hits: pd.DataFrame, question: str) -> pd.DataFrame:
-        """Cards the planner must always see for certain questions, whether or
-        not retrieval surfaced them (public vs private => SC013Q01TA)."""
-        if not self.SCHOOL_TYPE_WORDS.search(question or ""):
+        """Cards the planner must always see: the standard variable for every
+        construct the question names (explorer/standards.py), whether or not
+        retrieval surfaced it — retrieval depends on the router's search
+        terms, which vary; the standard does not."""
+        matches = standards.matching(question or "")
+        if not matches:
             return hits
-        extra = catalog.describe("SC013Q01TA")
-        extra = extra[extra.table_name.str.startswith("sch_qqq")]
-        if extra.empty or (hits is not None and not hits.empty
-                           and (hits.variable == "SC013Q01TA").any()):
+        have = set(hits.variable) if hits is not None and not hits.empty else set()
+        extras = []
+        for s in matches:
+            for code in s.codes():
+                if code in have:
+                    continue
+                desc = catalog.describe(code)
+                desc = desc[desc.table_name.str.startswith(s.instrument)]
+                if desc.empty:
+                    continue
+                have.add(code)
+                extras.append(desc.assign(n_value_labels=0, score=1000.0)[
+                    ["variable", "table_name", "cycle", "label", "n_value_labels", "score"]])
+        if not extras:
             return hits
-        extra = extra.assign(n_value_labels=0, score=1000.0)[
-            ["variable", "table_name", "cycle", "label", "n_value_labels", "score"]]
+        self._fire("standard:cards")
+        extra = pd.concat(extras, ignore_index=True)
         return pd.concat([extra, hits], ignore_index=True) if hits is not None else extra
 
-    def _prefer_reported_school_type(self, plan: dict) -> None:
-        """PRIVATESCH (sampling-derived, 57 of 90 economies in 2025) and
-        SC013Q01TA (principal-reported, 82) share the coding 1 public / 2
-        private; the reported item is the standard, so a plan on PRIVATESCH
-        is switched to it and the switch recorded."""
-        if plan.get("template") == "gap" and str(plan.get("group_col")) == "PRIVATESCH":
-            plan["group_col"] = "SC013Q01TA"
-            plan["instrument"] = "stu_sch"
+    def _apply_standards(self, plan: dict, question: str) -> None:
+        """A plan that picked a look-alike of a construct's standard variable
+        (PRIVATESCH for public/private, HOMEPOS for socio-economic status) is
+        switched to the standard — unless the user named that variable —
+        and the switch is stated in the provenance. Only constructs whose
+        standard is the same variable in every planned cycle are switched
+        here; per-cycle ones (gender) are handled by the planner rules."""
+        if plan.get("action") == "clarify":
+            return
+        cycles = [str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]]
+        for s in standards.matching(question or ""):
+            if not s.swap_from:
+                continue
+            targets = {s.variable_for(c) for c in cycles}
+            targets.discard(None)
+            if len(targets) != 1:
+                continue
+            target = targets.pop()
+            spelled = standards.named_in(question, s.swap_from)
+            for fld in s.fields:
+                old = plan.get(fld)
+                if not isinstance(old, str) or old not in s.swap_from or old in spelled:
+                    continue
+                plan[fld] = target
+                if s.instrument == "sch_qqq" and str(plan.get("instrument") or "stu_qqq") == "stu_qqq":
+                    plan["instrument"] = "stu_sch"
+                plan.setdefault("_standardized", []).append(
+                    f"{s.construct}: {old} replaced by the standard variable {target} — {s.reason}.")
+                self._fire(f"standard:swap:{s.construct.split(' ')[0]}")
+        if any(line.startswith("public vs private") for line in plan.get("_standardized") or []):
             plan["_school_type_switched"] = True
+
+    def _prefer_reported_school_type(self, plan: dict) -> None:
+        """Kept for callers/tests: the public-vs-private rule is now one entry
+        of explorer/standards.py, applied by _apply_standards."""
+        self._apply_standards(plan, "public vs private school gap")
 
     # ---------- cross-cycle comparability of questionnaire indices ----------
 
@@ -1228,9 +1293,16 @@ class Agent:
         r"\bhow many (students|pupils|children|kids|schools|participants)\b|"
         r"\bnumber of (students|pupils|schools|participants) (tested|sampled|assessed|"
         r"participat\w*|took part|surveyed)|\bsample sizes?\b", re.IGNORECASE)
+    # Anything that makes "how many students" a statistic rather than a
+    # sample size: a share, a domain, a group — or a behaviour ("how many
+    # students USE AI chatbots" asked for a share and was answered with the
+    # sample size until the guard telemetry showed the hijack).
     OTHER_STAT_WORDS = re.compile(
         r"\b(percent\w*|share|proportion|average|mean|score|scores|gap|trend|rank\w*|"
-        r"correlat\w*|compare|comparison|girls|boys|female|male|below|above|level)\b",
+        r"correlat\w*|compare|comparison|girls|boys|female|male|below|above|level|"
+        r"use|uses|used|using|report\w*|say|said|have|has|had|feel|felt|agree\w*|"
+        r"repeat\w*|skip\w*|speak\w*|attend\w*|ai|chatbots?|immigra\w*|bull\w*|"
+        r"belong\w*|satisf\w*)\b",
         re.IGNORECASE)
 
     def _count_answer(self, codes: list[str], question: str) -> str:
@@ -2012,11 +2084,8 @@ class Agent:
                          "region from its fixed list), so no average row was added for it.")
         if plan.get("substitution_note") and not plan.get("_school_type_switched"):
             notes.append(f"VARIABLE SUBSTITUTION: {plan['substitution_note']}")
-        if plan.get("_school_type_switched"):
-            notes.append("School type is the principal-reported item SC013Q01TA (1 = public, "
-                         "2 = private; 82 of 90 economies in 2025), the standard for "
-                         "public-vs-private comparisons; the sampling-derived PRIVATESCH "
-                         "flag (57 economies in 2025) was not used.")
+        for line in plan.get("_standardized") or []:
+            notes.append(f"STANDARD VARIABLE: {line}")
         cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
         all_blank = bool(plan.get("_non_comparable")) and not plan.get("_link_error") \
             and not any((plan.get("_link_errors") or {}).values())
@@ -2130,6 +2199,7 @@ class Agent:
             "sample": sample,
             "sql": plan.get("sql") if raw else None,
             "notes": notes,
+            "build": stamp(),
         }
 
     # ---------- the full loop ----------
@@ -2229,7 +2299,7 @@ class Agent:
                       + (f"; cycles: {', '.join(years)}" if years else ""),
             "method": "Keyword search over the OECD codebooks (variable names and "
                       "labels). No statistic was computed.",
-            "sample": [], "sql": None, "notes": [],
+            "sample": [], "sql": None, "notes": [], "build": stamp(),
         }
         return AgentResult(question, answer, plan=plan, table=table,
                            provenance=provenance, retrieved=hits, route="explore")
@@ -2377,6 +2447,7 @@ class Agent:
     def ask(self, question: str, history: list | None = None) -> AgentResult:
         """Answer one question; attaches route + timing for analytics."""
         llm.reset_stats()
+        self._fired = []
         started = time.time()
         try:
             result = self._ask(question, history)
@@ -2385,6 +2456,7 @@ class Agent:
                                  error=str(e), route="error")
         result.timing = {"total_ms": round((time.time() - started) * 1000),
                          **llm.stats()}
+        result.guards = list(self._fired)
         return result
 
     # Deterministic answers with one correct wording: checked before any
@@ -2393,18 +2465,23 @@ class Agent:
     # same safeguards as an English one.
     def _intercept(self, text: str) -> str | None:
         if self.LINK_WORDS.search(text):
+            self._fire("intercept:link_error")
             return self._link_error_answer()
         if self.OVERVIEW_WORDS.search(text):
+            self._fire("intercept:overview")
             return self._overview_answer()
         if self.WHY_MISSING_WORDS.search(text):
             named = self._economies_in_data(text)
             if named:
+                self._fire("intercept:why_missing")
                 return self._missing_results_answer(named)
         if self.COUNT_WORDS.search(text) and not self.OTHER_STAT_WORDS.search(text):
             named = self._economies_in_data(text)
             if named:
+                self._fire("intercept:count")
                 return self._count_answer(named, text)
         if self.COVERAGE_RATE_WORDS.search(text):
+            self._fire("intercept:coverage_rate")
             return self._coverage_rate_answer()
         return None
 
@@ -2428,7 +2505,13 @@ class Agent:
                 f"ST438Q01DA) and source title exactly as written; translate nothing "
                 f"else than the prose. Return only the translation.\n\n{text}",
                 system="You are a precise translator for a statistics app.")
-            return out.strip() or text
+            out = out.strip()
+            # a translation that changes a number is worse than English
+            source_numbers = {(v, d) for _, v, d in summ._numbers_in(text)}
+            if any((v, d) not in source_numbers for _, v, d in summ._numbers_in(out)):
+                self._fire("localize:numbers_changed")
+                return text
+            return out or text
         except Exception:  # noqa: BLE001 — never lose the answer over a translation
             return text
 
@@ -2451,13 +2534,16 @@ class Agent:
         if self._is_participation_question(q_en):
             named = self._economies_in_data(q_en)
             if named:
+                self._fire("intercept:participation")
                 return AgentResult(question, self._localize(self._participation_answer(named), language),
                                    route="conversational")
         if not route.get("data_question"):
             if self.VIZ_WORDS.search(q_en):
+                self._fire("intercept:viz")
                 return AgentResult(question, self._localize(self.VIZ_ANSWER, language),
                                    route="conversational")
             if self.YEAR_RE.search(q_en) and self.COVERAGE_WORDS.search(q_en):
+                self._fire("intercept:coverage")
                 return AgentResult(question, self._localize(self._coverage_answer(), language),
                                    route="conversational")
             named = self._economies_in_data(q_en)
@@ -2469,6 +2555,7 @@ class Agent:
             # The router called it conversational, but the question names an
             # economy that IS in the data (or asks about AI use, which the 2025
             # questionnaire covers): the data answer, not the model's memory.
+            self._fire("route:force_analyze:" + ("ai_data" if ai_data else "economy"))
             route = {"data_question": True, "intent": "analyze",
                      "search_terms": (["artificial intelligence chatbot", "AI use school"]
                                       if ai_data else None)
@@ -2483,17 +2570,21 @@ class Agent:
         named = self._economies_in_data(q_en)
         question_block = (f"QUESTION: {question}" if q_en == question
                           else f"QUESTION (original, {language}): {question}\nQUESTION (English): {q_en}")
+        standard_block = standards.prompt_block(standards.matching(q_en))
         plan = generate_json(
-            f"{context}{question_block}\n\nVARIABLE CARDS:\n{self._cards(hits, named)}",
+            f"{context}{question_block}\n\n{standard_block}VARIABLE CARDS:\n{self._cards(hits, named)}",
             system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
                                       regions=self.regions_block),
         )
         plan["_question"] = q_en
         plan["_language"] = language
-        self._prefer_reported_school_type(plan)
+        self._apply_standards(plan, q_en)
         self._verify_substitution_claims(plan)
+        if plan.get("_claim_corrected"):
+            self._fire("hook:verify_substitution_claims")
         dropped = self._dropped_measures(q_en, plan)
         if dropped and plan.get("action") != "clarify":
+            self._fire("hook:dropped_measures")
             note = ("Also asked but not computed in this answer: " + ", ".join(dropped)
                     + " — ask for them together (e.g. “math, reading and ESCS for …”) "
                       "or one at a time.")
@@ -2502,6 +2593,7 @@ class Agent:
         if plan.get("action") != "clarify":
             left_out = self._dropped_economies(q_en, plan)
             if left_out:
+                self._fire("hook:dropped_economies")
                 note = ("Economies named in the question but not in this table: "
                         f"{self._names(left_out)} — ask again naming them as rows, or as a "
                         "group average (e.g. “… with the EU average”).")
@@ -2514,7 +2606,18 @@ class Agent:
 
         try:
             table, provenance = self.execute(plan)
+            for key, name in (("_direction_fixed", "hook:align_gender_direction"),
+                              ("_ranking_kept", "hook:keep_full_ranking"),
+                              ("_null_groups", "hook:drop_null_groups"),
+                              ("_non_comparable", "hook:blank_non_comparable"),
+                              ("_empty_cycles", "hook:empty_cycles"),
+                              ("_unavailable", "hook:unavailable_measures")):
+                if plan.get(key):
+                    self._fire(name)
+            if any(f["blocked"] for fs in (plan.get("_coverage") or {}).values() for f in fs):
+                self._fire("hook:coverage_block")
         except CoverageError as e:
+            self._fire("hook:coverage_block")
             answer = str(e)
             findings = plan.get("_coverage") or {}
             lacking = {c for fs in findings.values() for f in fs for c in f["named_missing"]}
@@ -2549,18 +2652,81 @@ class Agent:
             for smp in provenance.get("sample") or [] if smp.get("students") is not None)
         sample_block = (f"SAMPLE SIZES (within the question's filter): {sample_line}" + chr(10)
                         if sample_line else "")
+        focus_codes = self._economies_mentioned(
+            q_en + " " + " ".join(h.get("question", "") for h in (history or [])[-2:]),
+            table["CNT"].astype(str).unique()) if "CNT" in table.columns else []
+        facts = summ.fact_sentences(table, plan, provenance, self.economy_names,
+                                    self._measure_label, focus_codes=focus_codes)
+        provenance["facts"] = facts
         summary_prompt = (
             f"QUESTION: {question}\n"
             f"PLANNED: {plan.get('explanation')}\n"
             f"METHOD: {provenance['method']}\n"
             f"{sample_block}"
             f"NOTES: {'; '.join(provenance['notes']) or 'none'}\n"
+            f"VERIFIED STATEMENTS (computed by the app — every number, rank, change and "
+            f"significance verdict in your answer must come from these or the table; "
+            f"never compute a new number):\n- " + "\n- ".join(facts) + "\n"
             f"{legend}{focus}{truncation}"
             f"RESULT TABLE (CSV):\n{shown.to_csv(index=False)}"
         )
-        lang_rule = ("" if language.lower() == "english"
-                     else f"\nAnswer in {language} (the user's language); keep codes and numbers as they are.")
-        answer = self._plain(generate(summary_prompt, system=SUMMARY_SYSTEM + lang_rule))
+        answer, mode, issues = self._summarize(summary_prompt, facts, table, provenance,
+                                               plan, q_en, language)
+        provenance["summary_mode"] = mode
         return AgentResult(question, answer.strip(), plan=plan, table=table,
                            provenance=provenance, retrieved=hits,
-                           notes=provenance["notes"])
+                           notes=provenance["notes"], summary_mode=mode,
+                           prose_issues=issues)
+
+    def _allowed_codes(self, table: pd.DataFrame, plan: dict, provenance: dict,
+                       question: str) -> set[str]:
+        """Economies a summary may name: result rows, the question, the
+        filter, and anything the app's own notes mention."""
+        codes = set()
+        if "CNT" in table.columns:
+            codes |= {c for c in table["CNT"].astype(str) if not c.endswith(" avg")}
+        codes |= set(re.findall(r"'([A-Z]{3})'", str(plan.get("where") or "")))
+        codes |= set(self._economies_in_data(question))
+        codes |= set(self._economies_in_data(" ".join(provenance.get("notes") or [])))
+        return codes
+
+    def _summarize(self, prompt: str, facts: list[str], table: pd.DataFrame,
+                   provenance: dict, plan: dict, question: str,
+                   language: str) -> tuple[str, str, list[str]]:
+        """The model phrases the app's verified statements; its draft is
+        checked against the result (explorer/summary.py); one retry naming
+        the problems; then the statements themselves are the answer."""
+        allowed = self._allowed_codes(table, plan, provenance, question)
+        lang_rule = ("" if language.lower() == "english"
+                     else f"\nAnswer in {language} (the user's language); keep codes and numbers as they are.")
+        every = set().union(*self.present.values()) if self.present else set()
+
+        def mentioned(text):
+            return self._economies_mentioned(text, sorted(every))
+
+        def check(text):
+            return summ.check_prose(text, table, provenance, plan, question,
+                                    mentioned, allowed, language=language)
+
+        first_issues: list[str] = []
+        try:
+            draft = self._plain(generate(prompt, system=SUMMARY_SYSTEM + lang_rule)).strip()
+            first_issues = check(draft)
+            if not first_issues and draft:
+                return draft, "llm", []
+            self._fire("summary:retry")
+            retry_prompt = (prompt + "\n\nYOUR PREVIOUS DRAFT WAS REJECTED for these reasons: "
+                            + "; ".join(first_issues) +
+                            ".\nRewrite it using ONLY the verified statements and the table: "
+                            "copy numbers exactly, name only economies in the result, and "
+                            "state significance only as the verified statements do.")
+            draft = self._plain(generate(retry_prompt, system=SUMMARY_SYSTEM + lang_rule)).strip()
+            if draft and not check(draft):
+                return draft, "llm-retry", first_issues
+        except llm.LLMError as e:
+            first_issues = first_issues or [f"LLM error: {e}"]
+        self._fire("summary:app_authored")
+        answer = " ".join(facts)
+        if provenance.get("notes"):
+            answer += " Notes: " + " ".join(provenance["notes"][:3])
+        return self._localize(answer, language), "app-authored", first_issues

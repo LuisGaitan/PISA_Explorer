@@ -357,6 +357,19 @@ function buildProvenance(prov) {
     det.appendChild(ul); card.appendChild(det);
   }
   for (const n of prov.notes || []) card.appendChild(el("div", "note", n));
+  if ((prov.facts || []).length) {
+    const det = el("details");
+    det.appendChild(el("summary", null, `Verified statements (${prov.facts.length}) — computed by the app, not the AI`));
+    const ul = el("ul");
+    for (const f of prov.facts) ul.appendChild(el("li", null, f));
+    det.appendChild(ul); card.appendChild(det);
+  }
+  if (prov.build) {
+    const b = el("div", "note"); b.style.opacity = "0.7";
+    b.textContent = "Cite as: PISA Explorer (" + prov.build + ")" +
+      (prov.summary_mode === "app-authored" ? " · summary written by the app (the AI draft did not pass the check)" : "");
+    card.appendChild(b);
+  }
   return card;
 }
 

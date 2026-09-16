@@ -9,6 +9,8 @@ steps:
       - Dockerfile.code
       - --build-arg
       - DATA_IMAGE=${_DATA_IMAGE}
+      - --build-arg
+      - BUILD_TAG=${_TAG}
       - -t
       - us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/pisa-explorer:${_TAG}
       - .

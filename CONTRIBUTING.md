@@ -35,8 +35,17 @@ Then `python pipeline/convert.py`, `build_db.py`, `build_catalog.py`,
 ## Tests
 
 `pytest tests/` runs the offline checks (no data, no API key). With the data
-converted, `python pipeline/validate.py` and
-`python pipeline/check_2025_published.py` are the real validation.
+converted, `pytest tests/test_golden_plans.py` replays the golden plan set
+(exact numbers the engine must reproduce), and `python pipeline/validate.py`
+plus `python pipeline/check_2025_published.py` validate the data itself.
+With an API key, `python scripts/golden_live.py` runs the golden questions
+through the model and `python scripts/replay_events.py` re-asks recorded
+production questions.
+
+Before a deploy, run all of them. If a change alters a computed number on
+purpose (a new estimator rule, a new comparability rule), bump
+`METHOD_VERSION` in `explorer/version.py`, re-record the golden plans with
+`python scripts/golden_record.py --update`, and say why in the commit.
 
 ## Pull requests
 

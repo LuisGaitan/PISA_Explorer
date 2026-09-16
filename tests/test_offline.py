@@ -513,9 +513,10 @@ def test_unknown_columns_use_the_whole_catalog_and_school_type_is_standardized(m
     plan = {"template": "gap", "group_col": "PRIVATESCH", "minuend": 2, "subtrahend": 1, "instrument": "stu_sch"}
     agent._prefer_reported_school_type(plan)
     assert plan["group_col"] == "SC013Q01TA" and plan["_school_type_switched"]
-    assert Agent.SCHOOL_TYPE_WORDS.search("mexico public-private gap in schools") or \
-        Agent.SCHOOL_TYPE_WORDS.search("difference between mexico's public and private schools")
-    assert not Agent.SCHOOL_TYPE_WORDS.search("how did rwanda do?")
+    from explorer import standards
+    names = lambda q: [s.construct for s in standards.matching(q)]   # noqa: E731
+    assert "public vs private school" in names("difference between mexico's public and private schools")
+    assert "public vs private school" not in names("how did rwanda do?")
 
 
 

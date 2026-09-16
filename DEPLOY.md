@@ -85,6 +85,18 @@ on that device (there is no password).
 
 ## Code-only redeploy (the normal case — minutes, no data upload)
 
+Before building, run the regression gates (see CONTRIBUTING.md):
+
+```powershell
+pytest tests/                              # offline + golden plans (exact numbers)
+python scripts/golden_live.py              # golden questions through the model
+python scripts/replay_events.py --days 7   # yesterday's real questions, diffed
+```
+
+The `_TAG` you build with is stamped into every answer's provenance
+(`build v21, method v3` — `explorer/version.py`), so keep tags unique and
+increasing: a cited number can then be traced to the code that produced it.
+
 `Dockerfile.code` layers the current code onto the existing data image, so a
 code change never re-uploads the ~5 GB of Parquet:
 

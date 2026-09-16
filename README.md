@@ -88,6 +88,41 @@ python pipeline/check_2025_published.py   # 2025 SEs/sample sizes vs the Technic
 python -m explorer.demo          # end-to-end check (~2 s)
 ```
 
+## How answers are kept exact
+
+Every number comes from code, never from the model; the model plans an
+analysis and phrases the result. Four mechanisms keep the seams honest:
+
+- **Golden regression sets.** `tests/golden/plans.json` holds analysis plans
+  and the numbers the engine must reproduce (several verified against OECD
+  publications); `pytest tests/test_golden_plans.py` fails on any drift and
+  needs no API key. `tests/golden/questions.json` holds real user questions
+  with the route, template, variables, numbers and forbidden phrases each
+  answer must satisfy; `python scripts/golden_live.py` runs them through the
+  model before a deploy. `python scripts/replay_events.py` re-asks recorded
+  production questions and diffs the answers.
+- **App-authored statements and a prose check.** For every result the app
+  writes the facts itself (`explorer/summary.py`: levels, changes, ranks,
+  significance verdicts, pairwise differences) and the model may only phrase
+  them. Its draft is checked mechanically — every number must exist in the
+  result, every economy named must be in it, significance claims must match
+  the table, and phrasings such as "not collected", "did not participate" or
+  "projected" are rejected unless the app's own notes say so. A failed draft
+  is regenerated once with the problems named; if it fails again the app's
+  statements are the answer. The statements are shown under "Verified
+  statements" in the provenance card.
+- **Standard variables per construct.** `explorer/standards.py` fixes which
+  variable answers "gender", "public vs private", "socio-economic status",
+  "immigrant background", "bullying", "AI use" and so on, per cycle, with the
+  reason; the planner sees it first and a plan that picked a look-alike is
+  switched to the standard and told so in the provenance.
+- **Reproducibility.** The router and planner run at temperature 0. Every
+  provenance card carries `build <image tag>, method v<N>` (`explorer/version.py`);
+  the method version changes only when a computed number can change. Every
+  deterministic guard that fires is recorded on the event (`guards`), and
+  the admin dashboard shows guard hit rates, rejected model drafts and the
+  build that answered.
+
 ## Chat with the data
 
 Put your Gemini key in a `.env` file at the repo root (gitignored):

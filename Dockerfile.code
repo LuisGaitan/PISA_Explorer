@@ -9,6 +9,11 @@ FROM ${DATA_IMAGE}
 
 WORKDIR /app
 
+# The image tag, stamped on every answer's provenance ("build v21") so a
+# cited number can be traced to the code that produced it.
+ARG BUILD_TAG=dev
+ENV PISA_BUILD=${BUILD_TAG}
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
