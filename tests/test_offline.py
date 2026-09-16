@@ -660,3 +660,62 @@ def test_false_not_collected_claims_are_corrected_from_coverage(monkeypatch):
              "substitution_note": "MALE is used as ST004D01T was not collected for Canada in 2025."}
     agent._verify_substitution_claims(plan2)
     assert "_claim_corrected" not in plan2 and "not collected" in plan2["substitution_note"]
+
+
+
+def test_index_trends_are_flagged_non_comparable_but_scores_are_not(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    agent = Agent.__new__(Agent)
+    labels = {"CURIO": "Students' curiousity (WLE)", "ESCS": "Index of economic, social and cultural status",
+              "ST301Q01JA": "Agree/disagree: I am curious about many different things."}
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: pd.DataFrame(
+        {"variable": [var], "table_name": ["stu_qqq_2025"], "cycle": ["2025"], "label": [labels.get(var, var)],
+         "var_type": ["double"], "value_labels": [None]}) if var in labels else pd.DataFrame(
+        columns=["variable", "table_name", "cycle", "label", "var_type", "value_labels"]))
+    assert agent._trend_comparability("PV{pv}MATH", {}, ["2018", "2025"], {}) is None
+    assert agent._trend_comparability("CASE WHEN PV{pv}MATH < 420.07 THEN 100.0 ELSE 0.0 END", {}, ["2018", "2025"], {}) is None
+    assert "standardized within each PISA cycle" in agent._trend_comparability("CURIO", {}, ["2022", "2025"], {})
+    assert "standardized" in agent._trend_comparability("ESCS", {}, ["2018", "2025"], {})
+    assert "different variables" in agent._trend_comparability(
+        "ST301Q01JA", {}, ["2022", "2025"], {"2025": {"measure": "ST301Q06JA"}})
+    assert agent._trend_comparability("ST301Q01JA", {}, ["2022", "2025"], {}) is None      # same item: comparable
+    table = pd.DataFrame({"CNT": ["ARG", "ARG"], "measure": ["Mathematics score", "ESCS (ESCS)"],
+                          "estimate_2018": [379.0, -0.95], "estimate_2025": [366.0, -0.63],
+                          "change": [-13.0, 0.32], "se_change": [4.6, 0.04]})
+    plan = {}
+    agent._blank_non_comparable_changes(table, plan, [("Mathematics score", "PV{pv}MATH"), ("ESCS (ESCS)", "ESCS")],
+                                        ["2018", "2025"], {})
+    assert table.change.iloc[0] == -13.0 and np.isnan(table.change.iloc[1]) and np.isnan(table.se_change.iloc[1])
+    assert plan["_non_comparable"] and "ESCS" in plan["_non_comparable"][0]
+
+
+def test_ai_use_questions_are_data_questions_and_english_ones_skip_translation(monkeypatch):
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    A, D = Agent.AI_WORDS, Agent.AI_DATA_WORDS
+    q = "What is the AI usage rate among students in Japan?"
+    assert A.search(q) and D.search(q)
+    assert A.search("Is there data on the rate of AI use in education?")
+    assert not A.search("what is the average science score in Finland?")
+    assert agent._localize("Hello", "English") == "Hello" and agent._localize("Hello", None) == "Hello"
+
+
+
+def test_false_claims_nested_in_cycle_overrides_are_corrected_too(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    agent = Agent.__new__(Agent)
+    agent.present = {"2018": {"USA"}, "2025": {"USA"}}
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: pd.DataFrame(
+        {"variable": [var], "table_name": ["stu_qqq_2025"], "cycle": ["2025"], "label": [var],
+         "var_type": ["double"], "value_labels": [None]}) if var in ("ST004D01T", "MALE") else pd.DataFrame(
+        columns=["variable", "table_name", "cycle", "label", "var_type", "value_labels"]))
+    monkeypatch.setattr(catalog, "coverage", lambda var, table: {"n_economies": 90, "n_with_data": 90, "partial": False,
+                                                                  "with_data": None, "missing": None})
+    plan = {"template": "gap", "where": "CNT = 'USA'", "cycles": ["2018", "2025"], "group_col": "ST004D01T",
+            "cycle_overrides": {"2025": {"group_col": "MALE", "minuend": 1, "subtrahend": 0,
+                                         "substitution_note": "MALE is used as ST004D01T was not collected for the US."}}}
+    agent._verify_substitution_claims(plan)
+    assert "substitution_note" not in plan["cycle_overrides"]["2025"]
+    assert "standard convention" in plan["substitution_note"] and "ST004D01T" in plan["_claim_corrected"]

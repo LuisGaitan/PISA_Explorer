@@ -163,6 +163,17 @@ function barChart(rows, catCols, valueKey, seKey, title, opts = {}) {
 
 /* ---------- chart: dumbbell / connected dots across cycles ---------- */
 function dumbbellChart(rows, catCols, cycles, title) {
+  // League mode for long tables: compact rows, sorted by the change when it
+  // exists (largest gain first), otherwise by the latest cycle's level.
+  const league = rows.length > 40;
+  if (league) {
+    const lastC = cycles[cycles.length - 1];
+    const key = r => {
+      const ch = r.change; if (ch !== null && ch !== undefined && Number.isFinite(+ch)) return +ch;
+      const v = r[`estimate_${lastC}`]; return Number.isFinite(+v) ? +v - 1e6 : -1e9;
+    };
+    rows = [...rows].sort((a, b) => key(b) - key(a));
+  }
   const cats = rows.map(r => catCols.map(c => r[c]).join(" · "));
   const val = (r, c) => { const v = r[`estimate_${c}`]; return v === null || v === undefined ? NaN : +v; };
   const se  = (r, c) => +r[`se_${c}`] || 0;
@@ -176,7 +187,8 @@ function dumbbellChart(rows, catCols, cycles, title) {
   const colors = CYCLE_COLORS[cycles.length] || CYCLE_COLORS[3];
   const first = cycles[0], last = cycles[cycles.length - 1];
 
-  const W = 860, labelW = 150, padR = 56, rowH = 32, axisH = 26, padT = 6;
+  const W = 860, labelW = 150, padR = 56, rowH = league ? 20 : 32, axisH = 26, padT = 6;
+  const dotR = league ? 4 : 5.5;
   const H = padT + rows.length * rowH + axisH;
   const x = v => labelW + (v - (lo - pad)) / ((hi + pad) - (lo - pad)) * (W - labelW - padR);
   const svg = sv("svg", { viewBox: `0 0 ${W} ${H}` });
@@ -204,7 +216,7 @@ function dumbbellChart(rows, catCols, cycles, title) {
     }
     // draw newest last so it sits on top when dots overlap
     present.forEach(c => {
-      const dot = sv("circle", { cx: x(val(r, c)), cy, r: 5.5, "stroke-width": 2 });
+      const dot = sv("circle", { cx: x(val(r, c)), cy, r: dotR, "stroke-width": league ? 1.5 : 2 });
       dot.style.fill = colors[cycles.indexOf(c)]; dot.style.stroke = "var(--surface)";
       svg.appendChild(dot);
     });
@@ -231,7 +243,7 @@ function dumbbellChart(rows, catCols, cycles, title) {
     svg.appendChild(hit);
   });
 
-  const wrap = wrapChart(svg, title, "dumbbell");
+  const wrap = wrapChart(svg, title, league ? "dumbbell-league" : "dumbbell");
   const legend = el("div", "legend");
   cycles.forEach((c, k) => {
     const item = el("span");
@@ -334,7 +346,8 @@ function buildChart(table, plan) {
     const rows = table.rows.filter(r => cycles.filter(
       c => r[`estimate_${c}`] !== null && r[`estimate_${c}`] !== undefined
            && Number.isFinite(+r[`estimate_${c}`])).length >= 2);
-    return rows.length && rows.length <= 40
+    // up to 100 rows: past 40 the chart switches to a compact league layout
+    return rows.length && rows.length <= 100
       ? dumbbellChart(rows, catCols.length ? catCols : cols.slice(0, 1), cycles, explain) : null;
   }
   if (cols.includes("estimate")) {

@@ -71,7 +71,14 @@ cycles. Never claim "I cannot visualize data": charts appear automatically for
 comparison-shaped results.
 
 Reply with JSON: {"data_question": bool, "intent": "analyze"|"explore",
-"search_terms": [str, ...], "direct_answer": str|null}.
+"search_terms": [str, ...], "direct_answer": str|null,
+"language": str, "question_en": str}.
+"language" = the English name of the language the question is written in
+("English", "Japanese", "Spanish" …); "question_en" = a faithful English
+rendering of the question (the question itself when it is English) — the
+app's checks run on it, so keep economy names, years and variable codes
+exact. search_terms are always English. direct_answer is written in the
+user's language.
 If the question needs data — including a follow-up that continues or answers a
 clarification from the conversation context — set data_question=true and give
 2-6 short catalog search terms (constructs, topics, variable ideas — e.g.
@@ -123,7 +130,13 @@ government-dependent distinction; SC001Q01TA school location: 1 village/rural
 (2022/2025) — "rural vs urban/city" => gap with a CASE group_col, e.g. rural
 = SC001Q01TA IN (1, 2) vs city = SC001Q01TA >= 4; EDUSHORT / STAFFSHORT
 shortage indices (all cycles); CLSIZE class size; SCHSIZE school size and
-STRATIO student-teacher ratio (2018 and 2022 only). Student
+STRATIO student-teacher ratio (2018 and 2022 only).
+AI USE (2025 only, student questionnaire, 84 of 90 economies): ST438Q01DA–
+ST438Q04DA "How often do you use AI chatbots (e.g. ChatGPT) for your school
+work to …" (1 never … 5 every day or almost; use weighted_proportion of a
+code or weighted_mean of the code), AIUSESCH = students' AI use at school
+(WLE index); IC170Q10DA / IC171Q10DA AI tools at / outside school (ICT
+questionnaire, 44 economies). No cycle assessed AI literacy. Student
 questionnaire (stu_qqq_*) holds achievement plausible values PV1..PV10 for
 MATH/READ/SCIE, final weight W_FSTUWT, replicate weights, ESCS (socio-economic
 index), and CNT (ISO-3 country code, e.g. 'USA', 'KOR', 'DEU').
@@ -335,7 +348,13 @@ Comparisons across cycles => list every cycle
 asked about, in chronological order ("over time" / "trend" / "since 2018" =>
 all three unless the user narrows it); the system runs the template per
 cycle, reports every cycle side by side, and adds the change from the FIRST
-to the LAST listed cycle. When the question names no achievement domain, use
+to the LAST listed cycle. Questionnaire INDICES (WLE scales such as BELONG,
+CURIO, AIUSESCH, and ESCS) are standardized within each cycle (OECD mean 0,
+SD 1): a trend request on them still lists the cycles side by side, but the
+app BLANKS the change column and says why — plan it, and say in the
+explanation that cross-cycle changes in such indices are not comparable.
+Test scores (PV…) and shares of a response code ARE comparable across cycles.
+When the question names no achievement domain, use
 science (the 2025 major domain) and say so in the explanation. A question that names no cycle means the latest one (2025) — say so in
 the explanation. Achievement questions always use the PV{{pv}} form. Filter to
 the countries the user names; if none named, ask yourself whether all
@@ -382,7 +401,10 @@ were tested or sampled; they count the students inside the question's filter
 table's `category` column states exactly which group the percentage refers
 to (e.g. "MALE = 0 (Female/Other)" = the share who are girls): report that
 group's share as given and never subtract it from 100 to describe the other
-group unless the table also holds that row."""
+group unless the table also holds that row. When the `change` column is blank
+for a measure, the notes explain that the index is standardized within each
+cycle: report each cycle's level and explicitly say the change is not
+comparable — never write that it rose, fell or changed significantly."""
 
 
 class CoverageError(ValueError):
@@ -536,10 +558,18 @@ class Agent:
             "\n- The OECD published the PISA 2025 results on 8 September 2026 and "
             "the full 2025 public-use database is in this app NOW. Never say 2025 "
             "data are upcoming, unavailable, or not yet released.\n"
-            "- No PISA cycle so far assessed AI literacy. The OECD has announced "
-            "Media and AI Literacy as the innovative domain for PISA 2029; it has "
-            "not been administered and this app has no data on it. Do not describe "
-            "AI literacy as part of PISA 2025.\n"
+            "- AI: no PISA cycle has ASSESSED AI literacy (the OECD announced Media "
+            "and AI Literacy as the innovative domain for PISA 2029; not administered, "
+            "no data). BUT the PISA 2025 STUDENT QUESTIONNAIRE does hold AI-USE data, "
+            "in 84 of 90 economies (Japan included): ST438Q01DA–ST438Q04DA (how often "
+            "students use AI chatbots such as ChatGPT for schoolwork, four purposes), "
+            "the index AIUSESCH (students' AI use at school, WLE), IC170Q10DA / "
+            "IC171Q10DA (AI tools at / outside school, ICT questionnaire, 44 economies), "
+            "SC265Q13DA (teachers' professional development on AI) and teacher items "
+            "TC045Q23*. A question about AI USE, AI adoption rates or AI in education "
+            "is therefore a DATA question (data_question=true, intent=analyze, "
+            "search_terms [\"artificial intelligence chatbot\", \"AI use school\"]) — "
+            "never say the app has no AI data.\n"
             "- Not loaded: the 2025 Foreign Language Assessment (OECD release "
             "expected 2027).\n"
             "- Benchmarks: any per-country result can carry an OECD-average row "
@@ -690,8 +720,9 @@ class Agent:
                 "on 8 September 2026 and is loaded here, including the Learning in "
                 "the Digital World domain (2025's innovative domain). Not loaded: the "
                 "2025 Foreign Language Assessment, which the OECD releases in 2027. "
-                "No PISA cycle has assessed AI literacy yet; the OECD has announced "
-                "Media and AI Literacy for PISA 2029. Ask a data question — for "
+                "No PISA cycle has assessed AI literacy yet (announced for PISA 2029), "
+                "but the 2025 student questionnaire has AI-use items (AI chatbots for "
+                "schoolwork, 84 economies). Ask a data question — for "
                 "example “mean science score in Finland in 2025” or “find me data "
                 "about well-being in 2025”.")
 
@@ -903,6 +934,55 @@ class Agent:
             plan["instrument"] = "stu_sch"
             plan["_school_type_switched"] = True
 
+    # ---------- cross-cycle comparability of questionnaire indices ----------
+
+    INDEX_LABEL = re.compile(r"\(WLE\)|\bindex\b|\bscale\b", re.IGNORECASE)
+
+    def _trend_comparability(self, expr: str | None, plan: dict, cycles: list[str],
+                             overrides: dict) -> str | None:
+        """None when a cross-cycle change of `expr` is comparable (test scores
+        and shares of response codes are, because the PV scales are linked);
+        otherwise the reason it is not."""
+        expr = str(expr or "")
+        if link_errors.domain_of(expr):
+            return None
+        alt = {str(ov.get("measure")) for ov in overrides.values()
+               if isinstance(ov, dict) and ov.get("measure")}
+        if alt and alt != {expr}:
+            return ("different variables are used in different cycles "
+                    f"({expr} vs {', '.join(sorted(alt))}), so the values are not on one scale")
+        tokens = [t for t in set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr))
+                  if len(t) >= 3 and t.upper() == t]
+        for t in tokens:
+            desc = catalog.describe(t)
+            if desc.empty:
+                continue
+            label = str(desc.iloc[-1].label or "")
+            if t == "ESCS" or self.INDEX_LABEL.search(label):
+                return (f"{label} ({t}) is a questionnaire index standardized within each "
+                        "PISA cycle (OECD mean 0, SD 1), so its level is comparable across "
+                        "economies within a cycle but its change across cycles is not")
+        return None
+
+    def _blank_non_comparable_changes(self, table: pd.DataFrame, plan: dict,
+                                      measures: list, cycles: list[str], overrides: dict) -> None:
+        if "change" not in table.columns:
+            return
+        for label, expr in measures:
+            reason = self._trend_comparability(expr, plan, cycles, overrides)
+            if not reason:
+                continue
+            mask = (table["measure"] == label) if (label is not None and "measure" in table.columns) \
+                else pd.Series(True, index=table.index)
+            table.loc[mask, ["change", "se_change"]] = np.nan
+            head = ("This measure: " if label is None else
+                    "" if label.split(" (")[0] in reason else f"{label}: ")
+            plan.setdefault("_non_comparable", []).append(
+                f"{head}{reason[0].upper() + reason[1:]}. The change column "
+                "is left blank; compare economies within a cycle instead. (For ESCS the "
+                "OECD publishes a rescaled trend variable covering 2015–2022; it is in the "
+                "database as escs_trend but not yet wired to these templates.)")
+
     # ---------- small deterministic guards found by adversarial testing ----------
 
     FALSE_CLAIM_WORDS = re.compile(
@@ -914,7 +994,10 @@ class Agent:
         named economies is checked against the coverage table; when the
         economies do have it, the false clause is replaced by the plain
         convention statement (the MALE flag is a convention, not a gap)."""
-        note = str(plan.get("substitution_note") or "")
+        overrides = {k: v for k, v in (plan.get("cycle_overrides") or {}).items() if isinstance(v, dict)}
+        nested = [str(v) for ov in overrides.values() for k, v in ov.items()
+                  if k.endswith("_note") and v]
+        note = " ".join([str(plan.get("substitution_note") or "")] + nested).strip()
         if not note or not self.FALSE_CLAIM_WORDS.search(note):
             return
         named = set(re.findall(r"'([A-Z]{3})'", str(plan.get("where") or "")))
@@ -950,6 +1033,9 @@ class Agent:
                 false.append(var)
         if not false:
             return
+        for ov in overrides.values():                # the corrected wording lives at plan level only
+            for k in [k for k in ov if k.endswith("_note")]:
+                ov.pop(k, None)
         if "ST004D01T" in false:
             plan["substitution_note"] = (
                 "PISA 2025 uses the derived MALE flag (1 = Male, 0 = Female/Other) for "
@@ -1590,6 +1676,7 @@ class Agent:
                     "(for example El Salvador joined PISA in 2022).")
         if len(cycles) >= 2:
             plan["_trend_cycles"] = (cycles[0], cycles[-1])
+        run_measures = measures_all if multi else [(None, plan.get("measure"))]
         if len(cycles) >= 2 and multi:
             # one trend per measure: each domain has its own link error
             pieces, les = [], {}
@@ -1606,6 +1693,9 @@ class Agent:
             table = trend(per_cycle, by=[c for c in by] + extra_keys, link_error=le)
         else:
             table = per_cycle[cycles[0]].assign(cycle=cycles[0])
+        if len(cycles) >= 2 and template in ("weighted_mean", "gap", "quartile_means",
+                                             "quartile_gap", "percentiles", "percentile_spread"):
+            self._blank_non_comparable_changes(table, plan, run_measures, cycles, overrides)
 
         sort_by = plan.get("sort_by")
         if sort_by:
@@ -1928,7 +2018,9 @@ class Agent:
                          "public-vs-private comparisons; the sampling-derived PRIVATESCH "
                          "flag (57 economies in 2025) was not used.")
         cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
-        if len(cycles) >= 2 and not plan.get("_no_trend"):
+        all_blank = bool(plan.get("_non_comparable")) and not plan.get("_link_error") \
+            and not any((plan.get("_link_errors") or {}).values())
+        if len(cycles) >= 2 and not plan.get("_no_trend") and not all_blank:
             first, last = plan.get("_trend_cycles") or (cycles[0], cycles[-1])
             method += (f" Cross-cycle change = {last} minus {first}: independent "
                        f"samples, SE = sqrt(SE{first[2:]}^2 + SE{last[2:]}^2).")
@@ -1961,7 +2053,7 @@ class Agent:
                              "details.")
         for cycle, ov in sorted((plan.get("cycle_overrides") or {}).items()):
             if isinstance(ov, dict) and ov:
-                fields = ", ".join(f"{k} = {v}" for k, v in ov.items())
+                fields = ", ".join(f"{k} = {v}" for k, v in ov.items() if not k.endswith("_note"))
                 notes.append(f"PISA {cycle} uses a per-cycle variable override: "
                              f"{fields} (the variable differs in that cycle; "
                              "other cycles use the main plan fields).")
@@ -1997,6 +2089,7 @@ class Agent:
         for cycle in sorted(plan.get("_coverage") or {}):
             for f in plan["_coverage"][cycle]:
                 notes.append(self._coverage_note(f))
+        notes.extend(plan.get("_non_comparable") or [])
         for cycle in sorted(plan.get("_unavailable") or {}):
             labels = plan["_unavailable"][cycle]
             notes.append(f"PISA {cycle}: {', '.join(labels)} — not in the {cycle} file "
@@ -2294,65 +2387,112 @@ class Agent:
                          **llm.stats()}
         return result
 
+    # Deterministic answers with one correct wording: checked before any
+    # model runs (on the question as typed) and again after routing on the
+    # router's English rendering, so a Japanese or Spanish question gets the
+    # same safeguards as an English one.
+    def _intercept(self, text: str) -> str | None:
+        if self.LINK_WORDS.search(text):
+            return self._link_error_answer()
+        if self.OVERVIEW_WORDS.search(text):
+            return self._overview_answer()
+        if self.WHY_MISSING_WORDS.search(text):
+            named = self._economies_in_data(text)
+            if named:
+                return self._missing_results_answer(named)
+        if self.COUNT_WORDS.search(text) and not self.OTHER_STAT_WORDS.search(text):
+            named = self._economies_in_data(text)
+            if named:
+                return self._count_answer(named, text)
+        if self.COVERAGE_RATE_WORDS.search(text):
+            return self._coverage_rate_answer()
+        return None
+
+    AI_WORDS = re.compile(r"\b(ai|a\.i\.|artificial intelligence|chatgpt|chatbots?|"
+                          r"generative ai|llm|llms)\b|人工知能|生成AI|チャットボット", re.IGNORECASE)
+    AI_DATA_WORDS = re.compile(r"\b(use|uses|usage|using|used|adoption|rate|rates|share|percent\w*|"
+                               r"how (many|often|much)|data|compare|students?|schools?|country|"
+                               r"countries|japan|relationship|associat\w*|correlat\w*)\b",
+                               re.IGNORECASE)
+
+    def _localize(self, text: str, language: str | None) -> str:
+        """Deterministic answers are written in English; a non-English question
+        gets a faithful rendering in its own language (numbers, codes and
+        source names unchanged)."""
+        if not text or not language or language.strip().lower() in ("english", "en", ""):
+            return text
+        try:
+            out = generate(
+                f"Translate the following answer into {language}. Keep every number, "
+                f"standard error, economy code (like USA, QCI), variable code (like "
+                f"ST438Q01DA) and source title exactly as written; translate nothing "
+                f"else than the prose. Return only the translation.\n\n{text}",
+                system="You are a precise translator for a statistics app.")
+            return out.strip() or text
+        except Exception:  # noqa: BLE001 — never lose the answer over a translation
+            return text
+
     def _ask(self, question: str, history: list | None) -> AgentResult:
         context = self._transcript(history)
-        # Methods and coverage-rate questions have one correct answer; the
-        # app gives it before any model is consulted.
-        if self.LINK_WORDS.search(question):
-            return AgentResult(question, self._link_error_answer(), route="conversational")
-        if self.OVERVIEW_WORDS.search(question):
-            return AgentResult(question, self._overview_answer(), route="conversational")
-        if self.WHY_MISSING_WORDS.search(question):
-            named = self._economies_in_data(question)
-            if named:
-                return AgentResult(question, self._missing_results_answer(named),
-                                   route="conversational")
-        if self.COUNT_WORDS.search(question) and not self.OTHER_STAT_WORDS.search(question):
-            named = self._economies_in_data(question)
-            if named:
-                return AgentResult(question, self._count_answer(named, question),
-                                   route="conversational")
-        if self.COVERAGE_RATE_WORDS.search(question):
-            return AgentResult(question, self._coverage_rate_answer(), route="conversational")
+        early = self._intercept(question)
+        if early:
+            return AgentResult(question, early, route="conversational")
         route = generate_json(f"{context}Question: {question}",
                               system=TERMS_SYSTEM + self.facts)
+        language = str(route.get("language") or "English")
+        q_en = str(route.get("question_en") or question).strip() or question
+        if q_en != question:
+            early = self._intercept(q_en)
+            if early:
+                return AgentResult(question, self._localize(early, language),
+                                   route="conversational")
         # "Did X participate / do you have data on X?" — answered from the
         # participant lists, never by the model, whichever way it was routed.
-        if self._is_participation_question(question):
-            named = self._economies_in_data(question)
+        if self._is_participation_question(q_en):
+            named = self._economies_in_data(q_en)
             if named:
-                return AgentResult(question, self._participation_answer(named),
+                return AgentResult(question, self._localize(self._participation_answer(named), language),
                                    route="conversational")
         if not route.get("data_question"):
-            if self.VIZ_WORDS.search(question):
-                return AgentResult(question, self.VIZ_ANSWER, route="conversational")
-            if self.YEAR_RE.search(question) and self.COVERAGE_WORDS.search(question):
-                return AgentResult(question, self._coverage_answer(), route="conversational")
-            named = self._economies_in_data(question)
-            if not named:
+            if self.VIZ_WORDS.search(q_en):
+                return AgentResult(question, self._localize(self.VIZ_ANSWER, language),
+                                   route="conversational")
+            if self.YEAR_RE.search(q_en) and self.COVERAGE_WORDS.search(q_en):
+                return AgentResult(question, self._localize(self._coverage_answer(), language),
+                                   route="conversational")
+            named = self._economies_in_data(q_en)
+            ai_data = bool(self.AI_WORDS.search(q_en) and self.AI_DATA_WORDS.search(q_en)
+                           and not re.search(r"literacy", q_en, re.I))
+            if not named and not ai_data:
                 return AgentResult(question, route.get("direct_answer")
                                    or "Could you rephrase that?", route="conversational")
             # The router called it conversational, but the question names an
-            # economy that IS in the data: the data answer, not the model's
-            # memory. Force the analysis path.
+            # economy that IS in the data (or asks about AI use, which the 2025
+            # questionnaire covers): the data answer, not the model's memory.
             route = {"data_question": True, "intent": "analyze",
-                     "search_terms": route.get("search_terms")
-                     or ["science", "mathematics", "reading"]}
+                     "search_terms": (["artificial intelligence chatbot", "AI use school"]
+                                      if ai_data else None)
+                     or route.get("search_terms") or ["science", "mathematics", "reading"]}
 
         if route.get("intent") == "explore":
-            return self._explore(question, route.get("search_terms") or [])
+            result = self._explore(q_en, route.get("search_terms") or [])
+            result.answer = self._localize(result.answer, language)
+            return result
 
-        hits = self._with_standard_cards(self._retrieve(route.get("search_terms") or []), question)
-        named = self._economies_in_data(question)
+        hits = self._with_standard_cards(self._retrieve(route.get("search_terms") or []), q_en)
+        named = self._economies_in_data(q_en)
+        question_block = (f"QUESTION: {question}" if q_en == question
+                          else f"QUESTION (original, {language}): {question}\nQUESTION (English): {q_en}")
         plan = generate_json(
-            f"{context}QUESTION: {question}\n\nVARIABLE CARDS:\n{self._cards(hits, named)}",
+            f"{context}{question_block}\n\nVARIABLE CARDS:\n{self._cards(hits, named)}",
             system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
                                       regions=self.regions_block),
         )
-        plan["_question"] = question
+        plan["_question"] = q_en
+        plan["_language"] = language
         self._prefer_reported_school_type(plan)
         self._verify_substitution_claims(plan)
-        dropped = self._dropped_measures(question, plan)
+        dropped = self._dropped_measures(q_en, plan)
         if dropped and plan.get("action") != "clarify":
             note = ("Also asked but not computed in this answer: " + ", ".join(dropped)
                     + " — ask for them together (e.g. “math, reading and ESCS for …”) "
@@ -2360,7 +2500,7 @@ class Agent:
             plan["limitation_note"] = (f"{plan['limitation_note']} {note}"
                                        if plan.get("limitation_note") else note)
         if plan.get("action") != "clarify":
-            left_out = self._dropped_economies(question, plan)
+            left_out = self._dropped_economies(q_en, plan)
             if left_out:
                 note = ("Economies named in the question but not in this table: "
                         f"{self._names(left_out)} — ask again naming them as rows, or as a "
@@ -2369,7 +2509,7 @@ class Agent:
                                            if plan.get("limitation_note") else note)
         if plan.get("action") == "clarify":
             return AgentResult(question, self._plain(plan.get("clarify"))
-                               or "I need more detail to answer that.",
+                               or self._localize("I need more detail to answer that.", language),
                                plan=plan, retrieved=hits, route="clarify")
 
         try:
@@ -2386,15 +2526,15 @@ class Agent:
             else:
                 answer += (" None of the variables retrieved for this topic has data "
                            f"for {self._names(sorted(lacking))}.")
-            return AgentResult(question, answer, plan=plan, retrieved=hits,
-                               provenance=e.provenance,
+            return AgentResult(question, self._localize(answer, language), plan=plan,
+                               retrieved=hits, provenance=e.provenance,
                                notes=(e.provenance or {}).get("notes", []),
                                route="coverage")
         except Exception as e:
             return AgentResult(question, f"The analysis failed: {e}",
                                plan=plan, retrieved=hits, error=str(e), route="error")
 
-        shown, truncation, focus = self._summary_view(table, question, history)
+        shown, truncation, focus = self._summary_view(table, q_en, history)
         legend = self._country_legend(shown)
         if focus and "rank" in table.columns:
             positions = [line for line in focus.splitlines()[1:] if "rank" in line]
@@ -2418,7 +2558,9 @@ class Agent:
             f"{legend}{focus}{truncation}"
             f"RESULT TABLE (CSV):\n{shown.to_csv(index=False)}"
         )
-        answer = self._plain(generate(summary_prompt, system=SUMMARY_SYSTEM))
+        lang_rule = ("" if language.lower() == "english"
+                     else f"\nAnswer in {language} (the user's language); keep codes and numbers as they are.")
+        answer = self._plain(generate(summary_prompt, system=SUMMARY_SYSTEM + lang_rule))
         return AgentResult(question, answer.strip(), plan=plan, table=table,
                            provenance=provenance, retrieved=hits,
                            notes=provenance["notes"])
