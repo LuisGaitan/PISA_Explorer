@@ -138,9 +138,11 @@ def combine(replicates: pd.DataFrame, by: tuple[str, ...] = ()) -> pd.DataFrame:
         m = len(main)
         b = main.var(ddof=1) if m > 1 else 0.0  # between-PV (imputation) variance
         total_var = u.mean() + (1 + 1 / m) * b if m > 1 else u.mean()
-        return pd.Series(
-            {"estimate": main.mean(), "se": float(np.sqrt(total_var)), "n_pv": m}
-        )
+        estimate = main.mean()
+        # no observed values (item not administered): no estimate, no SE —
+        # never "blank (SE 0.0)"
+        se = float(np.sqrt(total_var)) if not np.isnan(estimate) else float("nan")
+        return pd.Series({"estimate": estimate, "se": se, "n_pv": m})
 
     if group_cols:
         out = (

@@ -63,6 +63,12 @@
      "answer_forbid": ["intercept", "due to", "caused by"], "notes_contain": ["cross-section"]},
     {"name": "escs_gap_shrank", "question": "which countries shrank the gap the most between disadvantaged and advantaged students?",
      "route": "data", "template": "quartile_gap", "variables_all": ["ESCS"]},
+    {"name": "engineering_gender_gap", "question": "what's happening with the gender gap in technical fields like engineering?",
+     "route_any": ["data", "clarify", "explore"], "answer_forbid": ["CASE WHEN", "ELSE 0"]},
+    {"name": "comparable_es", "question": "Es comparable los resultados PISA de El Salvador 2025 con suecia o alemania 2022",
+     "route": "conversational", "answer_forbid": ["Yes, PISA results"], "answer_contains_any": ["enlace", "error de vinculaci", "vincul", "link error"]},
+    {"name": "items_about_info", "question": "I believe 2025 had some questions about how students evaluate information",
+     "route": "explore"},
     {"name": "pisa_2012", "question": "What was the OECD average math score in PISA 2012?",
      "route": "conversational", "answer_contains_any": ["2018", "not loaded", "only"], "answer_forbid": ["494"]}
   ]

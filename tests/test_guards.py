@@ -2,6 +2,7 @@
 per construct, app-authored fact sentences, the prose check that grounds a
 model's draft in the result, the build/method stamp, and guard telemetry."""
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -141,6 +142,32 @@ def test_number_extraction_handles_commas_and_thousands():
                               "a statistically significant difference.", t, prov,
                               {"template": "weighted_mean"}, "", _mentioned, {"QCI", "SGP"})
     assert issues == []
+
+
+def test_share_measures_keep_non_respondents_out_of_the_denominator(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    agent = Agent.__new__(Agent)
+    agent._fired = []
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: pd.DataFrame(
+        {"variable": [var], "table_name": ["stu_qqq_2025"], "cycle": ["2025"],
+         "label": ["Parent expects child to work in engineering"], "var_type": ["double"],
+         "value_labels": [json.dumps({"1.0": "Yes", "2.0": "No"})]}))
+    raw = "CASE WHEN PA032Q03TA = 1.0 THEN 100.0 ELSE 0.0 END"
+    assert agent._null_safe_share(raw) == f"CASE WHEN (PA032Q03TA) IS NULL THEN NULL ELSE ({raw}) END"
+    assert agent._null_safe_share("PV{pv}MATH") == "PV{pv}MATH"
+    assert Agent._measure_label(raw) == "% with Parent expects child to work in engineering (PA032Q03TA) = 1 (Yes)"
+    assert Agent._measure_label("CASE WHEN PV{pv}MATH < 420.07 THEN 100.0 ELSE 0.0 END") == "% below Level 2 in mathematics"
+
+
+def test_comparability_and_item_questions_are_intercepted():
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    agent._fired = []
+    assert "link error" in agent._intercept("Are El Salvador's 2025 results comparable with Sweden 2022?")
+    assert agent._intercept("compare Chile and Peru in science") is None
+    assert Agent.ITEM_ASK_WORDS.search("I believe 2025 had some questions about how students evaluate information")
+    assert not Agent.ITEM_ASK_WORDS.search("mean science score in Chile")
 
 
 def test_count_intercept_does_not_hijack_behaviour_questions():

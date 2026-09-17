@@ -713,6 +713,27 @@ class Agent:
         r"exclusion rate|exclusion rates",
         re.IGNORECASE)
 
+    # "Are El Salvador's 2025 results comparable with Germany's 2022?" — a
+    # methods question with one correct answer (the scales are linked; the
+    # link error belongs in the SE), which the planner answered from memory.
+    COMPARABLE_WORDS = re.compile(r"\bcomparab(le|les|ility|ilidad)\b|\bcompatible\b", re.IGNORECASE)
+    ITEM_ASK_WORDS = re.compile(r"\b(questions?|items?) (about|on|regarding)\b", re.IGNORECASE)
+
+    def _comparability_answer(self) -> str:
+        return (
+            "Yes, with one caveat. PISA scores in mathematics, reading and science are "
+            "reported on scales that the OECD links from cycle to cycle, so a 2025 "
+            "score can be compared with a 2018 or 2022 score, for the same economy or "
+            "for different ones. The caveat is uncertainty: the linking itself adds a "
+            "published link error to the standard error of any difference across "
+            "cycles, and this app includes it (for mean scores) so that significance "
+            "matches the OECD's reports. Questionnaire indices (sense of belonging, "
+            "ESCS and other WLE scales) are standardized within each cycle and are NOT "
+            "comparable across cycles; shares of a response code are. To see the "
+            "numbers, ask for both economies over the cycles you need — for example "
+            "“compare science scores for El Salvador, Sweden and Germany in 2022 and "
+            "2025” — and the table lists each economy per cycle with standard errors.")
+
     def _coverage_rate_answer(self) -> str:
         return (
             "Coverage rates (Coverage Index 3: the share of an economy's 15-year-old "
@@ -1191,8 +1212,18 @@ class Agent:
             labels.append(label)
         return list(zip(labels, exprs))
 
-    @staticmethod
-    def _measure_label(expr: str) -> str:
+    # "CASE WHEN <var> <op> <value> THEN 100.0 ELSE 0.0 END" — the planner's
+    # form for a share (a proficiency threshold or a response code).
+    SHARE_CASE = re.compile(
+        r"^\s*CASE\s+WHEN\s+(?:\(?\s*)?(?P<var>[A-Za-z_][A-Za-z0-9_{}]*)\s*\)?\s*"
+        r"(?P<op><=|>=|<|>|=|IN)\s*(?P<val>\(?[^)]*?\)?|[-\d.]+)\s+THEN\s+100(?:\.0)?"
+        r"\s+ELSE\s+0(?:\.0)?\s+END\s*$", re.IGNORECASE)
+    LEVEL_CUTOFFS = {"420.07": "Level 2 (mathematics)", "407.47": "Level 2 (reading)",
+                     "409.54": "Level 2 (science)", "606.99": "Level 5 (mathematics)",
+                     "625.61": "Level 5 (reading)", "633.33": "Level 5 (science)"}
+
+    @classmethod
+    def _measure_label(cls, expr: str) -> str:
         if link_errors.is_mean_score(expr):
             return link_errors.DOMAIN_NAMES[link_errors.domain_of(expr)].capitalize() + " score"
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", expr):
@@ -1200,7 +1231,36 @@ class Agent:
             if not desc.empty and desc.iloc[-1].label:
                 return f"{desc.iloc[-1].label[:50]} ({expr})"
             return expr
+        m = cls.SHARE_CASE.match(expr or "")
+        if m:
+            var, op, val = m.group("var"), m.group("op").upper(), m.group("val").strip()
+            if link_errors.domain_of(var):
+                dom = link_errors.DOMAIN_NAMES[link_errors.domain_of(var)]
+                level = cls.LEVEL_CUTOFFS.get(val.rstrip("0").rstrip(".") if "." in val else val)
+                side = {"<": "below", "<=": "at or below", ">=": "at or above", ">": "above"}.get(op, "at")
+                return f"% {side} {level.split(' (')[0] if level else val} in {dom}"
+            desc = catalog.describe(var)
+            label = desc.iloc[-1].label[:50] if not desc.empty and desc.iloc[-1].label else var
+            value_text = val
+            try:
+                labels = json.loads(desc.iloc[-1].value_labels) if not desc.empty and desc.iloc[-1].value_labels else {}
+                key = val.rstrip("0").rstrip(".") if "." in val else val
+                value_text = f"{key} ({labels[key] if key in labels else labels[key + '.0']})" if (key in labels or key + '.0' in labels) else key
+            except Exception:  # noqa: BLE001 — a label is a nicety
+                pass
+            return f"% with {label} ({var}) {op.lower() if op == 'IN' else op} {value_text}"
         return expr[:60]
+
+    def _null_safe_share(self, expr: str | None) -> str | None:
+        """A share written as CASE ... ELSE 0 END turns students who never
+        saw the question (NULL) into zeros, so a share of "yes" answers in an
+        economy that did not administer the item came out as 0.0 (SE 0.0).
+        Keep NULL as NULL: the denominator is then valid respondents, exactly
+        as weighted_proportion does with valid_values."""
+        if not expr or not self.SHARE_CASE.match(expr):
+            return expr
+        var = self.SHARE_CASE.match(expr).group("var")
+        return f"CASE WHEN ({var}) IS NULL THEN NULL ELSE ({expr.strip()}) END"
 
     # Measures a question names, matched against what the plan actually
     # uses — a requested measure the plan leaves out is stated, never dropped.
@@ -1661,6 +1721,18 @@ class Agent:
         # Argentina"): run each and stack the rows with a `measure` column.
         self._keep_full_ranking(str(plan.get("_question") or ""), plan)
         measures_all = self._measure_list(plan)
+        # shares written as CASE ... ELSE 0 END must not count non-respondents
+        for key in ("measure", "x", "y"):
+            fixed = self._null_safe_share(plan.get(key))
+            if fixed != plan.get(key):
+                plan[key] = fixed
+                plan["_null_safe_share"] = True
+                self._fire("hook:null_safe_share")
+        if measures_all:
+            measures_all = [(lab, self._null_safe_share(e)) for lab, e in measures_all]
+            if any(e != o for (_, e), (_, o) in zip(measures_all, self._measure_list(plan))):
+                plan["_null_safe_share"] = True
+                self._fire("hook:null_safe_share")
         multi = len(measures_all) > 1
         benchmarks = self._benchmarks(plan)
         per_cycle: dict[str, pd.DataFrame] = {}
@@ -2086,6 +2158,11 @@ class Agent:
             notes.append(f"VARIABLE SUBSTITUTION: {plan['substitution_note']}")
         for line in plan.get("_standardized") or []:
             notes.append(f"STANDARD VARIABLE: {line}")
+        if plan.get("_null_safe_share"):
+            notes.append("Shares are percentages of students with a valid response: students "
+                         "who did not answer the item (or were not asked it) are excluded "
+                         "from the denominator, and a group with no valid responses shows "
+                         "no estimate rather than 0.")
         cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
         all_blank = bool(plan.get("_non_comparable")) and not plan.get("_link_error") \
             and not any((plan.get("_link_errors") or {}).values())
@@ -2483,6 +2560,10 @@ class Agent:
         if self.COVERAGE_RATE_WORDS.search(text):
             self._fire("intercept:coverage_rate")
             return self._coverage_rate_answer()
+        if self.COMPARABLE_WORDS.search(text) and (len(set(self.YEAR_RE.findall(text))) >= 2
+                                                   or re.search(r"\b(cycles?|years?|over time)\b", text, re.I)):
+            self._fire("intercept:comparability")
+            return self._comparability_answer()
         return None
 
     AI_WORDS = re.compile(r"\b(ai|a\.i\.|artificial intelligence|chatgpt|chatbots?|"
@@ -2491,6 +2572,12 @@ class Agent:
                                r"how (many|often|much)|data|compare|students?|schools?|country|"
                                r"countries|japan|relationship|associat\w*|correlat\w*)\b",
                                re.IGNORECASE)
+
+    ENGLISH_WORDS = re.compile(r"\b(the|is|are|was|were|what|how|which|of|and|in|for|with|do|does|did|between|from)\b", re.I)
+
+    @classmethod
+    def _looks_english(cls, text: str) -> bool:
+        return text.isascii() and bool(cls.ENGLISH_WORDS.search(text or ""))
 
     def _localize(self, text: str, language: str | None) -> str:
         """Deterministic answers are written in English; a non-English question
@@ -2519,6 +2606,15 @@ class Agent:
         context = self._transcript(history)
         early = self._intercept(question)
         if early:
+            if not self._looks_english(question):
+                # the deterministic answers are English; find the user's
+                # language with the router and translate (numbers checked)
+                try:
+                    lang = str(generate_json(f"Question: {question}",
+                                             system=TERMS_SYSTEM + self.facts).get("language") or "English")
+                except llm.LLMError:
+                    lang = "English"
+                early = self._localize(early, lang)
             return AgentResult(question, early, route="conversational")
         route = generate_json(f"{context}Question: {question}",
                               system=TERMS_SYSTEM + self.facts)
@@ -2561,6 +2657,14 @@ class Agent:
                                       if ai_data else None)
                      or route.get("search_terms") or ["science", "mathematics", "reading"]}
 
+        if self.ITEM_ASK_WORDS.search(q_en) and route.get("intent") != "explore":
+            # "were there questions about X?" is a catalog question, not one
+            # the model may answer from memory (it invented LDW content once)
+            self._fire("route:force_explore")
+            route = {**route, "data_question": True, "intent": "explore",
+                     "search_terms": route.get("search_terms") or
+                     [w for w in re.split(r"\b(?:questions?|items?)\s+(?:about|on|regarding)\s+", q_en, flags=re.I)[-1:]
+                      if w.strip()]}
         if route.get("intent") == "explore":
             result = self._explore(q_en, route.get("search_terms") or [])
             result.answer = self._localize(result.answer, language)
@@ -2600,8 +2704,8 @@ class Agent:
                 plan["limitation_note"] = (f"{plan['limitation_note']} {note}"
                                            if plan.get("limitation_note") else note)
         if plan.get("action") == "clarify":
-            return AgentResult(question, self._plain(plan.get("clarify"))
-                               or self._localize("I need more detail to answer that.", language),
+            text = self._plain(plan.get("clarify")) or "I need more detail to answer that."
+            return AgentResult(question, self._localize(text, language),
                                plan=plan, retrieved=hits, route="clarify")
 
         try:
