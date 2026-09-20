@@ -2027,10 +2027,25 @@ class Agent:
 
         prov = self._provenance(plan, tables)
         prov["notes"].extend(self._missing_estimate_notes(table, plan))
-        if "2018" in cycles and "CNT" in table.columns and (table["CNT"].astype(str) == "VNM").any() \
-                and any(link_errors.domain_of(e) for _, e in (measures_all or [(None, plan.get("measure"))])):
+        is_score = any(link_errors.domain_of(e) for _, e in (measures_all or [(None, plan.get("measure"))]))
+        codes_in_table = set(table["CNT"].astype(str)) if "CNT" in table.columns else set()
+        if "2018" in cycles and "VNM" in codes_in_table and is_score:
             prov["notes"].append(self.VNM_2018_NOTE)
+        if len(cycles) >= 2 and "2025" in cycles and is_score and (codes_in_table & self.MODE_CHANGE_2025):
+            who = self._names(sorted(codes_in_table & self.MODE_CHANGE_2025))
+            prov["notes"].append(
+                f"{who} administered PISA 2025 on computer after paper-based tests in every "
+                "earlier cycle. The OECD's PISA 2025 Technical Report (Data Adjudication) states "
+                "that the uncertainty around trend comparisons for Guatemala, Paraguay and Viet "
+                "Nam is not limited to what the link errors capture and recommends caution in "
+                "reporting and interpreting their trends; the change shown here carries only the "
+                "sampling and link-error uncertainty.")
         return table, prov
+
+    # Economies whose 2025 test moved from paper to computer (PISA 2025
+    # Technical Report, Data Adjudication): trends carry extra, unquantified
+    # uncertainty.
+    MODE_CHANGE_2025 = {"VNM", "GTM", "PRY"}
 
     VNM_2018_NOTE = (
         "Viet Nam's 2018 scores come from the plausible values the OECD released "

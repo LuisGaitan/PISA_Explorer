@@ -225,7 +225,14 @@
       "verified": "Viet Nam 2018 PVs joined from the OECD's separate release (pipeline/load_vnm_2018.py); the comparability caution is stated",
       "plan": {"template": "weighted_mean", "measure": "PV{pv}READ", "cycles": ["2018", "2022"], "by": ["CNT"], "where": "CNT = 'VNM'"},
       "expect": {"rows": 1, "cells": [{"match": {"CNT": "VNM"}, "estimate_2022": 461.89, "se_2022": 3.94}],
-                 "notes_contain": ["largely comparable"], "notes_forbid": ["did not administer", "did not release"]}
+                 "notes_contain": ["largely comparable"], "notes_forbid": ["did not administer", "did not release", "paper-based tests"]}
+    },
+    {
+      "name": "vnm_2025_mode_change_caution",
+      "verified": "PISA 2025 Technical Report, Data Adjudication: Viet Nam, Guatemala, Paraguay moved from paper to computer in 2025; trend uncertainty exceeds the link error. Viet Nam reading 2022 461.9 -> 2025 391.5 (values as in the PUF; SEs match Annex 14)",
+      "plan": {"template": "weighted_mean", "measure": "PV{pv}READ", "cycles": ["2022", "2025"], "by": ["CNT"], "where": "CNT IN ('VNM', 'GTM', 'CHL')"},
+      "expect": {"rows": 3, "cells": [{"match": {"CNT": "VNM"}, "estimate_2022": 461.89, "estimate_2025": 391.54}],
+                 "notes_contain": ["paper-based tests in every earlier cycle", "Guatemala (GTM), Viet Nam (VNM)"]}
     },
     {
       "name": "small_cells_are_suppressed",

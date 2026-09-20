@@ -80,7 +80,7 @@
     {"name": "indonesia_vs_top5", "question": "compare Indonesia and top 5 countries in belief in science",
      "route": "data", "answer_forbid": ["single step", "first provide"]},
     {"name": "vietnam_trend", "question": "How did Vietnam's reading score change from 2018 to 2025?",
-     "route": "data", "answer_forbid": ["did not release", "not released"], "notes_contain": ["largely comparable"]},
+     "route": "data", "answer_forbid": ["did not release", "not released"], "notes_contain": ["largely comparable", "paper-based tests"]},
     {"name": "pisa_2012", "question": "What was the OECD average math score in PISA 2012?",
      "route": "conversational", "answer_contains_any": ["2018", "not loaded", "only"], "answer_forbid": ["494"]}
   ]
