@@ -186,9 +186,9 @@ def test_estimator_handles_empty_input_without_crashing():
     from explorer.estimator import ALL_WEIGHTS, combine, replicates_from_frame
     empty = pd.DataFrame(columns=["CNT", "m_1"] + ALL_WEIGHTS)
     reps = replicates_from_frame(empty, ["m_1"], by=("CNT",))
-    assert reps.empty and list(reps.columns) == ["CNT", "pv", "rep", "value"]
+    assert reps.empty and list(reps.columns) == ["CNT", "pv", "rep", "value", "n"]
     out = combine(reps, by=("CNT",))
-    assert out.empty and list(out.columns) == ["CNT", "estimate", "se", "n_pv"]
+    assert out.empty and list(out.columns)[:4] == ["CNT", "estimate", "se", "n_pv"]
 
 
 # ---------- coverage of optional questionnaires ----------

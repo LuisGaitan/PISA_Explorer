@@ -152,10 +152,12 @@ def correlation(con, table, x, y, by=(), where=None) -> pd.DataFrame:
             key = (key,)
         weights = g[ALL_WEIGHTS].to_numpy(dtype=float)
         rs = np.empty((n_pv, n_w))
+        n_obs = 0
         for i in range(1, n_pv + 1):
             xv = g[f"x_{i}"].to_numpy(dtype=float)
             yv = g[f"y_{i}"].to_numpy(dtype=float)
             mask = ~(np.isnan(xv) | np.isnan(yv))
+            n_obs = max(n_obs, int(mask.sum()))
             wm, xm, ym = weights[mask], xv[mask], yv[mask]
             # A group with no complete pairs (construct not administered)
             # yields NaN by design — suppress the expected 0/0 warnings.
@@ -169,13 +171,13 @@ def correlation(con, table, x, y, by=(), where=None) -> pd.DataFrame:
         frame = pd.DataFrame({
             "pv": np.repeat(np.arange(1, n_pv + 1), n_w),
             "rep": np.tile(np.arange(n_w), n_pv),
-            "value": rs.ravel(),
+            "value": rs.ravel(), "n": n_obs,
         })
         for col, val in zip(by, key):
             frame[col] = val
         frames.append(frame)
     if not frames:
-        return combine(pd.DataFrame(columns=list(by) + ['pv', 'rep', 'value']), by=())
+        return combine(pd.DataFrame(columns=list(by) + ['pv', 'rep', 'value', 'n']), by=())
     reps = pd.concat(frames, ignore_index=True)
     return combine(reps, by=tuple(by))
 
@@ -206,13 +208,13 @@ def _percentile_replicates(con, table, measure, by=(), where=None,
                 idx = np.clip((cum < totals * (p / 100)).sum(axis=0), 0, len(vs) - 1)
                 frame = pd.DataFrame({
                     "percentile": p, "pv": pv_i,
-                    "rep": np.arange(n_w), "value": vs[idx],
+                    "rep": np.arange(n_w), "value": vs[idx], "n": int(mask.sum()),
                 })
                 for c, val in zip(by, key):
                     frame[c] = val
                 frames.append(frame)
     if not frames:
-        return pd.DataFrame(columns=list(by) + ['percentile', 'pv', 'rep', 'value'])
+        return pd.DataFrame(columns=list(by) + ['percentile', 'pv', 'rep', 'value', 'n'])
     return pd.concat(frames, ignore_index=True)
 
 
@@ -266,7 +268,7 @@ def crosstab(con, table, row_var, col_var, by=(), where=None,
         res["col"] = c
         parts.append(res)
     out = pd.concat(parts, ignore_index=True).rename(columns={row_var: "row"})
-    return out[list(by) + ["row", "col", "estimate", "se", "n_pv"]]
+    return out[list(by) + ["row", "col", "estimate", "se", "n_pv"] + (["n"] if "n" in out.columns else [])]
 
 
 MAX_REGRESSION_PREDICTORS = 6
@@ -308,6 +310,20 @@ def regression(con, table, y, xs, by=(), where=None,
             x_use, y_use, w_use = x_mat[mask], yv[mask], weights[mask]
             if mask.sum() <= len(terms):
                 raise ValueError("too few complete observations for regression")
+            # A predictor that is constant in this group (a dummy for a
+            # category nobody is in, a variable with one value) or a linear
+            # combination of the others makes the normal equations singular.
+            # Name the offender instead of crashing with "Singular matrix".
+            rank = np.linalg.matrix_rank(x_use)
+            if rank < x_use.shape[1]:
+                spread = x_use[:, 1:].std(axis=0)
+                flat = [terms[j + 1] for j, s in enumerate(spread) if s == 0]
+                why = (f"{', '.join(flat)} has a single value in this group"
+                       if flat else "two or more predictors are linearly dependent "
+                                    "(e.g. dummies for every category of one variable)")
+                raise ValueError(
+                    f"the regression cannot be estimated for {key if by else 'this group'}: "
+                    f"{why}. Drop that predictor or leave one category out.")
             # 81 weighted normal-equation solves in one einsum each
             xtwx = np.einsum("nw,ni,nj->wij", w_use, x_use, x_use, optimize=True)
             xtwy = np.einsum("nw,ni,n->wi", w_use, x_use, y_use, optimize=True)
@@ -315,13 +331,13 @@ def regression(con, table, y, xs, by=(), where=None,
             for t_i, term in enumerate(terms):
                 frame = pd.DataFrame({
                     "term": term, "pv": pv_i,
-                    "rep": np.arange(n_w), "value": betas[:, t_i],
+                    "rep": np.arange(n_w), "value": betas[:, t_i], "n": int(mask.sum()),
                 })
                 for c, val in zip(by, key):
                     frame[c] = val
                 frames.append(frame)
     if not frames:
-        return combine(pd.DataFrame(columns=list(by) + ['term', 'pv', 'rep', 'value']), by=())
+        return combine(pd.DataFrame(columns=list(by) + ['term', 'pv', 'rep', 'value', 'n']), by=())
     reps = pd.concat(frames, ignore_index=True)
     return combine(reps, by=(*by, "term"))
 
@@ -355,7 +371,7 @@ def trend(results, result_2022: pd.DataFrame | None = None,
     for cycle in cycles:
         part = results[cycle].rename(
             columns={"estimate": f"estimate_{cycle}", "se": f"se_{cycle}"})
-        part = part[[c for c in part.columns if c != "n_pv"]]
+        part = part[[c for c in part.columns if c not in ("n_pv", "n")]]
         if merged is None:
             merged = part
         elif keys:

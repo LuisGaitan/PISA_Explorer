@@ -34,10 +34,26 @@ def main() -> int:
             missing.append(source.name)
             continue
         parquet = str(source.parquet_path).replace("'", "''")
-        con.execute(
-            f"CREATE OR REPLACE VIEW {source.name} AS "
-            f"SELECT * FROM read_parquet('{parquet}')"
-        )
+        vnm = source.parquet_path.parent / "vnm_pv.parquet"
+        if source.name == "stu_qqq_2018" and vnm.exists():
+            # Viet Nam's 2018 plausible values were released separately
+            # (pipeline/load_vnm_2018.py); fill them into the main file's
+            # rows, which keep their weights. Other economies are untouched.
+            pvs = [f"PV{i}{d}" for i in range(1, 11) for d in ("MATH", "READ", "SCIE")]
+            replace = ", ".join(f'COALESCE(s."{c}", v."{c}") AS "{c}"' for c in pvs)
+            vnm_path = str(vnm).replace("'", "''")
+            con.execute(
+                f"CREATE OR REPLACE VIEW {source.name} AS "
+                f"SELECT s.* REPLACE ({replace}) FROM read_parquet('{parquet}') s "
+                f"LEFT JOIN read_parquet('{vnm_path}') v "
+                f"ON s.CNT = v.CNT AND s.CNTSTUID = v.CNTSTUID"
+            )
+            log.info(f"{source.name}: Viet Nam 2018 plausible values joined in")
+        else:
+            con.execute(
+                f"CREATE OR REPLACE VIEW {source.name} AS "
+                f"SELECT * FROM read_parquet('{parquet}')"
+            )
         built.append(source.name)
 
     # stu_sch_<cycle>: every student row joined to its school's questionnaire

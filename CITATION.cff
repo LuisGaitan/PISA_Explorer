@@ -26,3 +26,7 @@ abstract: >
   fills in validated analysis templates but never computes statistics; every
   answer carries full provenance. Estimates and standard errors reproduce the
   OECD Technical Report figures.
+  Data source, to be acknowledged in any use of results obtained with this
+  software: "Programme for International Student Assessment (PISA)
+  Organisation for Economic Co-operation and Development (OECD), Paris".
+  PISA Explorer is not an OECD product; OECD disclaimers apply.

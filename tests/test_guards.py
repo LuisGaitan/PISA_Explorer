@@ -170,6 +170,83 @@ def test_comparability_and_item_questions_are_intercepted():
     assert not Agent.ITEM_ASK_WORDS.search("mean science score in Chile")
 
 
+def test_fraction_shares_are_rescaled_and_multi_variable_cases_null_guarded(monkeypatch):
+    from explorer.agent import Agent
+    from explorer import catalog
+    agent = Agent.__new__(Agent)
+    known = {"ST127Q01TA", "ST127Q02TA"}
+    monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: pd.DataFrame(
+        {"variable": [var], "table_name": ["stu_qqq_2018"], "cycle": ["2018"], "label": [var],
+         "var_type": ["double"], "value_labels": [None]}) if var in known else pd.DataFrame(
+        columns=["variable", "table_name", "cycle", "label", "var_type", "value_labels"]))
+    raw = "CASE WHEN ST127Q01TA = 2 OR ST127Q02TA = 2 THEN 1 WHEN ST127Q01TA IN (1, 3) THEN 0 ELSE 0 END"
+    out = agent._null_safe_share(raw)
+    assert out.startswith("CASE WHEN (COALESCE(ST127Q01TA, ST127Q02TA)) IS NULL THEN NULL ELSE (")
+    assert "THEN 100.0" in out and "THEN 0.0" in out and "THEN 1 " not in out
+    assert agent._null_safe_share("CASE WHEN ST127Q01TA = 2 THEN 100.0 ELSE NULL END") == "CASE WHEN ST127Q01TA = 2 THEN 100.0 ELSE NULL END"
+
+
+def test_raw_sql_returns_aggregates_only():
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    with pytest.raises(ValueError, match="aggregate"):
+        agent._run_raw_sql("SELECT CNT, PV1MATH FROM stu_qqq_2025 LIMIT 5")
+    with pytest.raises(ValueError, match="identifiers"):
+        agent._run_raw_sql("SELECT CNTSCHID, avg(PV1MATH) FROM stu_qqq_2025 GROUP BY CNTSCHID")
+    with pytest.raises(ValueError, match="aggregate"):
+        agent._run_raw_sql("SELECT * FROM stu_qqq_2025")
+
+
+def test_small_cells_are_suppressed_and_regression_names_collinear_terms():
+    from explorer.agent import Agent
+    from explorer.analysis import regression
+    from explorer.estimator import ALL_WEIGHTS
+    agent = Agent.__new__(Agent)
+    agent._fired = []
+    res = pd.DataFrame({"CNT": ["A", "B"], "estimate": [400.0, 410.0], "se": [2.0, 9.0], "n_pv": 10, "n": [500, 12]})
+    plan = {}
+    out = agent._suppress_small_cells(res, "2025", plan)
+    assert "n" not in out.columns and np.isnan(out.loc[1, "estimate"]) and np.isnan(out.loc[1, "se"])
+    assert plan["_suppressed"] == {"2025": 1} and out.loc[0, "estimate"] == 400.0
+
+    class FakeCon:
+        def __init__(self, df): self.df = df
+        def sql(self, q): return self
+    rng = np.random.default_rng(1)
+    n = 60
+    frame = pd.DataFrame({w: rng.uniform(0.5, 1.5, n) for w in ALL_WEIGHTS})
+    frame["y_1"] = rng.normal(500, 50, n); frame["x_1"] = rng.normal(0, 1, n); frame["x_2"] = 1.0
+    import explorer.analysis as an
+    orig = an.fetch_frame
+    an.fetch_frame = lambda *a, **k: frame
+    try:
+        with pytest.raises(ValueError, match="single value"):
+            regression(None, "t", "y", ["ESCS", "CASE WHEN MALE = 1 THEN 1 ELSE 0 END"], names=["ESCS", "male"])
+    finally:
+        an.fetch_frame = orig
+
+
+def test_strata_hits_find_rare_labels_only():
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    agent._strata_cache = [("2025", "KAZ21", "Intellectual schools", "intellectual schools"),
+                           ("2025", "KAZ01", "General/Astana city", "general/astana city"),
+                           ("2018", "KAZ0101", "KAZ - stratum 01: non-intellectual / Astana city",
+                            "kaz - stratum 01: non-intellectual / astana city"),
+                           ("2018", "MEX9797", "Undisclosed STRATUM - Mexico", "undisclosed stratum - mexico"),
+                           ("2018", "ALB0101", "ALB - stratum 01: Urban / North / Public", "alb - stratum 01: urban / north / public")]
+    agent.economy_names = {"MEX": "Mexico"}
+    hits = agent._strata_hits("what is the position of Nazarbayev Intellectual schools in math")
+    assert hits == [("2025", "KAZ21", "Intellectual schools")]          # not the "non-intellectual" strata
+    assert agent._strata_hits("public schools in urban areas") == []
+    assert agent._strata_hits("students in Mexico who repeated a grade") == []
+    from explorer import regions
+    assert regions.non_pisa_named("How many students in India repeated a grade?") == ["India"]
+    assert regions.non_pisa_named("mean science in Indonesia") == []
+    block = agent._strata_block(hits)
+    assert "STRATUM = 'KAZ21'" in block and "economy KAZ" in block
+
+
 def test_count_intercept_does_not_hijack_behaviour_questions():
     from explorer.agent import Agent
     C, O = Agent.COUNT_WORDS, Agent.OTHER_STAT_WORDS

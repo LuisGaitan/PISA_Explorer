@@ -124,6 +124,32 @@ ECONOMY_ALIASES: dict[str, list[str]] = {
 }
 
 
+# Countries people ask about that have never taken part in PISA 2018, 2022 or
+# 2025 (or only as a sub-national region held under another code). Naming
+# one gets the fixed "not in the databases" answer instead of a planner that
+# invents a code. China and Ukraine are handled through their region codes.
+NON_PISA: dict[str, str] = {
+    "india": "India", "pakistan": "Pakistan", "bangladesh": "Bangladesh", "nigeria": "Nigeria",
+    "egypt": "Egypt", "ethiopia": "Ethiopia", "south africa": "South Africa", "iran": "Iran",
+    "venezuela": "Venezuela", "bolivia": "Bolivia", "cuba": "Cuba", "nepal": "Nepal",
+    "sri lanka": "Sri Lanka", "myanmar": "Myanmar", "ghana": "Ghana", "tanzania": "Tanzania",
+    "uganda": "Uganda", "angola": "Angola", "algeria": "Algeria", "tunisia": "Tunisia",
+    "libya": "Libya", "sudan": "Sudan", "afghanistan": "Afghanistan", "syria": "Syria",
+    "yemen": "Yemen", "kuwait": "Kuwait", "bahrain": "Bahrain", "oman": "Oman",
+    "cyprus": "Cyprus", "liechtenstein": "Liechtenstein", "puerto rico": "Puerto Rico",
+    "haiti": "Haiti", "honduras": "Honduras", "nicaragua": "Nicaragua", "laos": "Laos",
+    "mozambique": "Mozambique", "senegal": "Senegal", "zimbabwe": "Zimbabwe",
+    "cameroon": "Cameroon", "ivory coast": "Côte d'Ivoire", "mongolia 2018": "Mongolia (before 2022)",
+}
+
+
+def non_pisa_named(text: str) -> list[str]:
+    """Display names of NON_PISA countries named in the text."""
+    low = " " + re.sub(r"[^a-z ]", " ", (text or "").lower()) + " "
+    low = re.sub(r"\s+", " ", low)
+    return [name for key, name in NON_PISA.items() if f" {key} " in low]
+
+
 # Economies whose 2018-only codes carry no value label in the SAS release.
 NAME_FALLBACK: dict[str, str] = {
     "BIH": "Bosnia and Herzegovina", "BLR": "Belarus", "RUS": "Russian Federation",

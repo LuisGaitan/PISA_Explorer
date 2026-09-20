@@ -17,7 +17,7 @@ import os
 import subprocess
 from pathlib import Path
 
-METHOD_VERSION = "3"
+METHOD_VERSION = "4"
 # 1  weighted mean / proportion / gap / quartiles / correlation / percentiles /
 #    crosstab / regression: W_FSTUWT, 10 PVs (Rubin), Fay-BRR k=0.5 x 80.
 # 2  cross-cycle change SEs include the OECD link errors for mean scores
@@ -25,6 +25,10 @@ METHOD_VERSION = "3"
 # 3  within-cycle-standardized indices (WLE scales, ESCS) get no cross-cycle
 #    change; group-average rows (OECD / region / ad-hoc) = unweighted mean of
 #    member estimates with SE = sqrt(sum SE^2) / N over ALL members.
+# 4  estimates resting on fewer than 30 students are suppressed (OECD
+#    reporting minimum); shares written as CASE ... ELSE 0 keep NULL as NULL
+#    and 1/0 fractions are rescaled to percentages; Viet Nam's separately
+#    released 2018 plausible values are joined into stu_qqq_2018.
 
 
 def _git_short_hash() -> str | None:

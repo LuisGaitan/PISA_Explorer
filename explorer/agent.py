@@ -50,8 +50,13 @@ INSTRUMENTS = ["stu_qqq", "sch_qqq", "tch_qqq", "stu_cog", "stu_tim", "stu_ttm",
                "stu_sch"]   # virtual: stu_qqq joined to sch_qqq
 CYCLES = ["2018", "2022", "2025"]
 DEFAULT_CYCLE = "2025"          # a question that names no cycle means the latest
-SOURCE_LINE = ("OECD PISA public-use databases: 2018 (CY07MSU), 2022 (CY08MSP), "
-               "2025 (CY09MS)")
+# The acknowledgement the PISA public-use-file terms of use require, verbatim,
+# followed by the file identifiers.
+OECD_ACKNOWLEDGEMENT = ("Programme for International Student Assessment (PISA) "
+                        "Organisation for Economic Co-operation and Development (OECD), Paris")
+SOURCE_LINE = (OECD_ACKNOWLEDGEMENT + " — public-use databases 2018 (CY07MSU), 2022 "
+               "(CY08MSP), 2025 (CY09MS); OECD disclaimers apply "
+               "(oecd.org/en/about/terms-conditions/oecd-disclaimers)")
 ESTIMATE_COL = re.compile(r"^estimate(_\d{4})?$")
 
 FORBIDDEN_SQL = re.compile(
@@ -333,7 +338,25 @@ it for the first subject named (science when none is named) and list the
 other subjects in limitation_note — never clarify to ask which one first.
 "What is behind / what explains a decline" => the trend of the score itself
 (weighted_mean over the cycles) with limitation_note; a regression across
-cycles does not answer it (its intercept is not the mean score). If they cannot enter one regression, run correlation on
+cycles does not answer it (its intercept is not the mean score).
+"X and the top N" / "X compared with the best countries" => ONE ranking plan
+over all economies (by ["CNT"], sort_by "estimate", no where filter, top_n
+null): the app locates X's row and rank in the full table — never a
+clarification asking to do it in two steps.
+A claim to check that needs two constructs ("high curiosity but low growth
+mindset in 2025") when only one exists in that cycle => analyze the one
+that exists (CURIO 2025) and state in limitation_note that the other is
+available only in another cycle (GROSAGR 2022) — never clarify.
+"How did X do" / "X's results" / "X's performance" with no domain named =>
+weighted_mean with measures ["PV{{pv}}MATH", "PV{{pv}}READ", "PV{{pv}}SCIE"]
+(all three domains, science listed last as the 2025 major domain), not
+science alone.
+A SHARE of students defined by a condition ("repeated a grade only once",
+"below Level 2", "answered yes") => template weighted_mean with a measure
+of the form CASE WHEN <condition> THEN 100.0 WHEN <valid but not the
+condition> THEN 0.0 ELSE NULL END — always 100.0 / 0.0 (a percentage),
+never 1 / 0, and never a CASE expression in weighted_proportion's
+`variable` field (that field takes a plain variable code). If they cannot enter one regression, run correlation on
 the first and put the rest in limitation_note.
 The "clarify" text is shown verbatim to a non-technical reader: plain
 language, variables named by their label with the code in parentheses, no
@@ -719,6 +742,72 @@ class Agent:
     COMPARABLE_WORDS = re.compile(r"\bcomparab(le|les|ility|ilidad)\b|\bcompatible\b", re.IGNORECASE)
     ITEM_ASK_WORDS = re.compile(r"\b(questions?|items?) (about|on|regarding)\b", re.IGNORECASE)
 
+    # ---------- sampling strata: regions, school types and networks inside an economy ----------
+
+    STRATUM_STOP = {"stratum", "general", "public", "private", "urban", "rural", "school",
+                    "schools", "region", "large", "small", "north", "south", "east", "west",
+                    "central", "state", "other", "lower", "upper", "secondary", "vocational",
+                    "students", "student", "country", "countries", "which", "position",
+                    "compare", "science", "reading", "mathematics"}
+
+    def _strata_index(self) -> list[tuple[str, str, str, str]]:
+        """(cycle, code, label, lower-case label) for every stratum label in
+        the student files — cached; ~4,000 entries."""
+        cache = self.__dict__.get("_strata_cache")
+        if cache is not None:
+            return cache
+        out = []
+        for cycle in CYCLES:
+            desc = catalog.describe("STRATUM", cycle=cycle)
+            desc = desc[desc.table_name.str.startswith("stu_qqq")]
+            if desc.empty or not desc.iloc[0].value_labels:
+                continue
+            for code, label in json.loads(desc.iloc[0].value_labels).items():
+                out.append((cycle, str(code), str(label), str(label).lower()))
+        self._strata_cache = out
+        return out
+
+    def _strata_hits(self, question: str, limit: int = 12) -> list[tuple[str, str, str]]:
+        """Strata whose label contains a distinctive word of the question
+        ("Intellectual schools" for "Nazarbayev Intellectual schools"): a word
+        counts when it is rare among labels, so 'urban' or 'public' never match."""
+        index = self._strata_index()
+        if not index:
+            return []
+        # words that name an economy ("Mexico" in "Undisclosed STRATUM - Mexico")
+        # are not stratum words
+        economy_words = {w for name in getattr(self, "economy_names", {}).values()
+                         for w in re.findall(r"[a-z]{5,}", str(name).lower())}
+        words = {w for w in re.findall(r"[a-z]{5,}", (question or "").lower())
+                 if w not in self.STRATUM_STOP and w not in catalog.STOPWORDS
+                 and w not in economy_words}
+        hits = []
+        for w in words:
+            # "non-intellectual / Astana" must not match "intellectual"
+            matches = [(c, code, label) for c, code, label, low in index
+                       if re.search(rf"(?<![a-z-]){re.escape(w)}", low)
+                       and not low.startswith("undisclosed")]
+            if 0 < len(matches) <= 25:
+                hits.extend(matches)
+        seen, out = set(), []
+        for h in hits:
+            if h[:2] not in seen:
+                seen.add(h[:2])
+                out.append(h)
+        return out[:limit]
+
+    @staticmethod
+    def _strata_block(hits) -> str:
+        if not hits:
+            return ""
+        lines = ["SAMPLING STRATA matching the question (a stratum is a region, school "
+                 "type or school network inside an economy; to analyze one, keep the "
+                 "economy in `where` and add STRATUM = '<code>' — codes are cycle-specific, "
+                 "so plan the cycle that has the code; instrument stu_qqq or stu_sch):"]
+        for cycle, code, label in hits:
+            lines.append(f"- PISA {cycle}: STRATUM = '{code}' = {label} (economy {code[:3]})")
+        return "\n".join(lines) + "\n"
+
     def _comparability_answer(self) -> str:
         return (
             "Yes, with one caveat. PISA scores in mathematics, reading and science are "
@@ -945,8 +1034,8 @@ class Agent:
                     f"estimate ({who}): those economies took part, but the OECD did "
                     f"not release their {link_errors.DOMAIN_NAMES[domain]} results in "
                     "the public database for that cycle (no plausible values — e.g. "
-                    "Viet Nam 2018 in every domain, Uzbekistan 2025 in mathematics "
-                    "and reading). They are listed in the table but excluded from the chart.")
+                    "Uzbekistan 2025 in mathematics and reading). They are listed in "
+                    "the table but excluded from the chart.")
             else:
                 notes.append(
                     f"{n_missing} row(s) have no estimate — the variable was not "
@@ -1172,6 +1261,23 @@ class Agent:
             plan["top_n"] = None
             plan["_ranking_kept"] = True
 
+    # The OECD does not report estimates based on fewer than 30 students; the
+    # PUF terms forbid anything that could identify a school's responses. A
+    # small group is blanked, counted, and explained in the provenance.
+    MIN_STUDENTS = 30
+
+    def _suppress_small_cells(self, res: pd.DataFrame, cycle: str, plan: dict) -> pd.DataFrame:
+        if res is None or "n" not in res.columns:
+            return res
+        small = res["n"].fillna(0).astype(int) < self.MIN_STUDENTS
+        small &= res["estimate"].notna() if "estimate" in res.columns else small
+        if small.any():
+            res = res.copy()
+            res.loc[small, [c for c in ("estimate", "se") if c in res.columns]] = np.nan
+            plan.setdefault("_suppressed", {})[cycle] = int(small.sum())
+            self._fire("hook:small_cell_suppressed")
+        return res.drop(columns=["n"])
+
     @staticmethod
     def _drop_null_groups(res: pd.DataFrame, by) -> tuple[pd.DataFrame, dict]:
         """Rows whose grouping value is missing are not a group (OECD practice
@@ -1249,18 +1355,51 @@ class Agent:
             except Exception:  # noqa: BLE001 — a label is a nicety
                 pass
             return f"% with {label} ({var}) {op.lower() if op == 'IN' else op} {value_text}"
+        if re.match(r"^\s*CASE\b", expr or "", re.IGNORECASE):
+            names = []
+            for v in Agent._case_variables(Agent, expr)[:3]:
+                desc = catalog.describe(v)
+                lab = desc.iloc[-1].label[:40] if not desc.empty and desc.iloc[-1].label else v
+                names.append(f"{lab} ({v})")
+            if names:
+                return "% of students meeting a condition on " + ", ".join(names)
         return expr[:60]
+
+    FRACTION_THEN = re.compile(r"\bTHEN\s+(1|0)(?:\.0)?\b(?!\s*\.)", re.IGNORECASE)
+    ELSE_ZERO = re.compile(r"\bELSE\s+0(?:\.0)?\s+END\s*$", re.IGNORECASE)
+
+    def _case_variables(self, expr: str) -> list[str]:
+        """Catalog variables named inside a CASE expression."""
+        out = []
+        for tok in dict.fromkeys(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr.replace("{pv}", "1"))):
+            if len(tok) >= 3 and tok.upper() == tok and tok not in self.SQL_WORDS \
+                    and not catalog.describe(tok).empty:
+                out.append(tok)
+        return out
+
+    SQL_WORDS = {"CASE", "WHEN", "THEN", "ELSE", "END", "AND", "NOT", "NULL", "BETWEEN",
+                 "LIKE", "COALESCE", "CAST", "TRUE", "FALSE", "ABS", "ROUND"}
 
     def _null_safe_share(self, expr: str | None) -> str | None:
         """A share written as CASE ... ELSE 0 END turns students who never
         saw the question (NULL) into zeros, so a share of "yes" answers in an
         economy that did not administer the item came out as 0.0 (SE 0.0).
         Keep NULL as NULL: the denominator is then valid respondents, exactly
-        as weighted_proportion does with valid_values."""
-        if not expr or not self.SHARE_CASE.match(expr):
+        as weighted_proportion does with valid_values. A share written as
+        1/0 (a fraction) is rescaled to 100/0 so it reads as a percentage
+        like every other share."""
+        if not expr or not re.match(r"^\s*CASE\b", expr, re.IGNORECASE):
             return expr
-        var = self.SHARE_CASE.match(expr).group("var")
-        return f"CASE WHEN ({var}) IS NULL THEN NULL ELSE ({expr.strip()}) END"
+        text = expr.strip()
+        thens = self.FRACTION_THEN.findall(text)
+        if thens and set(thens) <= {"1", "0"} and "100" not in text:
+            text = self.FRACTION_THEN.sub(lambda m: f"THEN {'100.0' if m.group(1) == '1' else '0.0'}", text)
+        if self.ELSE_ZERO.search(text):
+            vars_ = self._case_variables(text)
+            if vars_:
+                guard = vars_[0] if len(vars_) == 1 else "COALESCE(" + ", ".join(vars_) + ")"
+                text = f"CASE WHEN ({guard}) IS NULL THEN NULL ELSE ({text}) END"
+        return text if text != expr.strip() else expr
 
     # Measures a question names, matched against what the plan actually
     # uses — a requested measure the plan leaves out is stated, never dropped.
@@ -1696,6 +1835,14 @@ class Agent:
                 if isinstance(value, str):
                     self._check_fragment(value)
         self._align_gender_direction(plan, overrides)
+        # A stratum fixed by the filter (STRATUM = 'KAZ21', per cycle) must not
+        # also be a grouping column: stratum codes differ between cycles, so a
+        # trend grouped by STRATUM becomes one blank-riddled row per code.
+        wheres = [str(where or "")] + [str(ov.get("where") or "") for ov in overrides.values()]
+        if "STRATUM" in by and any(re.search(r"\bSTRATUM\s*=", w, re.I) for w in wheres):
+            by = tuple(c for c in by if c != "STRATUM")
+            plan["by"] = list(by)
+            self._fire("hook:stratum_by_dropped")
 
         if template == "raw_sql":
             table = self._run_raw_sql(plan["sql"])
@@ -1720,6 +1867,18 @@ class Agent:
         # Several measures for the same groups ("math, reading and ESCS for
         # Argentina"): run each and stack the rows with a `measure` column.
         self._keep_full_ranking(str(plan.get("_question") or ""), plan)
+        # A share whose group is a CASE expression belongs in weighted_mean
+        # as a 100/0/NULL measure; the planner sometimes files it under
+        # weighted_proportion's `variable` (which takes a plain code).
+        if template == "weighted_proportion" and re.match(r"^\s*CASE\b", str(plan.get("variable") or ""), re.I):
+            cond = str(plan["variable"]).strip()
+            valid = plan.get("valid_values") or [0, 1]
+            codes = ", ".join(str(v) for v in valid)
+            plan["measure"] = (f"CASE WHEN ({cond}) = {plan.get('value')} THEN 100.0 "
+                               f"WHEN ({cond}) IN ({codes}) THEN 0.0 ELSE NULL END")
+            plan["variable"] = None
+            plan["_derived_share"] = True
+            self._fire("hook:derived_share")
         measures_all = self._measure_list(plan)
         # shares written as CASE ... ELSE 0 END must not count non-respondents
         for key in ("measure", "x", "y"):
@@ -1757,6 +1916,7 @@ class Agent:
                     continue
                 mplan = {**cplan, "measure": expr} if expr is not None else cplan
                 res = self._run_template(template, mplan, tbl, by, cwhere)
+                res = self._suppress_small_cells(res, cycle, plan)
                 res, dropped_groups = self._drop_null_groups(res, by)
                 for col, n in dropped_groups.items():
                     plan.setdefault("_null_groups", {}).setdefault(col, {})[cycle] = n
@@ -1774,7 +1934,8 @@ class Agent:
                             continue
                         clause = "CNT IN (" + ", ".join(f"'{c}'" for c in sorted(members)) + ")"
                         basis = res if cwhere is None else \
-                            self._run_template(template, mplan, tbl, by, clause)
+                            self._suppress_small_cells(
+                                self._run_template(template, mplan, tbl, by, clause), cycle, plan)
                         avg = self._group_average_rows(basis, members, label_b)
                         if avg is not None:
                             res = pd.concat([res, avg], ignore_index=True)
@@ -1866,7 +2027,19 @@ class Agent:
 
         prov = self._provenance(plan, tables)
         prov["notes"].extend(self._missing_estimate_notes(table, plan))
+        if "2018" in cycles and "CNT" in table.columns and (table["CNT"].astype(str) == "VNM").any() \
+                and any(link_errors.domain_of(e) for _, e in (measures_all or [(None, plan.get("measure"))])):
+            prov["notes"].append(self.VNM_2018_NOTE)
         return table, prov
+
+    VNM_2018_NOTE = (
+        "Viet Nam's 2018 scores come from the plausible values the OECD released "
+        "separately after the main database. The OECD states that Viet Nam's PISA 2018 "
+        "data \"did not meet the PISA technical standards but were accepted as largely "
+        "comparable\" and, in PISA 2018 Results (Volume I), kept Viet Nam out of the "
+        "tables that compare performance across countries or over time because full "
+        "international comparability could not be assured (Annexes A2, A4 and A6). "
+        "Treat its 2018 values, and any 2018-based change, with that caution.")
 
     AVG_SHORT = {"European Union": "EU", "Latin America and the Caribbean": "LatAm",
                  "Nordic countries": "Nordic", "Middle East and North Africa": "MENA",
@@ -2034,6 +2207,12 @@ class Agent:
                 res.insert(res.columns.get_loc(code_col) + 1, label_col, mapped)
         return res
 
+    # The PUF terms of use forbid distributing the dataset: raw SQL may return
+    # aggregates only, never student or school records.
+    AGGREGATE_SQL = re.compile(r"\b(count|sum|avg|min|max|median|quantile\w*|stddev\w*|var\w*|"
+                               r"corr|group by)\b", re.IGNORECASE)
+    IDENTIFIER_COLS = re.compile(r"\b(CNTSTUID|CNTSCHID|CNTTCHID|STUID|SCHID)\b", re.IGNORECASE)
+
     def _run_raw_sql(self, sql: str) -> pd.DataFrame:
         if not sql:
             raise ValueError("raw_sql plan without sql")
@@ -2044,6 +2223,13 @@ class Agent:
             raise ValueError("only SELECT queries are allowed")
         if FORBIDDEN_SQL.search(stripped):
             raise ValueError("query uses a forbidden statement type")
+        if not self.AGGREGATE_SQL.search(stripped) or re.search(r"\bselect\s+\*", stripped, re.I):
+            raise ValueError("raw SQL must aggregate (COUNT/SUM/AVG/... with GROUP BY): "
+                             "student- and school-level records are never returned "
+                             "(OECD PISA public-use file terms of use)")
+        if self.IDENTIFIER_COLS.search(stripped):
+            raise ValueError("student and school identifiers cannot be selected or grouped "
+                             "on (OECD PISA public-use file terms of use)")
         return self.con.sql(stripped).df().head(MAX_RESULT_ROWS)
 
     @staticmethod
@@ -2100,10 +2286,12 @@ class Agent:
                             "SE: Fay's BRR, k=0.5, 80 replicates.",
             "correlation": "Weighted Pearson correlation (W_FSTUWT). "
                            "SE: Fay's BRR, k=0.5, 80 replicates.",
-            "percentiles": "Weighted empirical percentiles (W_FSTUWT). "
-                           "SE: Fay's BRR, k=0.5, 80 replicates.",
-            "percentile_spread": "Difference of weighted percentiles "
-                                 "(within-group dispersion), differenced "
+            "percentiles": "Weighted empirical percentiles (W_FSTUWT; the value at which "
+                           "the cumulative weight reaches the percentile, per plausible "
+                           "value — the convention of the OECD's published Stata code, "
+                           "_pctile [aw=w_fstuwt]). SE: Fay's BRR, k=0.5, 80 replicates.",
+            "percentile_spread": "Difference of weighted percentiles (within-group "
+                                 "dispersion; OECD _pctile convention), differenced "
                                  "replicate-wise. SE: Fay's BRR, k=0.5, 80 replicates.",
             "crosstab": "Weighted two-way table: row percentages of valid "
                         "respondents (W_FSTUWT), each cell with its own "
@@ -2158,6 +2346,19 @@ class Agent:
             notes.append(f"VARIABLE SUBSTITUTION: {plan['substitution_note']}")
         for line in plan.get("_standardized") or []:
             notes.append(f"STANDARD VARIABLE: {line}")
+        for cycle, k in sorted((plan.get("_suppressed") or {}).items()):
+            notes.append(f"PISA {cycle}: {k} estimate(s) suppressed because they rest on fewer "
+                         f"than {self.MIN_STUDENTS} students — the OECD's minimum for reporting, "
+                         "which also protects individual schools' responses; those cells are blank.")
+        all_wheres = " ".join([str(where or "")] + [str(ov.get("where") or "") for ov in
+                                                    (plan.get("cycle_overrides") or {}).values()
+                                                    if isinstance(ov, dict)])
+        if re.search(r"\bSTRATUM\s*(=|\bIN\b)", all_wheres, re.I):
+            notes.append("The filter selects a SAMPLING STRATUM (a region, school type or school "
+                         "network inside an economy, as coded by the national centre for that "
+                         "cycle). Estimates use the same student weights and replicate weights; "
+                         "a stratum is a sampling unit rather than an official OECD reporting "
+                         "category, stratum codes differ between cycles, and its sample can be small.")
         if plan.get("_null_safe_share"):
             notes.append("Shares are percentages of students with a valid response: students "
                          "who did not answer the item (or were not asked it) are excluded "
@@ -2645,13 +2846,15 @@ class Agent:
             named = self._economies_in_data(q_en)
             ai_data = bool(self.AI_WORDS.search(q_en) and self.AI_DATA_WORDS.search(q_en)
                            and not re.search(r"literacy", q_en, re.I))
-            if not named and not ai_data:
+            strata = self._strata_hits(q_en)
+            if not named and not ai_data and not strata:
                 return AgentResult(question, route.get("direct_answer")
                                    or "Could you rephrase that?", route="conversational")
             # The router called it conversational, but the question names an
             # economy that IS in the data (or asks about AI use, which the 2025
-            # questionnaire covers): the data answer, not the model's memory.
-            self._fire("route:force_analyze:" + ("ai_data" if ai_data else "economy"))
+            # questionnaire covers, or a school network / region that is a
+            # sampling stratum): the data answer, not the model's memory.
+            self._fire("route:force_analyze:" + ("ai_data" if ai_data else "economy" if named else "stratum"))
             route = {"data_question": True, "intent": "analyze",
                      "search_terms": (["artificial intelligence chatbot", "AI use school"]
                                       if ai_data else None)
@@ -2670,13 +2873,26 @@ class Agent:
             result.answer = self._localize(result.answer, language)
             return result
 
-        hits = self._with_standard_cards(self._retrieve(route.get("search_terms") or []), q_en)
         named = self._economies_in_data(q_en)
+        outside = regions.non_pisa_named(q_en)
+        if outside and not named:
+            # "students in India": a country that has never been in PISA —
+            # the fixed answer, before a planner can invent a code for it
+            self._fire("hook:unknown_economy")
+            return AgentResult(question, self._localize(
+                f"{', '.join(outside)} is not in the PISA 2018, 2022 or 2025 public-use "
+                "databases loaded here, so no statistic can be computed. Ask “did <economy> "
+                "participate?” to check any economy, or name one from the participant lists.",
+                language), route="conversational")
+        hits = self._with_standard_cards(self._retrieve(route.get("search_terms") or []), q_en)
         question_block = (f"QUESTION: {question}" if q_en == question
                           else f"QUESTION (original, {language}): {question}\nQUESTION (English): {q_en}")
         standard_block = standards.prompt_block(standards.matching(q_en))
+        strata_block = self._strata_block(self._strata_hits(q_en))
+        if strata_block:
+            self._fire("standard:strata")
         plan = generate_json(
-            f"{context}{question_block}\n\n{standard_block}VARIABLE CARDS:\n{self._cards(hits, named)}",
+            f"{context}{question_block}\n\n{standard_block}{strata_block}VARIABLE CARDS:\n{self._cards(hits, named)}",
             system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
                                       regions=self.regions_block),
         )
@@ -2708,6 +2924,20 @@ class Agent:
             return AgentResult(question, self._localize(text, language),
                                plan=plan, retrieved=hits, route="clarify")
 
+        # An economy the model invented a code for ("India" -> CNT = 'IND')
+        # is answered from the participant lists, never as an engine error.
+        every = set().union(*self.present.values()) if self.present else set()
+        absent = [c for c in sorted(set(re.findall(r"'([A-Z]{3})'", str(plan.get("where") or ""))))
+                  if c not in every]
+        if absent and not any(c in every for c in re.findall(r"'([A-Z]{3})'", str(plan.get("where") or ""))):
+            self._fire("hook:unknown_economy")
+            names = ", ".join(self.economy_names.get(c, c) for c in absent)
+            return AgentResult(question, self._localize(
+                f"{names} is not in the PISA 2018, 2022 or 2025 public-use databases loaded "
+                f"here (no code {', '.join(absent)} appears in any cycle), so no statistic can be "
+                "computed. Ask “did <economy> participate?” to check any economy, or name one "
+                "from the participant lists.", language), plan=plan, retrieved=hits,
+                route="conversational")
         try:
             table, provenance = self.execute(plan)
             for key, name in (("_direction_fixed", "hook:align_gender_direction"),

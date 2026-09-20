@@ -86,15 +86,17 @@ def replicates_from_frame(
     n_pv, n_w = len(measure_cols), len(ALL_WEIGHTS)
     groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
 
-    key_rows, blocks = [], []
+    key_rows, blocks, counts = [], [], []
     for key, g in groups:
         if not isinstance(key, tuple):
             key = (key,)
         weights = g[ALL_WEIGHTS].to_numpy(dtype=float)      # (n, 81)
         estimates = np.empty((n_pv, n_w))
+        n_obs = 0
         for i, col in enumerate(measure_cols):
             m = g[col].to_numpy(dtype=float)                # (n,)
             mask = ~np.isnan(m)
+            n_obs = max(n_obs, int(mask.sum()))
             wm = weights[mask]
             # A group with no observed values yields NaN by design (e.g. a
             # question not administered there) — suppress the 0/0 warnings.
@@ -102,27 +104,31 @@ def replicates_from_frame(
                 estimates[i] = (wm.T @ m[mask]) / wm.sum(axis=0)
         key_rows.append(key)
         blocks.append(estimates)
+        counts.append(n_obs)
 
     pv_idx = np.repeat(np.arange(1, n_pv + 1), n_w)
     rep_idx = np.tile(np.arange(n_w), n_pv)
     frames = []
-    for key, est in zip(key_rows, blocks):
-        frame = pd.DataFrame({"pv": pv_idx, "rep": rep_idx, "value": est.ravel()})
+    for key, est, n_obs in zip(key_rows, blocks, counts):
+        frame = pd.DataFrame({"pv": pv_idx, "rep": rep_idx, "value": est.ravel(), "n": n_obs})
         for col, val in zip(by, key):
             frame[col] = val
         frames.append(frame)
     if not frames:      # no rows matched (e.g. an economy absent from this cycle)
-        return pd.DataFrame(columns=list(by) + ["pv", "rep", "value"])
+        return pd.DataFrame(columns=list(by) + ["pv", "rep", "value", "n"])
     out = pd.concat(frames, ignore_index=True)
-    return out[list(by) + ["pv", "rep", "value"]]
+    return out[list(by) + ["pv", "rep", "value", "n"]]
 
 
 def combine(replicates: pd.DataFrame, by: tuple[str, ...] = ()) -> pd.DataFrame:
     """Rubin + Fay-BRR combination of a replicate frame (possibly of derived
-    statistics). Returns [*by, estimate, se, n_pv]."""
+    statistics). Returns [*by, estimate, se, n_pv] plus `n` (students with an
+    observed value) when the replicate frame carries it — the basis of the
+    OECD's minimum-size reporting rule."""
     group_cols = list(by) if by else []
+    has_n = "n" in replicates.columns
     if replicates.empty:
-        return pd.DataFrame(columns=group_cols + ["estimate", "se", "n_pv"])
+        return pd.DataFrame(columns=group_cols + ["estimate", "se", "n_pv"] + (["n"] if has_n else []))
 
     def _one(group: pd.DataFrame) -> pd.Series:
         main = group[group.rep == 0].set_index("pv").value  # T_v per PV
@@ -142,7 +148,10 @@ def combine(replicates: pd.DataFrame, by: tuple[str, ...] = ()) -> pd.DataFrame:
         # no observed values (item not administered): no estimate, no SE —
         # never "blank (SE 0.0)"
         se = float(np.sqrt(total_var)) if not np.isnan(estimate) else float("nan")
-        return pd.Series({"estimate": estimate, "se": se, "n_pv": m})
+        out = {"estimate": estimate, "se": se, "n_pv": m}
+        if has_n:
+            out["n"] = int(group["n"].min())
+        return pd.Series(out)
 
     if group_cols:
         out = (
@@ -153,6 +162,8 @@ def combine(replicates: pd.DataFrame, by: tuple[str, ...] = ()) -> pd.DataFrame:
     else:
         out = _one(replicates).to_frame().T
     out["n_pv"] = out["n_pv"].astype(int)
+    if has_n:
+        out["n"] = out["n"].astype(int)
     return out
 
 
@@ -171,4 +182,8 @@ def contrast(
     keys = list(by) + ["pv", "rep"]
     merged = a.merge(b, on=keys, suffixes=("_a", "_b"))
     merged["value"] = merged.value_a - merged.value_b
-    return combine(merged[keys + ["value"]], by=by)
+    cols = keys + ["value"]
+    if "n_a" in merged.columns:
+        merged["n"] = merged[["n_a", "n_b"]].min(axis=1)   # the smaller group bounds the rule
+        cols.append("n")
+    return combine(merged[cols], by=by)

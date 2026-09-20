@@ -221,11 +221,19 @@
       ]}
     },
     {
-      "name": "vnm_2018_withheld",
-      "verified": "Viet Nam 2018 took part but no PVs were released: cycle omitted with the 'did not release' note",
+      "name": "vnm_2018_separately_released",
+      "verified": "Viet Nam 2018 PVs joined from the OECD's separate release (pipeline/load_vnm_2018.py); the comparability caution is stated",
       "plan": {"template": "weighted_mean", "measure": "PV{pv}READ", "cycles": ["2018", "2022"], "by": ["CNT"], "where": "CNT = 'VNM'"},
-      "expect": {"rows": 1, "cells": [{"match": {"CNT": "VNM"}, "estimate": 461.89, "se": 3.94}],
-                 "notes_contain": ["did not release its reading results"], "notes_forbid": ["did not administer"]}
+      "expect": {"rows": 1, "cells": [{"match": {"CNT": "VNM"}, "estimate_2022": 461.89, "se_2022": 3.94}],
+                 "notes_contain": ["largely comparable"], "notes_forbid": ["did not administer", "did not release"]}
+    },
+    {
+      "name": "small_cells_are_suppressed",
+      "verified": "OECD reporting minimum: a stratum of 6 students (TUR01) gets no estimate; the Intellectual-schools stratum (KAZ21, 2,870 students) keeps its value",
+      "plan": {"template": "weighted_mean", "measure": "PV{pv}MATH", "cycles": ["2025"], "by": ["CNT", "STRATUM"], "where": "STRATUM IN ('KAZ21', 'TUR01')"},
+      "expect": {"rows": 2, "cells": [{"match": {"STRATUM": "TUR01"}, "estimate": null, "se": null},
+                                      {"match": {"STRATUM": "KAZ21"}, "estimate": 581.01}],
+                 "notes_contain": ["SAMPLING STRATUM", "fewer than 30 students"]}
     }
   ]
 }

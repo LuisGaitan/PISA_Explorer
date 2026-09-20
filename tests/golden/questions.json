@@ -69,6 +69,18 @@
      "route": "conversational", "answer_forbid": ["Yes, PISA results"], "answer_contains_any": ["enlace", "error de vinculaci", "vincul", "link error"]},
     {"name": "items_about_info", "question": "I believe 2025 had some questions about how students evaluate information",
      "route": "explore"},
+    {"name": "nis_stratum", "question": "what is the position of Nazarbayev Intellectual schools in math, reading and science",
+     "route": "data", "answer_forbid": ["do not contain", "cannot provide"], "notes_contain": ["SAMPLING STRATUM"]},
+    {"name": "india_2018", "question": "How many students in India repeated a grade only once in 2018?",
+     "route": "conversational", "answer_contains": ["not in the PISA 2018, 2022 or 2025"], "answer_forbid": ["failed"]},
+    {"name": "mexico_repeat_once", "question": "How many students in Mexico repeated a grade only once in 2018?",
+     "route": "data", "answer_contains": ["%"], "answer_forbid": ["CASE WHEN", "0.07", "0.13", "proportion of 0."]},
+    {"name": "indonesia_results", "question": "What were the results of the students in Indonesia?",
+     "route": "data", "variables_all": ["PV1MATH", "PV1READ", "PV1SCIE"]},
+    {"name": "indonesia_vs_top5", "question": "compare Indonesia and top 5 countries in belief in science",
+     "route": "data", "answer_forbid": ["single step", "first provide"]},
+    {"name": "vietnam_trend", "question": "How did Vietnam's reading score change from 2018 to 2025?",
+     "route": "data", "answer_forbid": ["did not release", "not released"], "notes_contain": ["largely comparable"]},
     {"name": "pisa_2012", "question": "What was the OECD average math score in PISA 2012?",
      "route": "conversational", "answer_contains_any": ["2018", "not loaded", "only"], "answer_forbid": ["494"]}
   ]

@@ -85,8 +85,32 @@ python pipeline/build_db.py
 python pipeline/build_catalog.py
 python pipeline/validate.py
 python pipeline/check_2025_published.py   # 2025 SEs/sample sizes vs the Technical Report
+python pipeline/load_vnm_2018.py          # Viet Nam's separately released 2018 PVs (optional file)
+python pipeline/build_db.py               # again, so the 2018 view joins them in
+python pipeline/build_coverage.py
+python pipeline/check_2018_published.py   # 2018 means vs PISA 2018 Results Vol. I Table I.1
 python -m explorer.demo          # end-to-end check (~2 s)
 ```
+
+Viet Nam 2018: the main CY07MSU file has Viet Nam's students without
+plausible values; the OECD released them later in a separate file
+(`VNM/cy07_vnm_stu_qqq.sas7bdat`). When that file is present the 2018 view
+carries them, and every answer that uses them states the OECD's caution
+that Viet Nam's 2018 data "did not meet the PISA technical standards but
+were accepted as largely comparable".
+
+## Data source and terms
+
+The data are the OECD's PISA public-use files, used under the OECD's terms
+of use for the PUF. Any use of results obtained with this software must
+acknowledge the source as: **"Programme for International Student Assessment
+(PISA) Organisation for Economic Co-operation and Development (OECD),
+Paris"**. PISA Explorer is not an OECD product and is not affiliated with
+the OECD; the [OECD disclaimers](https://www.oecd.org/en/about/terms-conditions/oecd-disclaimers)
+apply. The app returns aggregates only: estimates based on fewer than 30
+students are suppressed (the OECD's own reporting rule), the raw-SQL path
+accepts aggregate queries only, and no student- or school-level record is
+ever returned or distributed. The repository contains no PISA data.
 
 ## How answers are kept exact
 

@@ -23,6 +23,9 @@ COPY explorer/ explorer/
 # small and rebuilt with the code, so it rides along here rather than waiting
 # for the next data image. .gcloudignore.code re-includes exactly this file.
 COPY data/catalog/coverage.parquet data/catalog/coverage.parquet
+# Viet Nam's separately released 2018 plausible values (pipeline/load_vnm_2018.py);
+# build_db.py joins them into the stu_qqq_2018 view when the file is present.
+COPY data/parquet/pisa2018/vnm_pv.parquet data/parquet/pisa2018/vnm_pv.parquet
 
 # Re-register views in case pipeline/build_db.py changed (data itself is
 # untouched; this takes ~1 s).

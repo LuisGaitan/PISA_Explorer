@@ -112,7 +112,10 @@ gcloud run deploy pisa-explorer `
 and limits.) Repeat the full archive route only when the data or the pipeline
 changes, then point `_DATA_IMAGE` in `cloudbuild.code.yaml` at the new data tag.
 
-The code-only image also carries `data/catalog/coverage.parquet` (which
+The code-only image also carries `data/parquet/pisa2018/vnm_pv.parquet`
+(Viet Nam's separately released 2018 plausible values, built by
+`python pipeline/load_vnm_2018.py`; `build_db.py` in the image joins them
+into the 2018 view) and `data/catalog/coverage.parquet` (which
 economies collected each questionnaire variable, per cycle — built by
 `python pipeline/build_coverage.py` in a few seconds from the local DuckDB).
 `.gcloudignore.code` re-includes exactly that file from the otherwise

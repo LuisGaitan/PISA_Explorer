@@ -10,3 +10,8 @@ data/*
 data/catalog/*
 !data/catalog/coverage.parquet
 *.log
+!data/parquet/
+data/parquet/*
+!data/parquet/pisa2018/
+data/parquet/pisa2018/*
+!data/parquet/pisa2018/vnm_pv.parquet
