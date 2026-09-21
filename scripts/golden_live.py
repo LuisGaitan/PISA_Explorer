@@ -15,6 +15,7 @@ to data/golden_live_<timestamp>.json (answers, plans, guards) for review.
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -141,8 +142,10 @@ def main() -> int:
             runs.append({"problems": problems, "answer": result.get("answer"), "route": result.get("route"),
                          "template": (result.get("plan") or {}).get("template"),
                          "plan": {k: v for k, v in (result.get("plan") or {}).items() if not k.startswith("_")},
+                         "grammar": (result.get("plan") or {}).get("_grammar"),
                          "guards": result.get("guards"), "summary_mode": result.get("summary_mode"),
-                         "prose_issues": result.get("prose_issues"), "seconds": round(time.time() - t0, 1)})
+                         "prose_issues": result.get("prose_issues"), "seconds": round(time.time() - t0, 1),
+                         "timing": result.get("timing")})
             flag = "ok  " if not problems else "FAIL"
             print(f"{flag} {case['name']} ({runs[-1]['seconds']}s, {result.get('route')}"
                   f"{', ' + str(result.get('summary_mode')) if result.get('summary_mode') else ''})"
@@ -151,7 +154,10 @@ def main() -> int:
             hard_failures += 1
         report.append({"name": case["name"], "question": case["question"], "passes": passes,
                        "repeats": args.repeats, "runs": runs})
-    out = ROOT / "data" / f"golden_live_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    # the planner model and the pid keep parallel runs from overwriting each other
+    from explorer import llm as _llm
+    tag = re.sub(r"[^A-Za-z0-9.-]", "_", _llm.model_for("planner"))
+    out = ROOT / "data" / f"golden_live_{time.strftime('%Y%m%d_%H%M%S')}_{tag}_{os.getpid()}.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(report, indent=1, ensure_ascii=False), encoding="utf-8")
     total = len(report)

@@ -2059,6 +2059,189 @@
           "Only quarter 4 of ESCS"
         ]
       }
+    },
+    {
+      "name": "kazakhstan_resilient_share_math_2025",
+      "verified": "OECD definition (bottom ESCS quarter, top performance quarter within the economy); 16.32 (SE 0.87) computed 2026-09-20 with the new template; Spain 12.23 (SE 0.76) in the same run",
+      "plan": {
+        "template": "resilient_share",
+        "measure": "PV{pv}MATH",
+        "quart_variable": "ESCS",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('KAZ', 'ESP')",
+        "_question": "share of academically resilient students in math in Kazakhstan and Spain 2025"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "KAZ"
+            },
+            "estimate": 16.32,
+            "se": 0.87
+          },
+          {
+            "match": {
+              "CNT": "ESP"
+            },
+            "estimate": 12.23,
+            "se": 0.76
+          }
+        ]
+      }
+    },
+    {
+      "name": "japan_brazil_math_sd_2025",
+      "verified": "weighted SD of PV1MATH for Japan reproduces 103.6 by direct numpy; 10-PV value 103.96 (SE 2.58); Brazil 80.70 (SE 1.14)",
+      "plan": {
+        "template": "weighted_sd",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('JPN', 'BRA')",
+        "_question": "standard deviation of math scores in Japan and Brazil 2025"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "JPN"
+            },
+            "estimate": 103.96,
+            "se": 2.58
+          },
+          {
+            "match": {
+              "CNT": "BRA"
+            },
+            "estimate": 80.7,
+            "se": 1.14
+          }
+        ]
+      }
+    },
+    {
+      "name": "between_school_share_brazil_finland_2025",
+      "verified": "between-school share of the math variance: Brazil 46.67% (SE 1.54), Finland 11.49% (SE 1.16) — the familiar ordering (Finland among the lowest ICCs in PISA)",
+      "plan": {
+        "template": "between_school_share",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('BRA', 'FIN')",
+        "_question": "ICC between schools in math Brazil and Finland 2025"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "BRA"
+            },
+            "estimate": 46.67,
+            "se": 1.54
+          },
+          {
+            "match": {
+              "CNT": "FIN"
+            },
+            "estimate": 11.49,
+            "se": 1.16
+          }
+        ]
+      }
+    },
+    {
+      "name": "correlation_within_escs_quarters_denmark_2022",
+      "verified": "ICTWKDY x math within ESCS quarters, Denmark 2022: q1 -0.24 (SE 0.04) … q4 -0.30 (SE 0.04); scholar Q11",
+      "plan": {
+        "template": "correlation",
+        "x": "ICTWKDY",
+        "y": "PV{pv}MATH",
+        "quart_variable": "ESCS",
+        "cycles": [
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'DNK'",
+        "_question": "correlation between ICTWKDY and math within ESCS quarters in Denmark 2022"
+      },
+      "expect": {
+        "rows": 4,
+        "cells": [
+          {
+            "match": {
+              "CNT": "DNK",
+              "quarter": "1"
+            },
+            "estimate": -0.24,
+            "se": 0.04
+          },
+          {
+            "match": {
+              "CNT": "DNK",
+              "quarter": "4"
+            },
+            "estimate": -0.3,
+            "se": 0.04
+          }
+        ]
+      }
+    },
+    {
+      "name": "gender_gap_levels_finland_italy_2022",
+      "verified": "gap -44.69 (FIN) / -19.13 (ITA) as in the skeptic report M3; the two sides' means ride in plan['_group_levels'] (girls FIN 513.0, boys 468.3)",
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}READ",
+        "group_col": "ST004D01T",
+        "minuend": 2,
+        "subtrahend": 1,
+        "cycles": [
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('FIN', 'ITA')",
+        "_question": "gender gap in reading Finland and Italy 2022"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "FIN"
+            },
+            "estimate": -44.69,
+            "se": 2.98
+          },
+          {
+            "match": {
+              "CNT": "ITA"
+            },
+            "estimate": -19.13,
+            "se": 3.79
+          }
+        ]
+      }
     }
   ]
 }

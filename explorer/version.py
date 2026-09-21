@@ -47,6 +47,13 @@ METHOD_VERSION = "6"
 #    dummies keep NULL as NULL; per-cycle `by` overrides apply (MALE recoded
 #    to ST004D01T); creative thinking (stu_crt_2022), global competence
 #    (PV GLCM 2018) and financial literacy (flt_qqq) are standard measures.
+#    Same method, later additions (no number changed for an existing plan):
+#    the planner fills a closed form (explorer/grammar.py) that the app
+#    compiles to SQL; new statistics weighted_sd, resilient_share (bottom
+#    ESCS quarter, top performance quarter within the economy, per PV),
+#    between_school_share (one-way variance decomposition, %), correlation
+#    and regression within ESCS quarters; each side of a gap is stated
+#    beside the gap.
 
 
 def _git_short_hash() -> str | None:

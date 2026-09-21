@@ -13,6 +13,7 @@ import pandas as pd
 from .estimator import (
     ALL_WEIGHTS,
     GROUP_STATS,
+    SCHOOL_ID,
     _pv_list,
     combine,
     contrast,
@@ -50,6 +51,18 @@ def weighted_proportion(con, table, variable, value, by=(), where=None,
     return combine(reps, by=tuple(by))
 
 
+def _group_levels(reps: pd.DataFrame, group_col: str, minuend, subtrahend, by) -> pd.DataFrame:
+    """The two groups' own means beside their difference: [*by, group,
+    estimate, se] for the minuend and subtrahend groups, from the same
+    replicate frame (a gap answer should also say what each side scored)."""
+    sub = reps[reps[group_col].isin([minuend, subtrahend])]
+    if sub.empty:
+        return pd.DataFrame(columns=list(by) + ["group", "estimate", "se"])
+    out = combine(sub, by=(group_col, *by))
+    out = out.rename(columns={group_col: "group"})
+    return out[list(by) + ["group", "estimate", "se"] + [c for c in ("n", "n_schools") if c in out.columns]]
+
+
 def gap(con, table, measure, group_col, minuend, subtrahend, by=(),
         where=None, group_expr: str | None = None,
         group_label: str | None = None) -> pd.DataFrame:
@@ -59,7 +72,9 @@ def gap(con, table, measure, group_col, minuend, subtrahend, by=(),
     `group_expr`: a SQL expression defining the two groups when they are not
     a single column's codes — e.g. non-immigrant (IMMIG = 1) vs immigrant
     (IMMIG in 2, 3): "CASE WHEN IMMIG = 1 THEN 1 WHEN IMMIG IN (2, 3) THEN 0
-    END" with minuend=1, subtrahend=0. `group_col` is then only a label."""
+    END" with minuend=1, subtrahend=0. `group_col` is then only a label.
+    The result's attrs["levels"] carries each group's own mean and SE (as
+    records — pandas compares attrs on merge, so never a frame)."""
     if group_expr:
         from .estimator import _pv_list, fetch_frame, replicates_from_frame
         exprs = _pv_list(measure)
@@ -69,12 +84,14 @@ def gap(con, table, measure, group_col, minuend, subtrahend, by=(),
         reps = replicates_from_frame(df, cols, by=("_grp", *by))
         out = contrast(reps, "_grp", minuend, subtrahend, by=tuple(by))
         out.insert(0, "contrast", f"{group_label or group_col}: {minuend} - {subtrahend}")
+        out.attrs["levels"] = _group_levels(reps, "_grp", minuend, subtrahend, tuple(by)).to_dict("records")
         return out
     reps = replicate_estimates(
         con, table, measure, by=(group_col, *by), where=where
     )
     out = contrast(reps, group_col, minuend, subtrahend, by=tuple(by))
     out.insert(0, "contrast", f"{group_col}: {minuend} - {subtrahend}")
+    out.attrs["levels"] = _group_levels(reps, group_col, minuend, subtrahend, tuple(by)).to_dict("records")
     return out
 
 
@@ -145,17 +162,31 @@ def quartile_means(con, table, measure, quart_variable, by=(),
 def quartile_gap(con, table, measure, quart_variable, by=(),
                  where=None) -> pd.DataFrame:
     """Top-quarter minus bottom-quarter difference in `measure` (e.g. the
-    ESCS equity gradient), SE via replicate-wise differencing."""
+    ESCS equity gradient), SE via replicate-wise differencing. The result's
+    attrs["levels"] carries the two quarters' own means."""
     reps = _quartile_replicates(con, table, measure, quart_variable, by, where)
     out = contrast(reps, "quarter", 4, 1, by=tuple(by))
     out.insert(0, "contrast", f"{quart_variable}: top quarter - bottom quarter")
+    out.attrs["levels"] = _group_levels(reps, "quarter", 4, 1, tuple(by)).to_dict("records")
     return out
 
 
-def correlation(con, table, x, y, by=(), where=None) -> pd.DataFrame:
+def _with_quarters(df: pd.DataFrame, by) -> tuple[pd.DataFrame, tuple]:
+    """Add a `quarter` column (weighted quarters of the `qv` column, cut
+    within each economy) and return the grouping extended by it — the
+    OECD's "within ESCS quarters" breakdown for any statistic."""
+    df = df[df["qv"].notna()].reset_index(drop=True)
+    df = _assign_weighted_quarters(df, by=("CNT",) if "CNT" in by else ())
+    return df, (*by, "quarter")
+
+
+def correlation(con, table, x, y, by=(), where=None,
+                quart_variable: str | None = None) -> pd.DataFrame:
     """Weighted Pearson correlation of two variables, PV-aware (write {pv} in
     either expression; PV_i of one pairs with PV_i of the other), SE via BRR +
-    Rubin's rules — unlike a raw-SQL corr(), this is a population estimate."""
+    Rubin's rules — unlike a raw-SQL corr(), this is a population estimate.
+    `quart_variable`: compute it within each weighted quarter of that
+    variable (cut within each economy), one row per quarter."""
     xs, ys = _pv_list(x), _pv_list(y)
     n_pv = max(len(xs), len(ys))
     if len(xs) not in (1, n_pv) or len(ys) not in (1, n_pv):
@@ -167,7 +198,12 @@ def correlation(con, table, x, y, by=(), where=None) -> pd.DataFrame:
     for i, (ex, ey) in enumerate(zip(xs, ys), start=1):
         extra[f"x_{i}"] = ex
         extra[f"y_{i}"] = ey
+    if quart_variable:
+        extra["qv"] = quart_variable
     df = fetch_frame(con, table, [], by=tuple(by), where=where, extra=extra)
+    by = tuple(by)
+    if quart_variable:
+        df, by = _with_quarters(df, by)
 
     groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
     frames = []
@@ -304,13 +340,15 @@ MAX_REGRESSION_PREDICTORS = 6
 
 
 def regression(con, table, y, xs, by=(), where=None,
-               names=None) -> pd.DataFrame:
+               names=None, quart_variable: str | None = None) -> pd.DataFrame:
     """Weighted least-squares regression of `y` on predictors `xs`
     (SQL expressions; encode categorical contrasts as 0/1 CASE dummies).
     PV-aware in y; coefficients averaged over PVs, SEs via BRR + Rubin.
     Listwise deletion of rows with any missing value. `names` (parallel to
     `xs`) supplies readable term labels — without them a CASE dummy's raw SQL
-    becomes the term name, which readers (and summarizers) misinterpret."""
+    becomes the term name, which readers (and summarizers) misinterpret.
+    `quart_variable`: one regression per weighted quarter of that variable
+    (cut within each economy)."""
     if len(xs) > MAX_REGRESSION_PREDICTORS:
         raise ValueError(f"at most {MAX_REGRESSION_PREDICTORS} predictors")
     if any("{pv}" in x for x in xs):
@@ -320,7 +358,12 @@ def regression(con, table, y, xs, by=(), where=None,
     ys_list = _pv_list(y)
     extra = {f"y_{i}": e for i, e in enumerate(ys_list, start=1)}
     extra.update({f"x_{j}": e for j, e in enumerate(xs, start=1)})
+    if quart_variable:
+        extra["qv"] = quart_variable
     df = fetch_frame(con, table, [], by=tuple(by), where=where, extra=extra)
+    by = tuple(by)
+    if quart_variable:
+        df, by = _with_quarters(df, by)
 
     terms = ["(intercept)"] + list(names if names is not None else xs)
     n_w = len(ALL_WEIGHTS)
@@ -391,6 +434,132 @@ def regression(con, table, y, xs, by=(), where=None,
     out = combine(reps, by=(*by, "term"))
     out.attrs["skipped"] = skipped
     return out
+
+
+def weighted_sd(con, table, measure, by=(), where=None) -> pd.DataFrame:
+    """Weighted standard deviation of a measure (PV-aware), with BRR SEs —
+    the OECD publishes it beside every mean (Tables I.B1.x); also the unit
+    of an effect size in SD units."""
+    exprs = _pv_list(measure)
+    cols = [f"m_{i}" for i in range(1, len(exprs) + 1)]
+    df = fetch_frame(con, table, exprs, by=tuple(by), where=where)
+    groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
+    n_w = len(ALL_WEIGHTS)
+    frames = []
+    for key, g in groups:
+        if not isinstance(key, tuple):
+            key = (key,)
+        weights = g[ALL_WEIGHTS].to_numpy(dtype=float)
+        stats = None
+        for pv_i, col in enumerate(cols, start=1):
+            v = g[col].to_numpy(dtype=float)
+            mask = ~np.isnan(v)
+            if stats is None:
+                stats = group_stats(g, mask)
+            vm, wm = v[mask], weights[mask]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                total = wm.sum(axis=0)
+                mean = (wm.T @ vm) / total
+                var = (wm.T @ (vm * vm)) / total - mean * mean
+                sd = np.sqrt(np.clip(var, 0, None))
+            frame = pd.DataFrame({"pv": pv_i, "rep": np.arange(n_w), "value": sd, **stats})
+            for c, val in zip(by, key):
+                frame[c] = val
+            frames.append(frame)
+    if not frames:
+        return combine(pd.DataFrame(columns=list(by) + ["pv", "rep", "value"] + GROUP_STATS), by=())
+    return combine(pd.concat(frames, ignore_index=True), by=tuple(by))
+
+
+def resilient_share(con, table, measure, quart_variable="ESCS", by=(), where=None,
+                    level: float | None = None) -> pd.DataFrame:
+    """Share of academically resilient students (OECD, PISA 2018/2022
+    Results Vol. II): among students in the BOTTOM weighted quarter of
+    `quart_variable` (ESCS) in their economy, the percentage who score in
+    the TOP quarter of `measure` in their economy (quarters cut per
+    plausible value with the final weight), or — when `level` is given —
+    at or above that score (the older "Level 3 or above" variant).
+    PV-aware, BRR SEs; denominators are the disadvantaged students with a
+    score."""
+    exprs = _pv_list(measure)
+    cols = [f"m_{i}" for i in range(1, len(exprs) + 1)]
+    df = fetch_frame(con, table, exprs, by=tuple(by), where=where, extra={"qv": quart_variable})
+    df = df[df["qv"].notna()].reset_index(drop=True)
+    if df.empty:
+        return combine(pd.DataFrame(columns=list(by) + ["pv", "rep", "value"] + GROUP_STATS), by=())
+    econ_by = ("CNT",) if "CNT" in by else ()
+    df = _assign_weighted_quarters(df, by=econ_by)
+    df = df.rename(columns={"quarter": "escs_q"})
+    flags = []
+    for col in cols:
+        if level is not None:
+            flag = np.where(df[col].isna(), np.nan, np.where(df[col] >= level, 100.0, 0.0))
+        else:
+            tmp = df[[*econ_by, "W_FSTUWT"]].copy()
+            tmp["qv"] = df[col]
+            has = tmp["qv"].notna().to_numpy()
+            perf_q = np.full(len(df), np.nan)
+            if has.any():
+                sub = _assign_weighted_quarters(tmp[has].reset_index(drop=True), by=econ_by)
+                perf_q[has] = sub["quarter"].to_numpy()
+            flag = np.where(np.isnan(perf_q), np.nan, np.where(perf_q == 4, 100.0, 0.0))
+        flags.append(flag)
+    bottom = df[df["escs_q"] == 1].index
+    out_df = df.loc[bottom, list(by) + ALL_WEIGHTS + ([SCHOOL_ID] if SCHOOL_ID in df.columns else [])].copy()
+    for col, flag in zip(cols, flags):
+        out_df[col] = flag[bottom]
+    reps = replicates_from_frame(out_df.reset_index(drop=True), cols, by=tuple(by))
+    return combine(reps, by=tuple(by))
+
+
+def between_school_share(con, table, measure, by=(), where=None) -> pd.DataFrame:
+    """Between-school share of the variance of `measure` (the intraclass
+    correlation of a one-way decomposition): the weighted variance of
+    school means as a share of the total weighted variance, per plausible
+    value, with BRR SEs. Schools are identified by CNTSCHID (never
+    returned)."""
+    exprs = _pv_list(measure)
+    cols = [f"m_{i}" for i in range(1, len(exprs) + 1)]
+    df = fetch_frame(con, table, exprs, by=tuple(by), where=where)
+    if SCHOOL_ID not in df.columns:
+        raise ValueError("this table carries no school identifier, so no between-school variance "
+                         "can be computed")
+    df = df[df[SCHOOL_ID].notna()].reset_index(drop=True)
+    groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
+    n_w = len(ALL_WEIGHTS)
+    frames = []
+    for key, g in groups:
+        if not isinstance(key, tuple):
+            key = (key,)
+        weights = g[ALL_WEIGHTS].to_numpy(dtype=float)
+        school_idx, school_pos = np.unique(g[SCHOOL_ID].to_numpy(), return_inverse=True)
+        stats = None
+        for pv_i, col in enumerate(cols, start=1):
+            v = g[col].to_numpy(dtype=float)
+            mask = ~np.isnan(v)
+            if stats is None:
+                stats = group_stats(g, mask)
+            vm, wm, pos = v[mask], weights[mask], school_pos[mask]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                total_w = wm.sum(axis=0)                                  # (81,)
+                mean = (wm.T @ vm) / total_w
+                total_var = (wm.T @ (vm * vm)) / total_w - mean * mean
+                # weighted school means under every weight
+                sw = np.zeros((len(school_idx), n_w))
+                swy = np.zeros((len(school_idx), n_w))
+                np.add.at(sw, pos, wm)
+                np.add.at(swy, pos, wm * vm[:, None])
+                school_mean = swy / sw                                    # (S, 81)
+                grand = (sw * school_mean).sum(axis=0) / sw.sum(axis=0)
+                between = (sw * (school_mean - grand) ** 2).sum(axis=0) / sw.sum(axis=0)
+                share = 100.0 * between / total_var
+            frame = pd.DataFrame({"pv": pv_i, "rep": np.arange(n_w), "value": share, **stats})
+            for c, val in zip(by, key):
+                frame[c] = val
+            frames.append(frame)
+    if not frames:
+        return combine(pd.DataFrame(columns=list(by) + ["pv", "rep", "value"] + GROUP_STATS), by=())
+    return combine(pd.concat(frames, ignore_index=True), by=tuple(by))
 
 
 def trend(results, result_2022: pd.DataFrame | None = None,

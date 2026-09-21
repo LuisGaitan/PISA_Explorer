@@ -156,6 +156,30 @@ analysis and phrases the result. Four mechanisms keep the seams honest:
   sampling SE and a note; the rest stay blank. Creative thinking (2022, via
   the `stu_crt_2022` joined view), global competence (2018) and financial
   literacy (2018/2022) are standard measures.
+- **A closed plan grammar.** The planner no longer writes SQL. It fills a
+  form (`explorer/grammar.py`): a statistic from a fixed list, measures as
+  small objects (a score domain, a catalog variable, a proficiency-level
+  share, a response-code share, a threshold share), economies as codes,
+  filters as (variable, operator, values), contrasts as sets of codes of
+  one variable, predictors as variables with optional dummy and reference
+  codes, benchmarks as named groups. The app compiles the form to SQL, so
+  an invented column, an invented economy code, a pooled mean across
+  economies or a dummy that counts non-respondents as the reference group
+  can no longer be planned; a form that does not compile gets one corrected
+  retry and then an honest answer naming the field. `PISA_PLANNER=legacy`
+  restores the old free-text planner for comparison. One model per role can
+  be set (`PISA_ROUTER_MODEL`, `PISA_PLANNER_MODEL`, `PISA_SUMMARY_MODEL`,
+  `PISA_TRANSLATE_MODEL`); `scripts/planner_compare.py` runs the live golden
+  set per planner model and reports pass rate, latency and tokens.
+- **More statistics.** Weighted standard deviation; the OECD's academically
+  resilient share (bottom ESCS quarter, top performance quarter within the
+  economy, per plausible value, or "at or above Level N"); the
+  between-school share of variance (one-way ICC, %); correlations and
+  regressions within ESCS quarters. A gap answer also states each side's own
+  mean. "Is that good?" reruns the last question with the OECD average
+  beside it; "which members entered the average?" is answered from the last
+  result's provenance; "why does your figure differ from Table X?" recomputes
+  the figure and lists the reasons a published table can differ.
 - **Statements the model cannot make up.** The app also states, for the
   economies a question names, which other economies are not statistically
   different (and the rank range that implies), gap-in-gap differences, and

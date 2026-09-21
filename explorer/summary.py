@@ -87,6 +87,15 @@ def fact_sentences(table: pd.DataFrame, plan: dict, provenance: dict,
         return ["The analysis returned no rows."]
     t = table.reset_index(drop=True)
     template = str(plan.get("template") or "")
+    if template == "raw_sql":
+        # a direct query: state its rows as they are (no estimate/SE shape)
+        out = [f"Direct SQL result with {len(t)} row(s) and columns {', '.join(map(str, t.columns))} "
+               "(no weighting, plausible-value or replicate treatment unless the query applied it)."]
+        for _, r in t.head(max_rows).iterrows():
+            out.append("Row: " + "; ".join(
+                f"{c} = {fmt(v, 2) if isinstance(v, (int, float)) and not isinstance(v, bool) else v}"
+                for c, v in r.items()) + ".")
+        return out
     cycles = sorted(m.group(1) for c in t.columns for m in [re.fullmatch(r"estimate_(\d{4})", c)] if m)
     multi_cycle = bool(cycles)
     single_cycle = str(t["cycle"].iloc[0]) if "cycle" in t.columns else \
@@ -170,13 +179,16 @@ def fact_sentences(table: pd.DataFrame, plan: dict, provenance: dict,
         "percentile_spread": "Percentile spread", "correlation": "Weighted correlation",
         "regression": "Coefficient", "weighted_proportion": "Share",
         "percentiles": "Percentile", "quartile_means": "Mean by quarter",
-        "crosstab": "Row percentage",
+        "crosstab": "Row percentage", "weighted_sd": "Standard deviation",
+        "resilient_share": "Share of academically resilient students (%)",
+        "between_school_share": "Between-school share of the variance (%)",
     }.get(template, "Mean")
     what = _measure_word(plan, label_of)
     if template == "weighted_proportion" and "category" in t.columns:
         what = f"of students with {t['category'].iloc[0]}"
     elif template in ("gap", "quartile_gap", "quartile_means", "percentiles",
-                      "percentile_spread") and plan.get("measure"):
+                      "percentile_spread", "weighted_sd", "resilient_share",
+                      "between_school_share") and plan.get("measure"):
         what = f"in {label_of(plan['measure'])}"
     elif template == "weighted_mean" and "measure" not in t.columns and plan.get("measure"):
         what = f"of {label_of(plan['measure'])}"
@@ -218,6 +230,25 @@ def fact_sentences(table: pd.DataFrame, plan: dict, provenance: dict,
     if ascending:
         out.append(f"Ranks count from the highest value (rank 1 = largest of the {n_ranked}); "
                    "the table is sorted smallest first, so the first row is the smallest value.")
+    if multi_cycle and "change" in t.columns and "CNT" in t.columns and len(t) > max_rows:
+        # the shape of a large trend table in one sentence: how many rose,
+        # fell or did not change significantly, and the extremes — so a
+        # "which countries got worse" answer never has to be a row dump
+        econ_rows = t[~t["CNT"].astype(str).str.endswith(" avg") & t["change"].notna()]
+        if not econ_rows.empty and "se_change" in t.columns:
+            z = econ_rows["change"] / econ_rows["se_change"].replace(0, np.nan)
+            up = econ_rows[z > Z].sort_values("change", ascending=False)
+            down = econ_rows[z < -Z].sort_values("change")
+            flat = int((z.abs() <= Z).sum())
+
+            def few(rows):
+                return ", ".join(f"{_name(r['CNT'], names)} {fmt(r['change'])} (SE {fmt(r['se_change'])})"
+                                 for _, r in rows.head(5).iterrows())
+            out.append(f"Of the {len(econ_rows)} economies with a change {cycles[-1]} minus {cycles[0]}, "
+                       f"{len(down)} decreased significantly, {len(up)} increased significantly and "
+                       f"{flat} showed no statistically significant change"
+                       + (f"; largest declines: {few(down)}" if len(down) else "")
+                       + (f"; largest increases: {few(up)}" if len(up) else "") + ".")
 
     for _, r in rows.iterrows():
         key = row_key(r) + coverage_flag(r)
@@ -431,6 +462,12 @@ OPPOSITES = [
 ]
 CAUSAL = re.compile(r"\b(due to|because of|caused by|driven by|attributable to|as a result of|"
                     r"thanks to|owing to|is the result of|led to|resulted in)\b", re.I)
+# "-15.27 points lower": a signed number and a direction word say the same
+# thing twice and read as a double negative
+SIGNED_DIRECTION = re.compile(
+    r"(?<![\w.])[-−–]\s?\d+(?:[.,]\d+)?\s*(?:points?|pp|percentage points?|puntos?|points de|Punkte|"
+    r"pontos?|ポイント|%)?\s*(?:\([^)]*\)\s*)?(lower|higher|less|more|fewer|greater|below|above|"
+    r"menos|más|menor|mayor|inférieur|supérieur|niedriger|höher|abaixo|acima)\b", re.I)
 
 
 def _numbers_in(text: str) -> list[tuple[str, float, int]]:
@@ -514,20 +551,28 @@ def check_prose(text: str, table: pd.DataFrame | None, provenance: dict | None,
     # 3. significance claims
     verdicts = set()
     if table is not None and not table.empty:
-        for est_col, se_col in (("change", "se_change"), ("estimate", "se")):
-            if est_col == "estimate" and str(plan.get("template")) not in (
-                    "gap", "quartile_gap", "percentile_spread", "correlation", "regression"):
-                continue
+        contrastive = str(plan.get("template")) in ("gap", "quartile_gap", "percentile_spread",
+                                                    "correlation", "regression")
+        pairs = [("change", "se_change")]
+        if contrastive:
+            # a contrast's level in each cycle carries its own verdict too
+            pairs += [("estimate", "se")] + [(c, "se" + c[len("estimate"):]) for c in table.columns
+                                            if re.fullmatch(r"estimate_\d{4}", str(c))]
+        for est_col, se_col in pairs:
             if est_col in table.columns and se_col in table.columns:
                 for est, se in zip(table[est_col], table[se_col]):
                     v = _sig(est, se)
                     if v:
                         verdicts.add(v)
-        # pairwise contrasts the app stated itself count as verdicts
+        # pairwise contrasts and tie statements the app stated itself count as verdicts
         for line in prov.get("facts") or []:
             if " minus " in line and "statistically significant" in line:
                 verdicts.add("not statistically significant" if "not statistically" in line
                              else "statistically significant")
+            if "not statistically different from" in line:
+                verdicts.add("not statistically significant")
+                if re.search(r"\b[1-9]\d* economies are significantly higher|\b[1-9]\d* significantly lower", line):
+                    verdicts.add("statistically significant")
     for m in SIG_SENTENCE.finditer(text or ""):
         sentence = m.group(0)
         claim = ("not statistically significant" if NEGATED_SIG.search(sentence)
@@ -579,6 +624,10 @@ def check_prose(text: str, table: pd.DataFrame | None, provenance: dict | None,
     if re.search(r"\(\s*(SE|EE|ET|SE\s*=)\s*0(?:[.,]0+)?\s*\)", text or "", re.I) \
             and not any(re.search(r"\(SE 0\.00?\)", line) for line in facts):
         issues.append("rounds a standard error to 0.0 (copy the SE as the verified statement gives it)")
+    # 3d. a negative number paired with a direction word ("-15.3 points lower")
+    if SIGNED_DIRECTION.search(text or ""):
+        issues.append("pairs a negative number with 'lower/higher' (write the absolute value with the "
+                      "direction word: '15.3 points lower')")
 
     # 4. forbidden phrasings, unless the app's notes say the same
     for rx, why in FORBIDDEN:

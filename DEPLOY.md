@@ -219,6 +219,22 @@ Not yet in place (add if abuse appears): a per-IP limit via Cloud Armor
 (campus NAT makes naive per-IP limits punish whole institutions), an uptime
 check with alerting on 5xx, and a custom domain.
 
+## Language-model settings
+
+- `PISA_LLM_MODEL` (default `gemini-2.5-flash`) is the model for every role;
+  `PISA_LLM_TEMPERATURE` defaults to 0 (greedy decoding, reproducible plans).
+- One model per role overrides it: `PISA_ROUTER_MODEL`, `PISA_PLANNER_MODEL`,
+  `PISA_SUMMARY_MODEL`, `PISA_TRANSLATE_MODEL`. The planner is the hardest
+  job; the others stay cheap. Compare planner models before switching:
+  `python scripts/planner_compare.py gemini-2.5-flash <other model>` runs the
+  live golden set per model and prints pass rate, planner latency and tokens.
+- `PISA_PLANNER` (default `grammar`) selects the closed plan grammar of
+  `explorer/grammar.py`; `legacy` restores the free-text planner (SQL
+  fragments written by the model) for comparison or rollback.
+- Every answer's `timing` carries `llm_by_role` (calls, ms, tokens per role
+  and model), stored on the event, so the admin export shows what each
+  role costs.
+
 ## Cost & protection model
 
 - **Scale to zero**: `--min-instances 0` means you pay nothing while idle;

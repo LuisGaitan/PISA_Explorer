@@ -15,6 +15,19 @@ import urllib.request
 from .db import REPO_ROOT
 
 DEFAULT_MODEL = os.environ.get("PISA_LLM_MODEL", "gemini-2.5-flash")
+# One model per role, so the planner (the hardest job) can be upgraded on
+# its own while the router, summarizer and translator stay on the cheap
+# fast model. Unset roles fall back to DEFAULT_MODEL.
+ROLE_MODELS = {
+    "router": os.environ.get("PISA_ROUTER_MODEL") or DEFAULT_MODEL,
+    "planner": os.environ.get("PISA_PLANNER_MODEL") or DEFAULT_MODEL,
+    "summary": os.environ.get("PISA_SUMMARY_MODEL") or DEFAULT_MODEL,
+    "translate": os.environ.get("PISA_TRANSLATE_MODEL") or DEFAULT_MODEL,
+}
+
+
+def model_for(role: str | None) -> str:
+    return ROLE_MODELS.get(role or "", DEFAULT_MODEL)
 # Greedy decoding by default. The router and planner are classifiers that
 # fill a schema: at 0.2 the same question produced different search terms,
 # variables and even templates from run to run, which made two users' answers
@@ -31,15 +44,18 @@ class LLMError(RuntimeError):
 # Per-question call accounting (the agent runs one question at a time under
 # a lock, so a module-level tally is safe). reset_stats() before a question,
 # stats() after.
-_stats = {"calls": 0, "ms": 0.0}
+_stats = {"calls": 0, "ms": 0.0, "tokens_in": 0, "tokens_out": 0, "by_role": {}}
 
 
 def reset_stats() -> None:
     _stats["calls"], _stats["ms"] = 0, 0.0
+    _stats["tokens_in"], _stats["tokens_out"], _stats["by_role"] = 0, 0, {}
 
 
 def stats() -> dict:
-    return {"llm_calls": _stats["calls"], "llm_ms": round(_stats["ms"])}
+    return {"llm_calls": _stats["calls"], "llm_ms": round(_stats["ms"]),
+            "llm_tokens_in": _stats["tokens_in"], "llm_tokens_out": _stats["tokens_out"],
+            "llm_by_role": {k: dict(v) for k, v in _stats["by_role"].items()}}
 
 
 def _clean_key(raw: str) -> str:
@@ -97,10 +113,15 @@ def generate(
     prompt: str,
     system: str | None = None,
     json_mode: bool = False,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     temperature: float | None = None,
+    role: str | None = None,
 ) -> str:
-    """One non-streaming generation call; returns the text of the reply."""
+    """One non-streaming generation call; returns the text of the reply.
+    `role` (router / planner / summary / translate) picks the model when
+    none is given explicitly."""
+    if model is None:
+        model = model_for(role)
     if temperature is None:
         temperature = DEFAULT_TEMPERATURE
     body: dict = {
@@ -119,25 +140,38 @@ def generate(
         method="POST",
     )
     started = time.time()
+    payload = None
     try:
         payload = _post_with_retry(request)
     finally:
+        elapsed = (time.time() - started) * 1000
         _stats["calls"] += 1
-        _stats["ms"] += (time.time() - started) * 1000
+        _stats["ms"] += elapsed
+        usage = (payload or {}).get("usageMetadata") or {}
+        t_in = int(usage.get("promptTokenCount") or 0)
+        t_out = int(usage.get("candidatesTokenCount") or 0) + int(usage.get("thoughtsTokenCount") or 0)
+        _stats["tokens_in"] += t_in
+        _stats["tokens_out"] += t_out
+        r = _stats["by_role"].setdefault(role or "other", {"calls": 0, "ms": 0.0, "tokens_in": 0,
+                                                            "tokens_out": 0, "model": model})
+        r["calls"] += 1
+        r["ms"] += elapsed
+        r["tokens_in"] += t_in
+        r["tokens_out"] += t_out
 
     try:
         parts = payload["candidates"][0]["content"]["parts"]
-        return "".join(p.get("text", "") for p in parts)
+        return "".join(p.get("text", "") for p in parts if not p.get("thought"))
     except (KeyError, IndexError) as e:
         raise LLMError(f"Unexpected Gemini response shape: {str(payload)[:500]}") from e
 
 
 def generate_json(prompt: str, system: str | None = None,
-                  model: str = DEFAULT_MODEL) -> dict:
+                  model: str | None = None, role: str | None = None) -> dict:
     """Generation call that must return a JSON object. Models sometimes emit
     an ARRAY of objects (e.g. one plan per requested measure) — unwrap to the
     first object rather than crashing downstream .get() calls."""
-    text = generate(prompt, system=system, json_mode=True, model=model)
+    text = generate(prompt, system=system, json_mode=True, model=model, role=role)
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as e:

@@ -15,6 +15,7 @@ Design rules (each traces to a defect found in an earlier text-to-SQL prototype)
 """
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -22,10 +23,11 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import catalog, llm, regions, standards
+from . import catalog, grammar, llm, regions, standards
 from . import summary as summ
 from .version import BUILD, stamp
 from .analysis import (
+    between_school_share,
     correlation,
     crosstab,
     gap,
@@ -34,10 +36,17 @@ from .analysis import (
     quartile_gap,
     quartile_means,
     regression,
+    resilient_share,
     trend,
     weighted_mean,
     weighted_proportion,
+    weighted_sd,
 )
+
+# Which planner the app runs: "grammar" (the closed form of explorer/grammar.py,
+# compiled to SQL by the app) or "legacy" (the planner writes SQL fragments;
+# kept for comparison and rollback).
+PLANNER_MODE = os.environ.get("PISA_PLANNER", "grammar").strip().lower()
 from .db import connect
 from .llm import generate, generate_json
 from . import link_errors
@@ -206,7 +215,14 @@ Reply with ONLY this JSON:
  "clarify": str|null,
  "template": "weighted_mean"|"weighted_proportion"|"gap"|"quartile_means"|
              "quartile_gap"|"correlation"|"percentiles"|"percentile_spread"|
-             "crosstab"|"regression"|"raw_sql",
+             "crosstab"|"regression"|"weighted_sd"|"resilient_share"|
+             "between_school_share"|"raw_sql",
+             (weighted_sd = weighted standard deviation of `measure`;
+             resilient_share = % of students in the bottom quarter of
+             quart_variable (ESCS) who score in the top quarter of `measure`
+             in their economy — the OECD's academically resilient share;
+             between_school_share = between-school share of the variance of
+             `measure`, in %, the ICC of a one-way decomposition),
  "cycles": chronological list drawn from ["2018","2022","2025"] — e.g.
             ["2025"] (latest; the default when no cycle is named),
             ["2018","2022","2025"] (a full trend), ["2022","2025"] (the latest
@@ -233,7 +249,9 @@ Reply with ONLY this JSON:
  "quart_variable": str|null   (quartile_means / quartile_gap: the CONTINUOUS
             variable whose weighted within-group quartiles define the groups,
             e.g. "ESCS"; quartile_means returns the mean of `measure` in each
-            quarter 1..4, quartile_gap returns top minus bottom quarter),
+            quarter 1..4, quartile_gap returns top minus bottom quarter; with
+            correlation or regression it runs the statistic WITHIN each
+            quarter, one row per quarter),
  "x": str|null, "y": str|null   (correlation: the two variables/expressions;
             {{pv}} allowed, e.g. x="AUTICT", y="PV{{pv}}READ" — this is the
             WEIGHTED correlation with a proper BRR standard error; always
@@ -437,6 +455,10 @@ the change in a difference (= the difference of the two changes), and the
 economies not statistically different from a named one, each with its SE.
 Never write that the system "cannot compute" such a difference."""
 
+# The domain knowledge the two planners share (everything before the
+# legacy output schema); the grammar planner adds its own form and rules.
+PLAN_KNOWLEDGE = PLAN_SYSTEM.split("Reply with ONLY this JSON:")[0]
+
 SUMMARY_SYSTEM = """You summarize PISA analysis results for a general audience.
 Write 2-5 sentences. Cite the key numbers with their standard errors like
 "465 points (SE 4.0)". Copy every number exactly as it appears in the table
@@ -485,7 +507,14 @@ economies "not statistically different from" a named one, or a rank range,
 report them as given. Never say the app "cannot compute" a difference or
 its significance: the verified statements contain every pairwise
 difference the app computed, and if one is not there, say it was not
-computed."""
+computed. A change or difference the verified statements call "not
+statistically significant" is reported as no significant change or
+difference — never as a rise, a fall or a lead. A regression coefficient
+is the association per ONE UNIT of the predictor (one index point, one
+year, or the named category versus its reference) — never "per standard
+deviation" unless the term label says so. Write a difference as "15.3
+points lower", never "-15.3 points lower" (a negative number already
+carries the direction; use its absolute value with the word)."""
 
 
 class CoverageError(ValueError):
@@ -687,6 +716,15 @@ class Agent:
             "never say the app has no AI data.\n"
             "- Not loaded: the 2025 Foreign Language Assessment (OECD release "
             "expected 2027).\n"
+            "- Method constants: Fay's BRR with 80 replicate weights and k = 0.5, so the "
+            "sampling variance is the sum of squared replicate deviations divided by "
+            "G(1-k)^2 = 20; ten plausible values combined with Rubin's rules, the between-PV "
+            "variance entering with the factor (1 + 1/M), M = 10.\n"
+            "- A score of 500 was the OECD average when each scale was first set (mathematics "
+            "2003, reading 2000, science 2006); OECD averages have since fallen, so today 500 "
+            "is above the OECD average in every subject (ask for \"the OECD average in "
+            "mathematics in 2025\" for the current value). There is no pass mark in PISA; "
+            "Level 2 is the OECD's baseline proficiency.\n"
             "- Questionnaire indices across cycles: the app decides PER INDEX from the "
             "data. Indices the OECD re-standardizes in each cycle (ESCS and most WLE "
             "scales: OECD mean 0 in every cycle) get no cross-cycle change; indices the "
@@ -1312,9 +1350,11 @@ class Agent:
         parts = []
         for code in codes:
             cycles = sorted(c for c, present in self.present.items() if code in present)
+            absent = sorted(c for c in self.present if code not in self.present[c])
             name = self.economy_names.get(code, code)
             parts.append(f"{name} ({code}): in PISA " + ", ".join(cycles)
-                         + (" only" if len(cycles) == 1 else ""))
+                         + (" only" if len(cycles) == 1 else "")
+                         + (f" (not in the {', '.join(absent)} database)" if absent else ""))
         return ("Yes — " + "; ".join(parts) + ". The public-use data for those "
                 "cycles are loaded here; ask for a statistic, for example “mean "
                 f"science score in {self.economy_names.get(codes[0], codes[0])} in "
@@ -1683,6 +1723,72 @@ class Agent:
                 return False
         return True
 
+    @staticmethod
+    def _item_wording_key(label: str) -> str:
+        label = str(label or "").lower()
+        label = re.sub(r"^[^:]{0,60}:\s*", "", label)              # drop the stem
+        label = label.replace("can't", "cannot").replace("’", "'")
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", label)).strip()
+
+    def _recover_dropped_cycles(self, plan: dict, question: str) -> None:
+        """A cycle the question names that the plan left out because the item
+        code differs there ("ST263Q02JA was only collected in 2022"): when
+        the missing cycle's student file has an item with the same wording
+        and the same response codes, it is added as a per-cycle override —
+        the app's same-wording rule then compares the two (H2 of the
+        scholar round, without the user having to quote the item)."""
+        if plan.get("action") == "clarify" or plan.get("template") not in ("weighted_mean", "weighted_proportion"):
+            return
+        years = sorted(set(self.YEAR_RE.findall(question or "")))
+        cycles = [str(c) for c in plan.get("cycles") or []]
+        missing = [y for y in years if y not in cycles and y in getattr(self, "present", {})]
+        measure = plan.get("measure")
+        if not missing or not cycles or plan.get("measures") or not isinstance(measure, str):
+            return
+        core = self._unwrap_null_safe(measure)
+        if not re.match(r"^\s*CASE\b", core, re.I):
+            return
+        vars_ = self._case_variables(core)
+        if len(vars_) != 1 or link_errors.domain_of(vars_[0]):
+            return
+        var = vars_[0]
+        base = catalog.describe(var, cycle=cycles[0])
+        base = base[base.table_name.str.startswith("stu_qqq")]
+        if base.empty:
+            return
+        key = self._item_wording_key(base.iloc[0].label)
+        try:
+            base_codes = {k: v for k, v in json.loads(base.iloc[0].value_labels or "{}").items()
+                          if re.fullmatch(r"\d+", str(k)) and int(k) < 90}
+        except Exception:  # noqa: BLE001
+            return
+        if len(key) < 12 or not base_codes:
+            return
+        rows = catalog._load()
+        overrides = plan.get("cycle_overrides") if isinstance(plan.get("cycle_overrides"), dict) else {}
+        added = []
+        for y in missing:
+            cand = rows[(rows.cycle == y) & rows.table_name.str.startswith("stu_qqq")]
+            cand = cand[cand.label.map(self._item_wording_key) == key]
+            hits = []
+            for _, r in cand.iterrows():
+                try:
+                    codes = {k: v for k, v in json.loads(r.value_labels or "{}").items()
+                             if re.fullmatch(r"\d+", str(k)) and int(k) < 90}
+                except Exception:  # noqa: BLE001
+                    continue
+                if codes == base_codes:
+                    hits.append(str(r.variable))
+            if len(set(hits)) == 1:
+                new_var = hits[0]
+                overrides.setdefault(y, {})["measure"] = re.sub(rf"\b{re.escape(var)}\b", new_var, measure)
+                added.append(y)
+        if added:
+            plan["cycles"] = sorted(set(cycles + added))
+            plan["cycle_overrides"] = overrides
+            plan["_recovered_cycles"] = added
+            self._fire("hook:recovered_cycles")
+
     # Indices the OECD renamed between cycles while keeping the scale
     RENAMED_TREND_INDICES = {frozenset({"BEINGBULLIED", "BULLIED"})}
     # Known trend scales (OECD reports their change across cycles)
@@ -1738,11 +1844,15 @@ class Agent:
             table.loc[mask, ["change", "se_change"]] = np.nan
             head = ("This measure: " if label is None else
                     "" if label.split(" (")[0] in reason else f"{label}: ")
+            escs_note = (" ESCS is also built from components whose items changed between "
+                         "cycles (HISEI, PARED/HISCED and HOMEPOS combined by principal "
+                         "components and standardized on OECD students within each cycle)."
+                         if re.search(r"\bESCS\b", str(expr or "")) else "")
             plan.setdefault("_non_comparable", []).append(
                 f"{head}{reason[0].upper() + reason[1:]}. The change column "
-                "is left blank; compare economies within a cycle instead. (For ESCS the "
-                "OECD publishes a rescaled trend variable covering 2015–2022; it is in the "
-                "database as escs_trend but not yet wired to these templates.)")
+                "is left blank; compare economies within a cycle instead." + escs_note +
+                " (For ESCS the OECD publishes a rescaled trend variable covering 2015–2022; "
+                "it is in the database as escs_trend but not yet wired to these templates.)")
 
     # ---------- small deterministic guards found by adversarial testing ----------
 
@@ -1960,11 +2070,27 @@ class Agent:
                      "409.54": "Level 2 (science)", "606.99": "Level 5 (mathematics)",
                      "625.61": "Level 5 (reading)", "633.33": "Level 5 (science)"}
 
+    JOINT_LEVEL = re.compile(r"PV\{pv\}(MATH|READ|SCIE)\s*(<|<=|>=|>)\s*([\d.]+)")
+
     @classmethod
     def _measure_label(cls, expr: str) -> str:
         expr = cls._unwrap_null_safe(str(expr or ""))
         if link_errors.is_mean_score(expr):
             return link_errors.DOMAIN_NAMES[link_errors.domain_of(expr)].capitalize() + " score"
+        m = re.fullmatch(r"\s*PV\{pv\}([A-Z_]+)\s*/\s*([\d.]+)\s*", expr)
+        if m and link_errors.domain_of("PV{pv}" + m.group(1)):
+            dom = link_errors.DOMAIN_NAMES[link_errors.domain_of("PV{pv}" + m.group(1))]
+            return f"{dom.capitalize()} divided by {m.group(2).rstrip('0').rstrip('.')}"
+        joint = cls.JOINT_LEVEL.findall(expr)
+        if len(joint) >= 2 and re.match(r"^\s*CASE\b", expr, re.I) and \
+                len({op for _, op, _ in joint}) == 1:
+            op = joint[0][1]
+            side = {"<": "below", "<=": "at or below", ">=": "at or above", ">": "above"}[op]
+            levels = {link_errors.level_name(d, v) for d, _, v in joint}
+            doms = [link_errors.DOMAIN_NAMES[d].replace(" score", "") for d, _, _ in joint]
+            how = "all of" if re.search(r"\bAND\b", expr) else "any of"
+            if len(levels) == 1 and None not in levels:
+                return f"% {side} {levels.pop()} in {how} {', '.join(doms)}"
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", expr):
             desc = catalog.describe(expr)
             if not desc.empty and desc.iloc[-1].label:
@@ -2447,12 +2573,17 @@ class Agent:
     def _coverage_alternatives(self, hits: pd.DataFrame, named: set,
                                exclude: set, limit: int = 5) -> list[str]:
         """Retrieved variables that the named economies DID collect (from the
-        coverage table — never from the model), best-ranked first."""
+        coverage table — never from the model), best-ranked first. When the
+        block is the missing student-to-school link, school- and teacher-file
+        variables are no alternative (they fail for the same reason)."""
         if hits is None or hits.empty:
             return []
         out = []
+        no_school = "CNTSCHID" in exclude
         for var, group in hits.groupby("variable", sort=False):
             if var in exclude:
+                continue
+            if no_school and group.table_name.str.startswith(("sch_", "tch_")).all():
                 continue
             cycles_ok = []
             for _, r in group.iterrows():
@@ -2500,6 +2631,9 @@ class Agent:
         "percentile_spread": [("measure",)],
         "crosstab": [("row_var",), ("col_var",)],
         "regression": [("measure",), ("predictors",)],
+        "weighted_sd": [("measure",)],
+        "resilient_share": [("measure",)],
+        "between_school_share": [("measure",)],
         "raw_sql": [("sql",)],
     }
 
@@ -2661,7 +2795,8 @@ class Agent:
         if "CNT" not in [c.upper() for c in by] and (benchmarks or several) \
                 and template in ("weighted_mean", "weighted_proportion", "gap", "quartile_means",
                                  "quartile_gap", "percentiles", "percentile_spread",
-                                 "correlation", "regression"):
+                                 "correlation", "regression", "weighted_sd", "resilient_share",
+                                 "between_school_share"):
             by = ["CNT"] + by
             plan["_pooled_to_rows"] = True
             if several and not benchmarks and len(codes) >= 3:
@@ -2868,6 +3003,18 @@ class Agent:
                                 and self.GENDER_CODES[src][str(int(v))] in inv else v)
                 for who, why in (getattr(res, "attrs", {}) or {}).get("skipped", []):
                     plan.setdefault("_regression_skipped", []).append((f"{who} (PISA {cycle})", why))
+                levels = (getattr(res, "attrs", {}) or {}).get("levels")
+                if levels:
+                    levels = pd.DataFrame(levels)
+                    # each side of a gap, beside the gap itself (the report
+                    # needs "boys 431, girls 449", not only "-18")
+                    lv = self._suppress_small_cells(levels.copy(), cycle, {})
+                    if cby != by:
+                        lv = lv.rename(columns=dict(zip(cby, by)))
+                    # plain records, never a frame inside the plan (other
+                    # hooks scan plan values as text)
+                    plan.setdefault("_group_levels", {})[cycle] = json.loads(
+                        lv.to_json(orient="records", date_format="iso"))
                 res = self._suppress_small_cells(res, cycle, plan)
                 res, dropped_groups = self._drop_null_groups(res, by)
                 for col, n in dropped_groups.items():
@@ -2939,6 +3086,8 @@ class Agent:
         if template == "crosstab":
             extra_keys = [k for k in extra_keys
                           if k in per_cycle[cycles[0]].columns]
+        if template in ("correlation", "regression") and "quarter" in per_cycle[cycles[0]].columns:
+            extra_keys = ["quarter"] + extra_keys      # run within ESCS quarters
         if multi:
             extra_keys = extra_keys + ["measure"]
         if len(cycles) >= 2:
@@ -3000,6 +3149,16 @@ class Agent:
 
         prov = self._provenance(plan, tables)
         prov["notes"].extend(self._missing_estimate_notes(table, plan))
+        for _, e in (measures_all or [(None, plan.get("measure"))]):
+            pvs = re.findall(r"PV\{pv\}(MATH|READ|SCIE)", str(e or ""))
+            if len(set(pvs)) >= 2 and re.search(r"[+*/]|\bAVG\b", str(e)) and \
+                    not re.match(r"^\s*CASE\b", str(e), re.I):
+                prov["notes"].append(
+                    "This measure combines two or more PISA domains arithmetically (a composite "
+                    "of the plausible values); it is not a statistic the OECD publishes — each "
+                    "domain is reported separately in the OECD's tables.")
+                self._fire("hook:composite_note")
+                break
         is_score = any(link_errors.domain_of(e) for _, e in (measures_all or [(None, plan.get("measure"))]))
         codes_in_table = set(table["CNT"].astype(str)) if "CNT" in table.columns else set()
         if "2018" in cycles and "VNM" in codes_in_table and is_score:
@@ -3301,8 +3460,21 @@ class Agent:
         if template == "correlation":
             self._check_fragment(plan["x"])
             self._check_fragment(plan["y"])
+            qv = plan.get("quart_variable") or None
+            if qv:
+                self._check_fragment(str(qv))
             return correlation(self.con, tbl, plan["x"], plan["y"],
-                               by=by, where=where)
+                               by=by, where=where, quart_variable=qv)
+        if template == "weighted_sd":
+            return weighted_sd(self.con, tbl, plan["measure"], by=by, where=where)
+        if template == "resilient_share":
+            self._check_fragment(str(plan.get("quart_variable") or "ESCS"))
+            level = plan.get("level")
+            return resilient_share(self.con, tbl, plan["measure"],
+                                   plan.get("quart_variable") or "ESCS", by=by, where=where,
+                                   level=float(level) if level is not None else None)
+        if template == "between_school_share":
+            return between_school_share(self.con, tbl, plan["measure"], by=by, where=where)
         if template == "percentiles":
             ps = tuple(int(p) for p in plan.get("ps") or (10, 25, 50, 75, 90))
             return percentiles(self.con, tbl, plan["measure"], by=by,
@@ -3323,9 +3495,12 @@ class Agent:
         if template == "regression":
             for x in plan["predictors"]:
                 self._check_fragment(x)
+            qv = plan.get("quart_variable") or None
+            if qv:
+                self._check_fragment(str(qv))
             return regression(self.con, tbl, plan["measure"],
                               plan["predictors"], by=by, where=where,
-                              names=plan.get("predictor_names"))
+                              names=plan.get("predictor_names"), quart_variable=qv)
         raise ValueError(f"unknown template {template!r}")
 
     @staticmethod
@@ -3438,10 +3613,30 @@ class Agent:
             "regression": "Weighted least-squares regression (W_FSTUWT), "
                           "listwise deletion; plausible values only in the outcome; no R² "
                           "reported. SE: Fay's BRR, k=0.5, 80 replicates per coefficient. "
-                          "Association, not causation.",
+                          "Association, not causation."
+                          + (f" One regression per weighted quarter of {plan.get('quart_variable')} "
+                             "(quarters cut within each economy)." if plan.get("quart_variable") else ""),
+            "weighted_sd": "Weighted standard deviation (W_FSTUWT), per plausible value. "
+                           "SE: Fay's BRR, k=0.5, 80 replicates.",
+            "resilient_share": "Share of academically resilient students (OECD, PISA Results "
+                               f"Volume II): among students in the bottom weighted quarter of "
+                               f"{plan.get('quart_variable') or 'ESCS'} in their economy, the "
+                               + ("percentage scoring at or above the named proficiency level"
+                                  if plan.get("level") is not None else
+                                  "percentage scoring in the top quarter of performance in their "
+                                  "economy (performance quarters cut per plausible value)")
+                               + ". Weighted by W_FSTUWT; SE: Fay's BRR, k=0.5, 80 replicates.",
+            "between_school_share": "Between-school share of the total variance (%): the weighted "
+                                    "variance of school means over the weighted total variance, "
+                                    "per plausible value (the intraclass correlation of a one-way "
+                                    "decomposition; no multilevel model). SE: Fay's BRR, k=0.5, "
+                                    "80 replicates.",
             "raw_sql": "Direct SQL — NO automatic weighting/PV/BRR treatment; "
                        "results are not population estimates unless the query weights them.",
         }
+        if template == "correlation" and plan.get("quart_variable"):
+            methods["correlation"] += (f" One correlation per weighted quarter of "
+                                       f"{plan['quart_variable']} (quarters cut within each economy).")
         if template == "weighted_proportion" and not plan.get("variable") \
                 and plan.get("measure"):
             template = "weighted_mean"      # threshold share ran as a 0/100 mean
@@ -3479,6 +3674,12 @@ class Agent:
             for v in [plan.get("group_col"), plan.get("measure")] +
             [ov.get("group_col") for ov in (plan.get("cycle_overrides") or {}).values() if isinstance(ov, dict)])
         for cycle_x, rows in sorted((plan.get("_low_coverage") or {}).items()):
+            # one line per group, not one per regression term / quarter
+            merged: dict[str, int] = {}
+            for k, pct in rows:
+                head_k = str(k).split(", ")[0]
+                merged[head_k] = max(merged.get(head_k, 0), int(pct))
+            rows = list(merged.items())
             shown = "; ".join(f"{k}: {pct}% of the weighted population has no value" for k, pct in rows[:6])
             if contrast_case:
                 notes.append(f"PISA {cycle_x}: a large part of the group is outside the contrast "
@@ -3506,6 +3707,11 @@ class Agent:
                              f"cycle ({shown}), so the OECD did not re-standardize it in each cycle but "
                              "kept it on the earlier cycle's scale. The change shown carries sampling "
                              "error only — the OECD publishes no link error for questionnaire indices.")
+        if plan.get("_recovered_cycles"):
+            notes.append("PISA " + ", ".join(plan["_recovered_cycles"]) + " asked the same item under a "
+                         "different code (same wording, same response codes), so that cycle was "
+                         "added with the matching code; the limitation the planner stated about "
+                         "it no longer applies.")
         if plan.get("_measure_cycles_dropped"):
             notes.append("The measure does not exist in PISA " + ", ".join(plan["_measure_cycles_dropped"])
                          + " (not assessed in that cycle); only the cycles that have it are shown.")
@@ -3664,11 +3870,18 @@ class Agent:
                              "cumulative-distribution statistics (PISA 2022 Results Vol. I, "
                              "Annex A7), and included in the change SE.")
             if "cancels" in by_mode:
-                notes.append("No link error is added to this change: for a difference between "
-                             "groups measured in the same cycle (a gap, a quartile gap, a "
-                             "percentile spread, a regression coefficient) the scale-linking "
-                             "uncertainty shifts both groups alike and cancels (PISA 2022 "
-                             "Results Vol. I, Annex A7); the change SE is the sampling SE.")
+                if template in ("weighted_sd", "resilient_share", "between_school_share", "correlation"):
+                    notes.append("No link error is added to this change: the statistic is a "
+                                 "within-cycle measure of dispersion, association or relative "
+                                 "position (a standard deviation, a correlation, a variance share, "
+                                 "a share defined by within-economy quarters), for which the OECD "
+                                 "publishes no link error; the change SE is the sampling SE.")
+                else:
+                    notes.append("No link error is added to this change: for a difference between "
+                                 "groups measured in the same cycle (a gap, a quartile gap, a "
+                                 "percentile spread, a regression coefficient) the scale-linking "
+                                 "uncertainty shifts both groups alike and cancels (PISA 2022 "
+                                 "Results Vol. I, Annex A7); the change SE is the sampling SE.")
             if "none" in by_mode:
                 notes.append("Sampling-only SE for " + ", ".join(lab or "this measure" for lab in by_mode["none"]) +
                              ": no link error applies to a questionnaire index or a share of a "
@@ -3718,7 +3931,16 @@ class Agent:
                          "(the index or item exists only in other cycles), so no "
                          f"{cycle} value is computed for it; the other measures are.")
         if plan.get("limitation_note"):
-            notes.append(f"NOT DONE: {plan['limitation_note']}")
+            # "NOT DONE" only when the note says something was left out; a
+            # planner's caveat on a complete answer is just a note
+            prefix = ("NOT DONE" if re.search(
+                r"\b(not|cannot|can'?t|no|unable|only|left out|beyond|does not|instead of|"
+                r"without|excluded|omitted|neither)\b", plan["limitation_note"], re.I) else "NOTE")
+            notes.append(f"{prefix}: {plan['limitation_note']}")
+        if plan.get("_grammar_notes"):
+            notes.append("A stratum filter in the plan was replaced by the app's own stratum "
+                         "handling (a named region, city or school network is shown as a "
+                         "labelled row beside the economy).")
         if self.WHY_WORDS.search(str(plan.get("_question") or "")) \
                 and not plan.get("limitation_note"):
             notes.append(self.WHY_NOTE)
@@ -4088,6 +4310,143 @@ class Agent:
         return None
 
     _last_link_mode: str | None = None
+    _last_benchmark_members: dict | None = None     # {cycle: {avg label: [members]}}
+    _last_rows: dict | None = None                  # {cycle: [economies with an estimate]}
+    # "the average of A, B, C" / "for the group A, B, C": one benchmark row
+    GROUP_WORDS = re.compile(r"\b(average|mean) (score )?(of|for|across) (the )?(group|block|bloc|set|"
+                             r"following|these|those|four|three|five|six)\b|\bfor the group\b|"
+                             r"\b(group|block|bloc) average\b|\baverage of the (four|three|five|six)\b",
+                             re.IGNORECASE)
+    _in_followup: bool = False
+
+    # "is that good?" after a number: the app compares it with the OECD
+    # average instead of telling the user what to ask
+    GOOD_WORDS = re.compile(
+        r"^\s*(and )?(is|was|isn'?t) (that|this|it) (any )?(good|bad|high|low|ok|okay|fine|normal|"
+        r"average|above average|below average|a lot|much|big|large|small|significant|impressive|"
+        r"worrying)\b|\b(es|eso es|esto es|y eso es) (bueno|malo|mucho|poco|alto|bajo)\b|"
+        r"\bdime si es (mucho|poco|bueno|malo)\b|\bc'?est (bien|beaucoup|peu)\b|\bist das (gut|viel)\b",
+        re.IGNORECASE)
+    # "is the gap big?" — a difference judged against the OECD average's
+    BIG_WORDS = re.compile(
+        r"\b(is (it|that|this|the (gap|difference)) (a lot|much|big|large|small|wide|narrow|unusual)|"
+        r"tell me if (it|that) is (a lot|much|big|large)|dime si es (mucho|poco|grande|peque[ñn]o)|"
+        r"how (big|large|wide|unusual) is (the|that|this) (gap|difference))\b", re.IGNORECASE)
+    # "which members entered the average and what N did you divide by?"
+    MEMBERS_WORDS = re.compile(
+        r"\b(which|what|how many)\b.{0,40}\b(members|economies|countries)\b.{0,60}"
+        r"\b(entered|included|in|make up|behind|went into|counted in|contributed to|were used|"
+        r"did you use|did you include)\b.{0,50}\b(average|avg|mean|benchmark)\b|"
+        r"\bwhat n did you divide\b|\b(what|which) n\b.{0,30}\b(divide|average)\b|"
+        r"\bmembership of the (average|benchmark)\b|\bwho is in the (average|benchmark)\b", re.IGNORECASE)
+    # "why does your figure differ from Table I.B1.2.1?": the number is
+    # recomputed and the reasons a published table can differ are listed
+    RECONCILE_WORDS = re.compile(
+        r"\b(differ|differs|different|match|matches|discrepan\w*|reconcil\w*|disagree|off from|"
+        r"not the same as)\b.{0,80}\b(table|annex|volume|published|report|oecd figure|oecd number)\b|"
+        r"\b(table|annex|volume|published|report)\b.{0,80}\b(differ|differs|different|discrepan\w*|"
+        r"reconcil\w*|match|matches)\b", re.IGNORECASE)
+    RECONCILE_NOTE = (
+        "The figure above is the app's own computation from the public-use microdata (final "
+        "student weights, 10 plausible values, 80 BRR replicates). Reasons a published table can "
+        "still differ: rounding to whole points; a table computed on a different membership "
+        "(the 'OECD average-35' of earlier volumes, a trend membership, Spain's exclusion from "
+        "the 2018 reading average); an adjudicated exclusion or a data correction issued after "
+        "the volume was printed; a statistic defined differently (e.g. a level share on the "
+        "percentage of all students versus of students with a score). Where the two round to the "
+        "same value there is no discrepancy to explain.")
+    # a planner's caveat that contradicts what the app then computes
+    FALSE_LIMIT = re.compile(
+        r"[^.]*\b(significance tests?|statistical tests?|tests? (of|for) (statistical )?significance|"
+        r"(cannot|can'?t|does not|doesn'?t|unable to|not able to) (directly )?(perform|compute|calculate|"
+        r"test|assess|determine|provide)[^.]*(significan|difference|change|standard error))[^.]*\.?",
+        re.IGNORECASE)
+    LATIN_STOP = re.compile(r"\b(de|la|el|los|las|en|que|para|por|del|una|uno|dos|das|der|die|und|"
+                            r"les|des|est|une|pour|avec|não|nao|são|com|nel|della|degli|gli|quantos|"
+                            r"cuantos|cu[aá]ntos|cual|qual|como|wie|welche)\b", re.I)
+    ENGLISH_HINTS = re.compile(r"\b(how many|how much|among|all|rank|ranked|ranking|below|above|score|"
+                               r"scores|mean|average|compare|compared|students|country|countries|which|"
+                               r"who|when|where|why|than|not|to|by|on|at|as|it|that|this|many|much|"
+                               r"best|worst|top|bottom|gap|share|percent|percentage|trend|since)\b", re.I)
+
+    def _plainly_english(self, text: str) -> bool:
+        """ASCII, two or more English words, no Spanish / Portuguese /
+        French / German / Italian function words once economy names are
+        removed — the router took the language from a country name once
+        ('El Salvador rank among all, how many below' answered in Spanish)."""
+        if not text.isascii():
+            return False
+        stripped = text
+        for name in sorted((getattr(self, "economy_names", None) or {}).values(), key=len, reverse=True):
+            base = re.sub(r"\s*\(.*?\)\s*", " ", str(name)).strip()
+            if len(base) >= 4:
+                stripped = re.sub(rf"\b{re.escape(base)}\b", " ", stripped, flags=re.I)
+        hits = {m.group(0).lower() for m in self.ENGLISH_WORDS.finditer(stripped)}
+        hits |= {m.group(0).lower() for m in self.ENGLISH_HINTS.finditer(stripped)}
+        return len(hits) >= 2 and not self.LATIN_STOP.search(stripped)
+
+    def _members_answer(self) -> str:
+        members = self._last_benchmark_members or {}
+        if not members:
+            rows = self._last_rows or {}
+            listed = "; ".join(f"PISA {c}: {', '.join(codes)}" for c, codes in sorted(rows.items())) or "none"
+            return ("The last result had no group-average row: it lists each economy separately, and "
+                    "nothing was averaged or divided by an N. Economies with an estimate per cycle — "
+                    f"{listed}. To get the group's average as one number, ask for it as a benchmark "
+                    "(for example “… with the average of Kazakhstan, Uzbekistan, Kyrgyzstan and "
+                    "Tajikistan as a benchmark row”): the app then takes the unweighted mean of the "
+                    "members' estimates, keeps the same members in every cycle of a trend, and "
+                    "names them in the provenance.")
+        lines = []
+        for cycle in sorted(members):
+            for label, codes in sorted(members[cycle].items()):
+                lines.append(f"PISA {cycle}, {label}: {len(codes)} member(s) with an estimate — "
+                             f"{self._names(codes) if len(codes) <= 12 else ', '.join(codes)}; "
+                             f"the average divides by N = {len(codes)}")
+        return ("From the last result's provenance: " + ". ".join(lines) + ". The average is the "
+                "unweighted mean of those members' estimates (SE = sqrt(sum of member SE²) / N); "
+                "across cycles the same members enter every cycle (any member without an estimate "
+                "in one of the cycles is left out of all of them, and the notes name it).")
+
+    def _level_facts(self, plan: dict, category_label) -> list[str]:
+        """Each side of a gap (or of a top-vs-bottom quarter gap) stated as
+        its own mean, beside the difference the table holds."""
+        levels = plan.get("_group_levels") or {}
+        if not levels:
+            return []
+        template = str(plan.get("template") or "")
+        measure = self._measure_label(plan.get("measure") or "")
+        group_col = str(plan.get("group_col") or "")
+        label_pair = str(plan.get("group_label") or "")
+        sides = [s.strip() for s in re.split(r"\s+minus\s+", label_pair, maxsplit=1)] if " minus " in label_pair else []
+        out = []
+        for cycle in sorted(levels):
+            rows = levels[cycle]
+            if not rows:
+                continue
+            cols = list(rows[0].keys())
+            for r in rows:
+                g = r.get("group")
+                if g is None:
+                    continue
+                if template == "quartile_gap":
+                    who = "top quarter (4)" if float(g) == 4 else "bottom quarter (1)"
+                elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", group_col) and group_col.upper() != "CNT":
+                    try:
+                        who = str(category_label(group_col, g))
+                    except Exception:  # noqa: BLE001
+                        who = f"{group_col} = {g}"
+                elif sides and len(sides) == 2:
+                    who = sides[0] if float(g) == float(plan.get("minuend", 1)) else sides[1]
+                else:
+                    who = f"group {g}"
+                key = ", ".join([self._names([str(r[c])]) if c == "CNT" else str(r[c])
+                                 for c in cols if c not in ("group", "estimate", "se", "n", "n_schools")
+                                 and r.get(c) is not None])
+                est, se = r.get("estimate"), r.get("se")
+                val = "no estimate" if est is None or pd.isna(est) else f"{summ.fmt(est)} (SE {summ.fmt(se)})"
+                out.append(f"Mean of {measure} — {key}, {who}, PISA {cycle}: {val}.")
+        return out[:16]
 
     OECD_AVG_WHY = re.compile(
         r"\b(why|how)\b.{0,60}\boecd (average|mean)\b.{0,80}\b(differ|different|match|computed|calculated|"
@@ -4288,7 +4647,7 @@ class Agent:
                 f"standard error, economy code (like USA, QCI), variable code (like "
                 f"ST438Q01DA) and source title exactly as written; translate nothing "
                 f"else than the prose. Return only the translation.\n\n{text}",
-                system="You are a precise translator for a statistics app.")
+                system="You are a precise translator for a statistics app.", role="translate")
             out = out.strip()
             # a translation that changes a number is worse than English
             source_numbers = {(v, d) for _, v, d in summ._numbers_in(text)}
@@ -4360,13 +4719,14 @@ class Agent:
          "coefficients), never one pooled model across economies."),
         (re.compile(r"\br\s*(²|\^2|squared)\b|\bvariance explained\b", re.I),
          "R² / variance explained is not reported by the regression template."),
-        (re.compile(r"\b(icc|intra-?class correlation|between-school variance|variance decomposition|"
-                    r"multilevel|hierarchical linear|hlm|random effects?)\b", re.I),
-         "Variance decomposition (ICC, between-school share) and multilevel models are not "
-         "available; the app reports single-level weighted estimates."),
+        (re.compile(r"\b(multilevel|hierarchical linear|hlm|random effects?)\b", re.I),
+         "Multilevel (hierarchical / random-effects) models are not available; the app reports "
+         "single-level weighted estimates, and the between-school share of variance (ICC) as a "
+         "one-way decomposition when asked for it."),
         (re.compile(r"\b(cohen'?s d|effect size in (sd|standard deviation)|standardi[sz]ed (effect|coefficient|beta))\b", re.I),
          "Effect sizes in standard-deviation units (Cohen's d, standardized betas) are not computed: "
-         "coefficients are per unit of the predictor and outcomes are on the PISA score scale."),
+         "coefficients are per unit of the predictor and outcomes are on the PISA score scale; ask "
+         "for \"the standard deviation of <score>\" to scale a difference yourself."),
         (re.compile(r"\bdesign effect\b|\bdeff\b|\bsimple random sampl", re.I),
          "Design effects and simple-random-sampling standard errors are not reported; every SE is "
          "the Fay-BRR replicate-weight SE, which already reflects the sample design."),
@@ -4376,10 +4736,6 @@ class Agent:
         (re.compile(r"\bcoverage[- ]adjust|adjust(ed|ing)? for (coverage|exclusion)", re.I),
          "No coverage adjustment is applied: the OECD's Coverage Index is a published table, not "
          "a variable in the files, so the estimate cannot be corrected for it here."),
-        (re.compile(r"\b(resilien(t|ce)|academically resilient)\b", re.I),
-         "The OECD's 'academically resilient' share (disadvantaged students in the top quarter of "
-         "performance) is not a template here; the app can give the mean by ESCS quarter and the "
-         "share above a level within the bottom ESCS quarter instead."),
     ]
 
     # "explain that more simply", "give me five bullets", "summarize the
@@ -4413,7 +4769,7 @@ class Agent:
                 system=("You restate a statistics answer in PISA Explorer. You never add "
                         "numbers, causes or countries that are not in the previous answer."
                         + ("" if not language or language.lower() == "english"
-                           else f" Write in {language}.")))).strip()
+                           else f" Write in {language}.")), role="summary")).strip()
         except llm.LLMError:
             return previous
         allowed = {(v, d) for _, v, d in summ._numbers_in(previous)}
@@ -4425,6 +4781,38 @@ class Agent:
             self._fire("rewrite:numbers_changed")
             return previous
         return draft
+
+    def _planner_system(self) -> str:
+        knowledge = PLAN_KNOWLEDGE if PLANNER_MODE != "legacy" else PLAN_SYSTEM
+        text = knowledge.format(instruments=", ".join(INSTRUMENTS), regions=self.regions_block,
+                                levels=link_errors.levels_prompt())
+        return text if PLANNER_MODE == "legacy" else grammar.planner_system(text)
+
+    def _plan(self, prompt: str) -> dict:
+        """One planner call. In grammar mode the model fills the closed form
+        of explorer/grammar.py and the app compiles it; a form that cannot be
+        compiled gets one corrected retry, then an honest clarify — never a
+        SQL fragment of the model's own."""
+        raw = generate_json(prompt, system=self._planner_system(), role="planner")
+        if PLANNER_MODE == "legacy":
+            return raw
+        every = set().union(*self.present.values()) if getattr(self, "present", None) else set()
+        try:
+            return grammar.compile_plan(raw, self.INVENTED_CODES, every)
+        except grammar.GrammarError as e:
+            self._fire("hook:grammar_replan")
+            try:
+                raw2 = generate_json(
+                    prompt + f"\n\nYOUR PREVIOUS FORM COULD NOT BE COMPILED: {e}. Fill that field "
+                    "again using only the menu of the form and variables from the cards.",
+                    system=self._planner_system(), role="planner")
+                return grammar.compile_plan(raw2, self.INVENTED_CODES, every)
+            except grammar.GrammarError as e2:
+                self._fire("hook:grammar_failed")
+                return {"action": "clarify", "_grammar": raw,
+                        "clarify": (f"I could not build that analysis ({e2}). Name the variable by its "
+                                    "code from the catalog, or the statistic you want (a mean, share, "
+                                    "gap, correlation, ranking), and I will try again.")}
 
     def _ask(self, question: str, history: list | None) -> AgentResult:
         context = self._transcript(history)
@@ -4440,6 +4828,30 @@ class Agent:
             rewritten = self._rewrite_previous(question, history, lang)
             if rewritten:
                 return AgentResult(question, rewritten, route="conversational")
+        if history and self.GOOD_WORDS.search(question) and len(question) < 90 \
+                and not self._economies_in_data(question) and not self._in_followup:
+            # "is that good?": the previous data question again, with the OECD
+            # average beside it — a comparison, not advice on what to ask
+            last = next((h for h in reversed(history) if h.get("explanation")), None)
+            if last:
+                self._fire("intercept:is_that_good")
+                self._in_followup = True
+                try:
+                    return self._ask(f"{last['question']} — and the OECD average for comparison", history)
+                finally:
+                    self._in_followup = False
+        if history and self.MEMBERS_WORDS.search(question) and any(h.get("explanation") for h in history):
+            # answered from the last result's provenance, never from memory
+            self._fire("intercept:benchmark_members")
+            text = self._members_answer()
+            if not self._looks_english(question):
+                try:
+                    lang = str(generate_json(f"Question: {question}", system=TERMS_SYSTEM + self.facts,
+                                             role="router").get("language") or "English")
+                except llm.LLMError:
+                    lang = "English"
+                text = self._localize(text, lang)
+            return AgentResult(question, text, route="conversational")
         early = self._intercept(question, history)
         if early:
             if not self._looks_english(question):
@@ -4453,9 +4865,22 @@ class Agent:
                 early = self._localize(early, lang)
             return AgentResult(question, early, route="conversational")
         route = generate_json(f"{context}Question: {question}",
-                              system=TERMS_SYSTEM + self.facts)
+                              system=TERMS_SYSTEM + self.facts, role="router")
         language = str(route.get("language") or "English")
+        if language.lower() != "english" and self._plainly_english(question):
+            # the router took the language from a country name ("El Salvador
+            # rank among all") — an English question gets an English answer
+            self._fire("route:language_forced_english")
+            language = "English"
         q_en = str(route.get("question_en") or question).strip() or question
+        reconcile = bool(self.RECONCILE_WORDS.search(q_en)) and \
+            (bool(self._economies_in_data(q_en)) or re.search(r"\boecd (average|mean)\b", q_en, re.I))
+        if reconcile and not route.get("data_question") and not self._intercept(q_en, history):
+            # "why does your figure differ from the published table": compute
+            # the figure, then list the reasons a table can differ
+            self._fire("route:force_analyze:reconcile")
+            route = {**route, "data_question": True, "intent": "analyze",
+                     "search_terms": route.get("search_terms") or ["mathematics", "reading", "science"]}
         if q_en != question:
             early = self._intercept(q_en, history)
             if early:
@@ -4577,12 +5002,9 @@ class Agent:
         strata_block = self._strata_block(self._strata_hits(q_en))
         if strata_block:
             self._fire("standard:strata")
-        plan = generate_json(
-            f"{context}{question_block}\n\n{standard_block}{strata_block}VARIABLE CARDS:\n{self._cards(hits, named)}",
-            system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
-                                      regions=self.regions_block,
-                                      levels=link_errors.levels_prompt()),
-        )
+        plan_prompt = (f"{context}{question_block}\n\n{standard_block}{strata_block}VARIABLE CARDS:\n"
+                       f"{self._cards(hits, named)}")
+        plan = self._plan(plan_prompt)
         if plan.get("action") != "clarify" and history and plan.get("template") in self.REQUIRED_FIELDS:
             # a follow-up ("and 2018?") whose plan lost the measure of the
             # analysis it continues: one re-plan with the continuation spelled out
@@ -4591,15 +5013,12 @@ class Agent:
             except ValueError as e:
                 self._fire("hook:replan_incomplete")
                 try:
-                    plan = generate_json(
-                        f"{context}{question_block}\n\n{standard_block}{strata_block}VARIABLE CARDS:\n{self._cards(hits, named)}"
+                    plan = self._plan(
+                        plan_prompt +
                         f"\n\nYOUR PREVIOUS PLAN WAS INCOMPLETE ({e}). This question continues the "
-                        "analysis in the conversation: copy its template, measure(s), grouping and "
-                        "filter from the previous exchange and change only what the question asks "
-                        "(the cycle, the economy, the subject).",
-                        system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
-                                                  regions=self.regions_block,
-                                                  levels=link_errors.levels_prompt()))
+                        "analysis in the conversation: copy its statistic, measure(s), grouping and "
+                        "economies from the previous exchange and change only what the question asks "
+                        "(the cycle, the economy, the subject).")
                 except llm.LLMError:
                     pass
         clarify_text = str(plan.get("clarify") or "")
@@ -4609,13 +5028,10 @@ class Agent:
             # the app does exactly that — re-plan for the economy alone
             self._fire("hook:replan_stratum")
             try:
-                plan = generate_json(
-                    f"{context}{question_block}\n\n{standard_block}{strata_block}VARIABLE CARDS:\n{self._cards(hits, named)}"
-                    "\n\nDO NOT CLARIFY: plan the statistic for the whole economy (by [\"CNT\"], where = "
-                    "the economy); the app adds the stratum's own labelled row next to it.",
-                    system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
-                                              regions=self.regions_block,
-                                              levels=link_errors.levels_prompt()))
+                plan = self._plan(
+                    plan_prompt +
+                    "\n\nDO NOT CLARIFY: plan the statistic for the whole economy (grouped by CNT, "
+                    "filtered to that economy); the app adds the stratum's own labelled row next to it.")
             except llm.LLMError:
                 pass
         if plan.get("action") == "clarify" and self.CANNOT_COMPUTE.search(str(plan.get("clarify") or "")) \
@@ -4624,22 +5040,45 @@ class Agent:
             # its own statements: one re-plan with the rule spelled out
             self._fire("hook:replan_pairwise")
             try:
-                plan = generate_json(
-                    f"{context}{question_block}\n\n{standard_block}{strata_block}VARIABLE CARDS:\n{self._cards(hits, named)}"
+                plan = self._plan(
+                    plan_prompt +
                     "\n\nDO NOT CLARIFY: plan the statistic for every economy named, in one table "
-                    f"(where = \"CNT IN ({', '.join(repr(c) for c in named)})\", by = [\"CNT\"]); the app "
-                    "computes every pairwise difference, the change in a difference and ties itself.",
-                    system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
-                                              regions=self.regions_block,
-                                              levels=link_errors.levels_prompt()))
+                    f"(economies {named}, grouped by CNT); the app computes every pairwise "
+                    "difference, the change in a difference and ties itself.")
             except llm.LLMError:
                 pass
         plan["_question"] = q_en
         plan["_language"] = language
+        if plan.get("limitation_note") and plan.get("template") != "raw_sql":
+            # a caveat that contradicts what the app computes ("the system
+            # does not perform significance tests") is dropped
+            cleaned = self.FALSE_LIMIT.sub("", str(plan["limitation_note"])).strip(" ;")
+            if cleaned != str(plan["limitation_note"]).strip():
+                plan["limitation_note"] = cleaned or None
+                self._fire("hook:false_limit_dropped")
+        if reconcile and plan.get("action") != "clarify":
+            plan["limitation_note"] = (f"{plan['limitation_note']} {self.RECONCILE_NOTE}"
+                                       if plan.get("limitation_note") else self.RECONCILE_NOTE)
+        if self.GROUP_WORDS.search(q_en) and plan.get("action") != "clarify" \
+                and not plan.get("include_average_of") and not plan.get("include_oecd_average") \
+                and plan.get("template") in ("weighted_mean", "gap", "quartile_gap", "percentile_spread"):
+            # "the average for the group A, B, C, D": the members' rows plus
+            # one unweighted group-average row (never a pooled mean)
+            codes = list(dict.fromkeys(re.findall(r"'([A-Z]{3})'", str(plan.get("where") or ""))))
+            if len(codes) >= 2:
+                plan["include_average_of"] = [{"label": "Group", "members": codes}]
+                self._fire("hook:group_average_row")
+        if self.BIG_WORDS.search(q_en) and plan.get("action") != "clarify" \
+                and plan.get("template") in ("gap", "quartile_gap", "percentile_spread") \
+                and "CNT" in [str(b) for b in (plan.get("by") or [])]:
+            # "is the gap big?": judged against the OECD average's gap
+            plan["include_oecd_average"] = True
+            self._fire("hook:big_vs_oecd")
         self._fix_invented_codes(plan)
         self._apply_standards(plan, q_en)
         self._apply_strata(plan, q_en)
         self._fix_level_phrases(plan, q_en)
+        self._recover_dropped_cycles(plan, q_en)
         if self.WORLD_AVERAGE_WORDS.search(q_en + " " + question) and plan.get("action") != "clarify":
             # "world average" is the average of every participant, never the OECD's
             groups = plan.get("include_average_of") or []
@@ -4797,7 +5236,16 @@ class Agent:
                                     self._measure_label, focus_codes=focus_codes,
                                     category_label=category_label,
                                     low_coverage=plan.get("_low_coverage"))
+        facts = facts + self._level_facts(plan, category_label)
         provenance["facts"] = facts
+        self._last_benchmark_members = plan.get("_benchmark_members") or None
+        self._last_rows = None
+        if "CNT" in table.columns:
+            est_cols = [c for c in table.columns if ESTIMATE_COL.match(c)]
+            self._last_rows = {
+                (c[len("estimate_"):] if c != "estimate" else str(table["cycle"].iloc[0]) if "cycle" in table.columns else ""):
+                sorted({str(x) for x, v in zip(table["CNT"], table[c]) if not pd.isna(v) and not str(x).endswith(" avg")})
+                for c in est_cols}
         summary_prompt = (
             f"QUESTION: {question}\n"
             f"PLANNED: {plan.get('explanation')}\n"
@@ -4853,7 +5301,7 @@ class Agent:
 
         first_issues: list[str] = []
         try:
-            draft = self._plain(generate(prompt, system=SUMMARY_SYSTEM + lang_rule)).strip()
+            draft = self._plain(generate(prompt, system=SUMMARY_SYSTEM + lang_rule, role="summary")).strip()
             first_issues = check(draft)
             if not first_issues and draft:
                 return draft, "llm", []
@@ -4863,7 +5311,7 @@ class Agent:
                             ".\nRewrite it using ONLY the verified statements and the table: "
                             "copy numbers exactly, name only economies in the result, and "
                             "state significance only as the verified statements do.")
-            draft = self._plain(generate(retry_prompt, system=SUMMARY_SYSTEM + lang_rule)).strip()
+            draft = self._plain(generate(retry_prompt, system=SUMMARY_SYSTEM + lang_rule, role="summary")).strip()
             if draft and not check(draft):
                 return draft, "llm-retry", first_issues
         except llm.LLMError as e:
