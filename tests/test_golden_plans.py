@@ -52,7 +52,11 @@ def run_case(agent, case: dict, tolerance: float) -> list[str]:
     try:
         # deep copy: execute() edits nested plan fields (overrides), and the
         # case must stay as written
-        table, prov = agent.execute(copy.deepcopy(case["plan"]))
+        plan = copy.deepcopy(case["plan"])
+        if plan.get("_apply_strata"):
+            # the deterministic stratum step runs before execute() in _ask
+            agent._apply_strata(plan, str(plan.get("_question") or ""))
+        table, prov = agent.execute(plan)
     except CoverageError as e:
         if "error_contains" not in expect:
             return [f"unexpected CoverageError: {e}"]

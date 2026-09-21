@@ -332,7 +332,7 @@
     },
     {
       "name": "argentina_profile_trend",
-      "verified": "Argentina 2018->2025: math 379.5->366.8, reading 401.5->388.7; ESCS and BELONG levels shown, change BLANK (indices standardized within cycle)",
+      "verified": "Argentina 2018->2025: math 379.5->366.8, reading 401.5->388.7; ESCS level shown, change BLANK (re-standardized within cycle); BELONG is a trend scale (OECD-average not 0 in 2025), so its change IS computed",
       "plan": {
         "template": "weighted_mean",
         "measures": [
@@ -384,11 +384,12 @@
             },
             "estimate_2018": -0.11,
             "estimate_2025": -0.04,
-            "change": null
+            "change": 0.07
           }
         ],
         "notes_contain": [
-          "standardized within each PISA cycle"
+          "standardized within each PISA cycle",
+          "trend scale"
         ]
       }
     },
@@ -1433,6 +1434,629 @@
         ],
         "notes_contain": [
           "of the weighted population has no value"
+        ]
+      }
+    },
+    {
+      "name": "jakarta_stratum_beside_national",
+      "verified": "Indonesia 2025 below Level 2 in math: national 83.07 (SE 1.11); DKI Jakarta stratum 61.09 (SE 2.39) — the stratum is a labelled row next to the economy, never the economy's row (ministry persona H1)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "CASE WHEN PV{pv}MATH < 420.07 THEN 100.0 ELSE 0.0 END",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'IDN'",
+        "_strata_rows": {
+          "name": "DKI Jakarta",
+          "economy": "IDN",
+          "mode": "include",
+          "label": "IDN/DKI Jakarta",
+          "codes": {
+            "2025": [
+              "IDN01"
+            ]
+          },
+          "labels": {
+            "IDN01": "DKI Jakarta"
+          }
+        }
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "IDN"
+            },
+            "estimate": 83.07,
+            "se": 1.11
+          },
+          {
+            "match": {
+              "CNT": "IDN/DKI Jakarta"
+            },
+            "estimate": 61.09,
+            "se": 2.39
+          }
+        ],
+        "notes_contain": [
+          "sampling stratum",
+          "whole economy"
+        ]
+      }
+    },
+    {
+      "name": "kazakhstan_excluding_nis_stratum",
+      "verified": "Kazakhstan 2025 math: national 413.71 (SE 1.75); without the Nazarbayev Intellectual Schools stratum 412.17 (SE 1.76) (skeptic M7)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'KAZ'",
+        "_strata_rows": {
+          "name": "Intellectual schools",
+          "economy": "KAZ",
+          "mode": "exclude",
+          "label": "KAZ excl. Intellectual schools",
+          "codes": {
+            "2025": [
+              "KAZ21"
+            ]
+          },
+          "labels": {
+            "KAZ21": "Intellectual schools"
+          }
+        }
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "KAZ"
+            },
+            "estimate": 413.71
+          },
+          {
+            "match": {
+              "CNT": "KAZ excl. Intellectual schools"
+            },
+            "estimate": 412.17
+          }
+        ],
+        "notes_contain": [
+          "WITHOUT the sampling stratum"
+        ]
+      }
+    },
+    {
+      "name": "group_average_with_by_null_is_per_economy",
+      "verified": "include_average_of with by = null used to return the pooled student mean of the whole database (456.83); now: per-economy rows + Group avg on constant membership: KAZ only in 2018-2025, change +22.44 (SE 4.19 incl. link error) (skeptic H1)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}SCIE",
+        "cycles": [
+          "2018",
+          "2022",
+          "2025"
+        ],
+        "by": null,
+        "where": null,
+        "include_average_of": [
+          "KAZ",
+          "UZB",
+          "KGZ",
+          "QTJ"
+        ]
+      },
+      "expect": {
+        "rows": 5,
+        "cells": [
+          {
+            "match": {
+              "CNT": "Group avg"
+            },
+            "estimate_2018": 397.1,
+            "estimate_2025": 419.55,
+            "change": 22.44,
+            "se_change": 4.19
+          },
+          {
+            "match": {
+              "CNT": "UZB"
+            },
+            "estimate_2025": 437.6
+          }
+        ],
+        "notes_contain": [
+          "never as one pooled mean",
+          "excluded: Kyrgyzstan (KGZ)"
+        ]
+      }
+    },
+    {
+      "name": "three_measures_with_oecd_and_world_average",
+      "verified": "'which country is best' shape: three measures + OECD avg + all-participant avg used to crash on a duplicate `measure` column (public persona H2); OECD avg 2025 math = 463.02",
+      "plan": {
+        "template": "weighted_mean",
+        "measures": [
+          "PV{pv}MATH",
+          "PV{pv}READ",
+          "PV{pv}SCIE"
+        ],
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('FIN', 'EST', 'JPN')",
+        "include_oecd_average": true,
+        "include_average_of": [
+          "All participants"
+        ]
+      },
+      "expect": {
+        "rows": 15,
+        "cells": [
+          {
+            "match": {
+              "CNT": "OECD avg",
+              "measure": "Mathematics score"
+            },
+            "estimate": 463.02
+          },
+          {
+            "match": {
+              "CNT": "JPN",
+              "measure": "Mathematics score"
+            },
+            "estimate": 525.38
+          }
+        ]
+      }
+    },
+    {
+      "name": "by_placeholder_group_col_is_resolved",
+      "verified": "by = ['CNT', 'group_col'] (the planner's placeholder) used to fail with 'group_col is not a column'; the gap runs and its cross-cycle change is computed (BULLIED is a trend scale) (scholar M2, M1)",
+      "plan": {
+        "template": "gap",
+        "measure": "BULLIED",
+        "cycles": [
+          "2022",
+          "2025"
+        ],
+        "by": [
+          "CNT",
+          "group_col"
+        ],
+        "where": "CNT = 'KOR'",
+        "group_col": "ST004D01T",
+        "minuend": 2,
+        "subtrahend": 1,
+        "cycle_overrides": {
+          "2025": {
+            "group_col": "MALE",
+            "minuend": 1,
+            "subtrahend": 0
+          }
+        }
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "KOR"
+            },
+            "estimate_2022": 0.06,
+            "estimate_2025": 0.13,
+            "change": 0.07
+          }
+        ],
+        "notes_contain": [
+          "trend scale"
+        ],
+        "notes_forbid": [
+          "standardized within each PISA cycle"
+        ]
+      }
+    },
+    {
+      "name": "finland_minus_estonia_reading_is_two_rows",
+      "verified": "a gap whose group column is CNT (economy vs economy) crashed on duplicate labels; it is now two per-economy rows whose difference and change of difference the facts state (skeptic M5): FIN 2025 474.30, EST 499.24",
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}READ",
+        "cycles": [
+          "2018",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": null,
+        "group_col": "CNT",
+        "minuend": "FIN",
+        "subtrahend": "EST"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "FIN"
+            },
+            "estimate_2025": 474.3,
+            "estimate_2018": 520.08
+          },
+          {
+            "match": {
+              "CNT": "EST"
+            },
+            "estimate_2025": 499.24
+          }
+        ],
+        "notes_contain": [
+          "link error cancels"
+        ]
+      }
+    },
+    {
+      "name": "two_named_blocks_get_one_average_each",
+      "verified": "Pacific Alliance and Mercosur asked together used to merge into one 8-member 'Group avg'; now one row each, constant membership (Paraguay out of the Mercosur trend) (econ persona H1): Pacific 404.24->388.30, Mercosur (ARG/BRA/URY) 393.56->382.82",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2018",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('CHL','COL','MEX','PER','ARG','BRA','PRY','URY')",
+        "include_average_of": [
+          {
+            "label": "Pacific Alliance",
+            "members": [
+              "CHL",
+              "COL",
+              "MEX",
+              "PER"
+            ]
+          },
+          {
+            "label": "Mercosur",
+            "members": [
+              "ARG",
+              "BRA",
+              "PRY",
+              "URY"
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "rows": 10,
+        "cells": [
+          {
+            "match": {
+              "CNT": "Pacific Alliance avg"
+            },
+            "estimate_2018": 404.24,
+            "estimate_2025": 388.3,
+            "change": -15.94
+          },
+          {
+            "match": {
+              "CNT": "Mercosur avg"
+            },
+            "estimate_2018": 393.56,
+            "estimate_2025": 382.82,
+            "change": -10.74
+          }
+        ],
+        "notes_contain": [
+          "Paraguay (PRY)"
+        ]
+      }
+    },
+    {
+      "name": "pooled_multi_economy_mean_becomes_rows",
+      "verified": "by = [] over four economies (a pooled student mean, no OECD statistic) runs per economy with the group's unweighted average as a benchmark row (econ persona H1 Q9)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "by": [],
+        "where": "CNT IN ('CHL','COL','MEX','PER')"
+      },
+      "expect": {
+        "rows": 5,
+        "cells": [
+          {
+            "match": {
+              "CNT": "Group avg"
+            },
+            "estimate": 388.3
+          },
+          {
+            "match": {
+              "CNT": "CHL"
+            },
+            "estimate": 402.65
+          }
+        ],
+        "notes_contain": [
+          "never as one pooled mean"
+        ]
+      }
+    },
+    {
+      "name": "per_cycle_by_override_gender_share_morocco",
+      "verified": "cycle_overrides carrying `by` (ST004D01T in 2022, MALE in 2025) were ignored; they now apply, with MALE recoded to ST004D01T so the cycles merge (ministry M8): Morocco at/above Level 2 reading 2025 girls 14.85, boys 10.63",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "CASE WHEN PV{pv}READ >= 407.47 THEN 100.0 ELSE 0.0 END",
+        "cycles": [
+          "2022",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'MAR'",
+        "cycle_overrides": {
+          "2022": {
+            "by": [
+              "CNT",
+              "ST004D01T"
+            ]
+          },
+          "2025": {
+            "by": [
+              "CNT",
+              "MALE"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "MAR",
+              "ST004D01T": "1.0"
+            },
+            "estimate_2025": 14.85,
+            "se_2025": 1.57
+          },
+          {
+            "match": {
+              "CNT": "MAR",
+              "ST004D01T": "2.0"
+            },
+            "estimate_2025": 10.63
+          }
+        ],
+        "notes_contain": [
+          "grouping variable differs by cycle"
+        ]
+      }
+    },
+    {
+      "name": "creative_thinking_2022_singapore",
+      "verified": "creative thinking (2022 innovative domain) through the stu_crt join: weighted PV x BRR means on the 0-60 scale; SGP highest of the four (scholar H4; published SGP 41, KOR 38, CAN 38, CHL 31)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}CRTH_NC",
+        "cycles": [
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('SGP', 'KOR', 'CAN', 'CHL')",
+        "instrument": "stu_qqq"
+      },
+      "expect": {
+        "rows": 4,
+        "cells": [
+          {
+            "match": {
+              "CNT": "SGP"
+            },
+            "estimate": 40.96
+          },
+          {
+            "match": {
+              "CNT": "CHL"
+            },
+            "estimate": 30.67
+          }
+        ],
+        "notes_contain": [
+          "creative-thinking cognitive file"
+        ]
+      }
+    },
+    {
+      "name": "global_competence_2018_colombia_spain",
+      "verified": "global competence (2018 innovative domain) PV GLCM: Colombia and Spain weighted means (scholar H3; published 457 and 512); the default 2025 cycle is dropped because the measure exists in 2018 only",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}GLCM",
+        "cycles": [
+          "2018",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('COL', 'ESP')"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "COL"
+            },
+            "estimate": 457.43
+          },
+          {
+            "match": {
+              "CNT": "ESP"
+            },
+            "estimate": 512.12
+          }
+        ],
+        "notes_contain": [
+          "does not exist in PISA 2025"
+        ]
+      }
+    },
+    {
+      "name": "immigrant_dummies_keep_null_as_null",
+      "verified": "regression dummies written CASE ... ELSE 0 END coded students with no IMMIG value as natives; they are now dropped listwise (skeptic M2): Germany 2022 first-generation -66.17 (SE 6.18), second-generation -13.99, ESCS 34.87",
+      "plan": {
+        "template": "regression",
+        "measure": "PV{pv}MATH",
+        "predictors": [
+          "CASE WHEN IMMIG = 2 THEN 1 ELSE 0 END",
+          "CASE WHEN IMMIG = 3 THEN 1 ELSE 0 END",
+          "ESCS"
+        ],
+        "predictor_names": [
+          "second-generation",
+          "first-generation",
+          "ESCS"
+        ],
+        "cycles": [
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'DEU'"
+      },
+      "expect": {
+        "cells": [
+          {
+            "match": {
+              "CNT": "DEU",
+              "term": "first-generation"
+            },
+            "estimate": -66.17,
+            "se": 6.18
+          },
+          {
+            "match": {
+              "CNT": "DEU",
+              "term": "second-generation"
+            },
+            "estimate": -13.99
+          },
+          {
+            "match": {
+              "CNT": "DEU",
+              "term": "ESCS"
+            },
+            "estimate": 34.87
+          }
+        ],
+        "notes_contain": [
+          "dropped listwise"
+        ]
+      }
+    },
+    {
+      "name": "planner_written_stratum_exclusion_keeps_national_row",
+      "verified": "a STRATUM NOT IN filter written by the planner is stripped and the economy row is kept beside the labelled 'excl.' row (skeptic M7, econ Q20): KAZ 413.71 vs 412.17 without KAZ21",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'KAZ' AND STRATUM NOT IN ('KAZ21')",
+        "_question": "Kazakhstan 2025 math mean excluding the NIS schools (stratum KAZ21) vs including them",
+        "_apply_strata": true
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "KAZ"
+            },
+            "estimate": 413.71
+          },
+          {
+            "match": {
+              "CNT": "KAZ excl. Intellectual schools"
+            },
+            "estimate": 412.17
+          }
+        ],
+        "notes_contain": [
+          "WITHOUT the sampling stratum"
+        ]
+      }
+    },
+    {
+      "name": "invented_quarter_column_filters_quartile_rows",
+      "verified": "a planner filter 'ESCS_Q = 4' (no such column) becomes a quartile_means run kept to quarter 4 (econ persona M6): Guatemala top-ESCS-quarter below Level 2 math 2025 = 79.12 (SE 2.28), rank 1 of 11 LatAm economies",
+      "plan": {
+        "template": "quartile_means",
+        "cycles": [
+          "2025"
+        ],
+        "measure": "CASE WHEN PV{pv}MATH < 420.07 THEN 100.0 ELSE 0.0 END",
+        "quart_variable": "ESCS",
+        "where": "ESCS_Q = 4",
+        "by": [
+          "CNT"
+        ],
+        "regions": [
+          "Latin America and the Caribbean"
+        ],
+        "sort_by": "estimate",
+        "sort_desc": true
+      },
+      "expect": {
+        "rows": 11,
+        "columns_absent": [
+          "quarter"
+        ],
+        "cells": [
+          {
+            "match": {
+              "CNT": "GTM"
+            },
+            "estimate": 79.12,
+            "se": 2.28,
+            "rank": 1
+          }
+        ],
+        "notes_contain": [
+          "Only quarter 4 of ESCS"
         ]
       }
     }

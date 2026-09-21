@@ -115,7 +115,9 @@ changes, then point `_DATA_IMAGE` in `cloudbuild.code.yaml` at the new data tag.
 The code-only image also carries `data/parquet/pisa2018/vnm_pv.parquet`
 (Viet Nam's separately released 2018 plausible values, built by
 `python pipeline/load_vnm_2018.py`; `build_db.py` in the image joins them
-into the 2018 view) and `data/catalog/coverage.parquet` (which
+into the 2018 view; it also builds the joined views `stu_sch_<cycle>` and
+`stu_crt_2022` — creative-thinking plausible values with student weights —
+from the parquet files already in the data image) and `data/catalog/coverage.parquet` (which
 economies collected each questionnaire variable, per cycle — built by
 `python pipeline/build_coverage.py` in a few seconds from the local DuckDB).
 `.gcloudignore.code` re-includes exactly that file from the otherwise

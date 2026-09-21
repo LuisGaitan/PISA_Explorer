@@ -30,7 +30,10 @@ def record(agent, case: dict) -> dict:
     from explorer.agent import CoverageError
     expect = dict(case.get("expect") or {})
     try:
-        table, _prov = agent.execute(copy.deepcopy(case["plan"]))   # never mutate the case
+        plan = copy.deepcopy(case["plan"])                          # never mutate the case
+        if plan.get("_apply_strata"):
+            agent._apply_strata(plan, str(plan.get("_question") or ""))
+        table, _prov = agent.execute(plan)
     except CoverageError as e:
         expect.pop("cells", None); expect.pop("rows", None)
         expect.setdefault("error_contains", [str(e)[:80]])

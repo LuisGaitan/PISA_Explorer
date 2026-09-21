@@ -140,6 +140,31 @@ analysis and phrases the result. Four mechanisms keep the seams honest:
   "immigrant background", "bullying", "AI use" and so on, per cycle, with the
   reason; the planner sees it first and a plan that picked a look-alike is
   switched to the standard and told so in the provenance.
+- **Plan-shape repairs and stratum rows (method v6).** Before a plan runs,
+  the app repairs the shapes the planner gets wrong in ways that would
+  compute the wrong statistic: a benchmark average or a multi-economy filter
+  always runs per economy (never a pooled student mean across economies);
+  named ad-hoc groups get one average row each; "economy A minus economy B"
+  becomes two rows whose difference, and its change across cycles, the app
+  states itself; a per-cycle `by` override applies (MALE recoded to
+  ST004D01T). A named sampling stratum (a region, a school network) is a
+  labelled row **next to** the economy's row — `IDN/DKI Jakarta`,
+  `KAZ excl. Intellectual schools` — never the economy's row; "versus the
+  rest of the country" is a gap. "Level 1 or below" is read as below Level 2.
+  Questionnaire indices whose OECD-average is not 0 in a later cycle (trend
+  scales such as BULLIED, BELONG, ANXMAT) get a cross-cycle change with a
+  sampling SE and a note; the rest stay blank. Creative thinking (2022, via
+  the `stu_crt_2022` joined view), global competence (2018) and financial
+  literacy (2018/2022) are standard measures.
+- **Statements the model cannot make up.** The app also states, for the
+  economies a question names, which other economies are not statistically
+  different (and the rank range that implies), gap-in-gap differences, and
+  the change in a difference across cycles (the link error cancels). The
+  prose check rejects a draft that attributes a number to the opposite
+  group of the one the statement gives it (a female mean called boys', a
+  share who disagree called agreeing), that rounds a standard error to 0.0,
+  that calls the result "partial", or that says the app "cannot compute" a
+  difference it computed.
 - **Reproducibility.** The router and planner run at temperature 0. Every
   provenance card carries `build <image tag>, method v<N>` (`explorer/version.py`);
   the method version changes only when a computed number can change. Every

@@ -51,6 +51,30 @@ def _all(code: str) -> dict:
 
 STANDARDS: list[Standard] = [
     Standard(
+        "creative thinking (2022 innovative domain)",
+        re.compile(r"\bcreative[- ]thinking\b|\bcreativity (score|scale|test|assessment)\b", re.I),
+        {"2022": "PV{pv}CRTH_NC"}, instrument="stu_crt",
+        reason=("the creative-thinking plausible values (0-60 'number correct' scale) are in the "
+                "2022 creative-thinking cognitive file, analysed through stu_crt (students joined "
+                "to it, with their weights); assessed in 2022 only, 64 economies"),
+    ),
+    Standard(
+        "global competence (2018 innovative domain)",
+        re.compile(r"\bglobal competenc[ey]\b|\bglobal[- ]mindedness (score|test)\b", re.I),
+        {"2018": "PV{pv}GLCM"},
+        reason=("the global-competence cognitive test's plausible values PV1-10GLCM are in the "
+                "2018 student file for the 27 economies that took it (Scotland as GBR; Moscow "
+                "City, Moscow region and Tatarstan as QMC, QMR, QRT); assessed in 2018 only"),
+    ),
+    Standard(
+        "financial literacy",
+        re.compile(r"\bfinancial literacy\b|\bfinancial (knowledge|skills) (score|test|assessment)\b", re.I),
+        {"2018": "PV{pv}FLIT", "2022": "PV{pv}FLIT"}, instrument="flt_qqq",
+        reason=("the financial-literacy plausible values live in the financial-literacy files "
+                "(flt_qqq), which carry their own final and replicate weights for the "
+                "financial-literacy subsample; assessed in 2018 and 2022, not in 2025"),
+    ),
+    Standard(
         "gender",
         re.compile(r"\b(gender|girls?|boys?|female|male|sex)\b", re.I),
         {"2018": "ST004D01T", "2022": "ST004D01T", "2025": "MALE"},

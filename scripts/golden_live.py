@@ -41,7 +41,9 @@ def numbers_in(text: str) -> list[tuple[float, int]]:
 
 
 def number_present(want: str, text: str) -> bool:
-    w = float(want.replace(",", ""))
+    # numbers_in() keeps absolute values (a difference may be phrased either
+    # way round), so the wanted value is compared without its sign too
+    w = abs(float(want.replace(",", "")))
     d = len(want.split(".")[1]) if "." in want else 0
     tol = 0.5 * 10 ** (-d) + 1e-9
     return any(abs(v - w) <= tol for v, _ in numbers_in(text))

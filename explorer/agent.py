@@ -47,7 +47,8 @@ MAX_RESULT_ROWS = 500
 
 INSTRUMENTS = ["stu_qqq", "sch_qqq", "tch_qqq", "stu_cog", "stu_tim", "stu_ttm",
                "flt_qqq", "flt_cog", "flt_tim", "crt_cog", "ldw_cog",
-               "stu_sch"]   # virtual: stu_qqq joined to sch_qqq
+               "stu_sch",   # virtual: stu_qqq joined to sch_qqq
+               "stu_crt"]   # virtual (2022): stu_qqq joined to crt_cog (creative thinking PVs + weights)
 CYCLES = ["2018", "2022", "2025"]
 DEFAULT_CYCLE = "2025"          # a question that names no cycle means the latest
 # The acknowledgement the PISA public-use-file terms of use require, verbatim,
@@ -135,7 +136,9 @@ private government-dependent / 3 public) unless the user asks for the
 government-dependent distinction; SC001Q01TA school location: 1 village/rural
 (<3,000), 2 small town, 3 town, 4 city (100,000-1M), 5 large city, 6 megacity
 (2022/2025) — "rural vs urban/city" => gap with a CASE group_col, e.g. rural
-= SC001Q01TA IN (1, 2) vs city = SC001Q01TA >= 4; EDUSHORT / STAFFSHORT
+= SC001Q01TA IN (1, 2) vs city = SC001Q01TA >= 4, and group_label MUST name
+what is left out ("village/small town (<15,000) minus city (>100,000);
+towns of 15,000-100,000 excluded"); EDUSHORT / STAFFSHORT
 shortage indices (all cycles); CLSIZE class size; SCHSIZE school size and
 STRATIO student-teacher ratio (2018 and 2022 only).
 AI USE (2025 only, student questionnaire, 84 of 90 economies): ST438Q01DA–
@@ -268,7 +271,14 @@ Reply with ONLY this JSON:
             average). "France vs the EU average" => where = "CNT = 'FRA'",
             include_average_of = ["European Union"]. NEVER build an average
             by listing members in `where` — that only returns the members'
-            rows. A benchmark the user established earlier in the
+            rows. Two or more NAMED ad-hoc groups ("Pacific Alliance avg and
+            Mercosur avg") are objects, one per group, never one merged list:
+            include_average_of = [{{"label": "Pacific Alliance", "members":
+            ["CHL","COL","MEX","PER"]}}, {{"label": "Mercosur", "members":
+            ["ARG","BRA","PRY","URY"]}}]. "The average of A, B, C" as ONE
+            number is also a benchmark row with by = ["CNT"] and where = the
+            members — never by = [] (a pooled student mean across economies
+            is no OECD statistic). A benchmark the user established earlier in the
             conversation stays in every later plan of that conversation
             until the user drops it; requires "CNT" in by),
  "by": [grouping columns, usually ["CNT"]],
@@ -402,6 +412,10 @@ measure, e.g. "% below Level 2 in math" => measure =
 = Level 5 or above (>= the Level 5 bound); "low achievers" = below Level 2.
 Proficiency-level LOWER BOUNDS (use these exact values, never invent one):
 {levels}
+A share or mean WITHIN ESCS quarters ("% below Level 2 among the top ESCS
+quarter", "repetition rate by ESCS quarter") => template quartile_means with
+quart_variable = "ESCS" and the share as the measure (a 100/0 CASE): one row
+per quarter and economy — never a clarify about filtering by quarter.
 "P90-P10", "P75-P25", interdecile / interquartile range, "dispersion",
 "spread", "inequality of scores" => template percentile_spread (upper,
 lower) — never percentiles followed by a subtraction in the summary.
@@ -412,7 +426,16 @@ only) — never substitute one for the other silently.
 "Which policy works best" / "should countries do X" / "effect of a policy"
 => analyze the within-cycle association (regression or correlation, latest
 cycle unless one is named) and put in limitation_note that PISA cannot
-evaluate policies causally — never a cross-cycle regression."""
+evaluate policies causally — never a cross-cycle regression.
+DIFFERENCES BETWEEN ECONOMIES are never a reason to clarify: "gap in A minus
+gap in B", "did the gap shrink more in A than in B", "difference between A
+and B and did it change", "A's change minus B's change", "which countries
+are statistically tied with A" => plan the statistic for BOTH (or all)
+economies in one table (where = "CNT IN ('A', 'B')", by = ["CNT"]; a gap
+stays template gap); the app itself then states every pairwise difference,
+the change in a difference (= the difference of the two changes), and the
+economies not statistically different from a named one, each with its SE.
+Never write that the system "cannot compute" such a difference."""
 
 SUMMARY_SYSTEM = """You summarize PISA analysis results for a general audience.
 Write 2-5 sentences. Cite the key numbers with their standard errors like
@@ -451,7 +474,18 @@ cycle: report each cycle's level and explicitly say the change is not
 comparable — never write that it rose, fell or changed significantly. In a
 regression table the "(intercept)" row is the predicted score when every
 predictor is 0 — never call it the country's performance or mean score;
-report the predictor coefficients as associations."""
+report the predictor coefficients as associations. Describe every variable
+by the label the verified statements give it; if the user's own wording
+describes something else (a different construct, the other direction of a
+share), say so in one clause and use the app's label. A share "in (1, 2)"
+whose codes are labelled Disagree is a share who DISAGREE — never flip the
+direction. A group's value label in a statement ("ST004D01T = 1 (Female)")
+is the group the number belongs to. If the verified statements list
+economies "not statistically different from" a named one, or a rank range,
+report them as given. Never say the app "cannot compute" a difference or
+its significance: the verified statements contain every pairwise
+difference the app computed, and if one is not there, say it was not
+computed."""
 
 
 class CoverageError(ValueError):
@@ -653,6 +687,14 @@ class Agent:
             "never say the app has no AI data.\n"
             "- Not loaded: the 2025 Foreign Language Assessment (OECD release "
             "expected 2027).\n"
+            "- Questionnaire indices across cycles: the app decides PER INDEX from the "
+            "data. Indices the OECD re-standardizes in each cycle (ESCS and most WLE "
+            "scales: OECD mean 0 in every cycle) get no cross-cycle change; indices the "
+            "OECD kept on the earlier cycle's scale (trend scales such as BULLIED / "
+            "BEINGBULLIED, BELONG, ANXMAT, MATHEFF, whose OECD-average is not 0 in a "
+            "later cycle) DO get a change with a sampling SE, and every data answer's "
+            "notes say which applies. Never state from memory that an index is or is "
+            "not comparable — say the app checks it and point to a data question.\n"
             "- Benchmarks: any per-country result can carry an OECD-average row "
             "and/or a regional average row (EU, Latin America, Nordic countries, "
             "…) — ask e.g. \"compare France with the EU average in reading\"; a "
@@ -696,7 +738,7 @@ class Agent:
 
     WHY_WORDS = re.compile(
         r"\b(why|factor|factors|cause|causes|caused|reason|reasons|explain|explains|"
-        r"behind|driver|drivers|due to|because|attributable|impact of|effect of|"
+        r"behind (the|this|these|that|those|its|their|such)|driver|drivers|due to|because|attributable|impact of|effect of|"
         r"policy|policies|works best|should (countries|schools|governments)|intervention)\b",
         re.IGNORECASE)
     WHY_NOTE = ("PISA is a repeated cross-sectional survey of different students "
@@ -733,12 +775,42 @@ class Agent:
         r"oecd('s)? (analysis|report|reports|publication|table|tables|volume)",
         re.IGNORECASE | re.DOTALL)
 
-    def _link_error_answer(self) -> str:
-        status = ("This version applies the published link errors to every change "
-                  "in a MEAN score (mathematics, reading, science), so trend "
-                  "significance here matches the OECD's reports; changes in "
-                  "proficiency-level shares or questionnaire indices carry "
-                  "sampling-only SEs, as their notes state."
+    # "share of students at Level 6 ... 2022 vs 2025, with the link error":
+    # a data request that mentions the link error, not a question about it
+    LINK_DATA_REQUEST = re.compile(
+        r"\b(with|including|include|add|adding|plus|using|apply|applying)\s+(the\s+)?"
+        r"(published\s+)?link(ing)? error", re.IGNORECASE)
+
+    def _link_error_answer(self, last_mode: str | None = None) -> str:
+        applied = {
+            "mean": "The last trend you asked for was a change in a mean score, so its change "
+                    "SE includes the published link error.",
+            "percentile-approx": "The last trend you asked for was a change in a percentile; "
+                                 "the mean score's link error was added as an approximation "
+                                 "(the OECD publishes percentile-specific link errors only in "
+                                 "its technical annexes).",
+            "share": "The last trend you asked for was a change in a proficiency-level share, so "
+                     "a share-specific link error was derived per economy (every plausible "
+                     "value shifted by ± the score link error; half the difference in the share) "
+                     "and included in the change SE.",
+            "cancels": "The last trend you asked for was a change in a within-cycle difference "
+                       "(a gap, a quartile gap, a percentile spread, a slope or a correlation): "
+                       "the linking shifts both groups alike, so no link error is added — the "
+                       "OECD's own convention (PISA 2022 Results Volume I, Annex A7).",
+            "none": "The last trend you asked for was a questionnaire index or a response-code "
+                    "share, for which the OECD publishes no link error; its change SE is "
+                    "sampling error only.",
+        }.get(last_mode or "", "")
+        status = ("This version applies them the way the OECD does: a change in a MEAN score "
+                  "(mathematics, reading, science) gets the published link error; a change in a "
+                  "percentile gets the mean's link error as an approximation; a change in the "
+                  "share of students at or above (or below) a proficiency level gets a "
+                  "share-specific link error derived per economy from the score link error; "
+                  "a change in a within-cycle difference (gender gap, ESCS quartile gap, "
+                  "P90-P10 spread, regression slope, correlation) gets none, because the linking "
+                  "shifts both groups alike and cancels; and changes in questionnaire indices or "
+                  "response-code shares get none, because the OECD publishes none for them. "
+                  + applied
                   if link_errors.loaded() else
                   "This version does not yet apply them: the constants live in a "
                   "published table, not in the microdata, and have not been "
@@ -780,6 +852,23 @@ class Agent:
                     "central", "state", "other", "lower", "upper", "secondary", "vocational",
                     "students", "student", "country", "countries", "which", "position",
                     "compare", "science", "reading", "mathematics"}
+    # one-word stratum label segments that are descriptions, not place or
+    # network names — they never identify an entity on their own
+    STRATUM_GENERIC = {
+        "private", "urban", "public", "rural", "mixed", "other", "south", "north", "general",
+        "vocational", "government", "independent", "international", "basic", "suburban",
+        "regular", "academic", "city", "secondary", "west", "female", "male", "large", "town",
+        "small", "grammar", "catholic", "gymnasium", "east", "central", "middle", "maintained",
+        "capital", "subsidized", "village", "center", "centre", "community", "primary", "medium",
+        "national", "technical", "liceo", "indian", "russian", "romanian", "lithuanian", "german",
+        "french", "arabic", "english", "spanish", "italian", "dutch", "flemish", "hungarian",
+        "municipal", "federal", "state", "oficial", "official", "religious", "islamic", "boys",
+        "girls", "coed", "metropolitan", "province", "district", "island", "coast", "interior",
+        "lower", "upper", "combined", "comprehensive", "selective", "charter", "magnet",
+        "modern", "special", "elite", "ordinary", "standard", "advanced", "science", "arts",
+        "language", "bilingual", "immersion", "remote", "regional", "very", "more", "less",
+        "total", "rest", "others", "year", "grade", "level", "type", "size", "area", "zone",
+        "sector", "system", "cluster", "unit", "group", "mainland", "north-east", "south-west"}
 
     def _strata_index(self) -> list[tuple[str, str, str, str]]:
         """(cycle, code, label, lower-case label) for every stratum label in
@@ -807,7 +896,15 @@ class Agent:
         "england": ((), re.compile(r"\bengland\b", re.I)),
         "wales": ((), re.compile(r"\bwales\b", re.I)),
         "northern ireland": ((), re.compile(r"northern ireland", re.I)),
+        # Baku is also the 2018/2022 economy QAZ; in 2025 it is a stratum of AZE
+        "baku": ((), re.compile(r"^Baku$", re.I)),
+        # Nazarbayev Intellectual Schools, as officials abbreviate them
+        "nis": ((), re.compile(r"^(?!.*non-intellectual).*\bintellectual\b", re.I)),
+        "nis schools": ((), re.compile(r"^(?!.*non-intellectual).*\bintellectual\b", re.I)),
     }
+    # aliases whose entity lives in another economy's file (economy code)
+    STRATA_ALIAS_ECONOMY = {"scotland": "GBR", "england": "GBR", "wales": "GBR",
+                            "northern ireland": "GBR", "baku": "AZE", "nis": "KAZ", "nis schools": "KAZ"}
 
     def _strata_entities(self, question: str) -> list[dict]:
         """The sub-economy entities a question names, each with its stratum
@@ -824,29 +921,43 @@ class Agent:
         low_q = " " + re.sub(r"[^a-z0-9 ]", " ", (question or "").lower()) + " "
         low_q = re.sub(r"\s+", " ", low_q)
         entities = []
+        # bare stratum codes in the question ("stratum KAZ21") name the entity directly
+        codes_named = [c for c in re.findall(r"\b[A-Z]{3}\d{2,4}\b", question or "")
+                       if any(code == c for _, code, _, _ in index)]
+        if codes_named:
+            ents = self._entities_from_codes(["STRATUM IN (" + ", ".join(f"'{c}'" for c in codes_named) + ")"])
+            if ents:
+                return ents
         for alias, (prefixes, rx) in self.STRATA_ALIASES.items():
             if f" {alias} " not in low_q:
                 continue
-            ent = {"name": alias.title(), "economy": "GBR", "codes": {}, "labels": {}}
+            economy = self.STRATA_ALIAS_ECONOMY.get(alias, "GBR")
+            ent = {"name": alias.title(), "economy": economy, "codes": {}, "labels": {}}
             for c, code, label, low in index:
-                if code.startswith(prefixes) or rx.search(label):
+                if (code.startswith(prefixes) or rx.search(label)) and \
+                        (economy == "GBR" or code.startswith(economy)):
                     ent["codes"].setdefault(c, []).append(code)
                     ent["labels"][code] = label
             if ent["codes"]:
-                entities.append(ent)
+                if economy != "GBR":
+                    # name the entity as the file does ("Intellectual schools")
+                    last_label = ent["labels"][ent["codes"][max(ent["codes"])][0]]
+                    ent["name"] = re.sub(r"^\w{3} - stratum \d+:\s*", "", last_label).split("/")[0].strip() or ent["name"]
+                if not any(e["economy"] == economy and e["codes"] == ent["codes"] for e in entities):
+                    entities.append(ent)
         if entities:
             return entities
         economy_words = {w for name in getattr(self, "economy_names", {}).values()
-                         for w in re.findall(r"[a-z]{5,}", str(name).lower())}
-        words = {w for w in re.findall(r"[a-z]{5,}", (question or "").lower())
+                         for w in re.findall(r"[a-z]{4,}", str(name).lower())}
+        words = {w for w in re.findall(r"[a-z]{4,}", (question or "").lower())
                  if w not in self.STRATUM_STOP and w not in catalog.STOPWORDS
-                 and w not in economy_words}
+                 and w not in economy_words and w not in self.STRATUM_GENERIC}
         hits = []
         for w in words:
             matches = [(c, code, label) for c, code, label, low in index
                        if re.search(rf"(?<![a-z-]){re.escape(w)}", low)
                        and not low.startswith("undisclosed")]
-            if not (0 < len(matches) <= 25):
+            if not (0 < len(matches) <= 60):
                 continue
             for c, code, label in matches:
                 lab = re.sub(r"[^a-z0-9 ]", " ", label.lower())
@@ -859,6 +970,15 @@ class Agent:
                                 pair = " ".join(lab_words[min(i, j):max(i, j) + 1])
                                 if f" {pair} " in low_q:
                                     phrase_ok = True
+                # (c) a one-word label SEGMENT that is a proper name ("Baku";
+                # "Dubai / Private / UK"; "Tashkent/Urban"): the word alone
+                # names the entity — common words ("Private", "City") never do
+                if not phrase_ok and len(matches) <= 60:
+                    body = re.sub(r"^\w{3} - stratum \d+:\s*", "", label)
+                    for seg in re.split(r"[/,:;()–]|\s-\s", body):
+                        seg = seg.strip()
+                        if seg and " " not in seg and seg[0].isupper() and seg.lower() == w:
+                            phrase_ok = True
                 if phrase_ok:
                     hits.append((c, code, label))
         if not hits:
@@ -891,13 +1011,33 @@ class Agent:
         if plan.get("action") == "clarify" or plan.get("template") == "raw_sql":
             return
         ents = self._strata_entities(question)
-        if not ents:
-            return
         wheres = [str(plan.get("where") or "")] + [str(ov.get("where") or "") for ov in
                                                    (plan.get("cycle_overrides") or {}).values()
                                                    if isinstance(ov, dict)]
-        if any(re.search(r"STRATUM", w, re.I) for w in wheres) and                 not any(str(b).upper().startswith("CASE") for b in plan.get("by") or []):
-            return                                  # the planner already did it right
+        planner_filter = any(re.search(r"STRATUM", w, re.I) for w in wheres)
+        if not ents and planner_filter:
+            # "excluding stratum KAZ21": no label named, but the codes are in
+            # the planner's filter — build the entity from them
+            ents = self._entities_from_codes(wheres)
+        if not ents:
+            return
+        planner_excluded = False
+        if planner_filter:
+            # The planner wrote the stratum filter itself: strip it and let the
+            # entity logic below add the labelled row NEXT TO the economy's own
+            # row (a plan filtered to the strata came back labelled as the
+            # whole economy); a NOT IN filter means "excluding".
+            clause = self.STRATUM_CLAUSE
+            planner_excluded = any(re.search(r"STRATUM\s*(NOT\s+IN|<>|!=)", w, re.I) for w in wheres)
+            plan["where"] = clause.sub("", str(plan.get("where") or "")).strip() or None
+            plan["where"] = re.sub(r"^\s*(AND|OR)\s+", "", plan["where"] or "", flags=re.I).strip() or None
+            for ov in (plan.get("cycle_overrides") or {}).values():
+                if isinstance(ov, dict) and ov.get("where"):
+                    ov["where"] = clause.sub("", str(ov["where"])).strip() or None
+                    ov["where"] = re.sub(r"^\s*(AND|OR)\s+", "", ov["where"] or "", flags=re.I).strip() or None
+                    if not ov["where"]:
+                        ov.pop("where", None)
+            self._fire("hook:planner_stratum_filter_stripped")
         cycles = [str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]]
         by = [b for b in (plan.get("by") or ["CNT"])
               if isinstance(b, str) and b.upper() != "STRATUM" and not b.upper().startswith("CASE")]
@@ -907,7 +1047,12 @@ class Agent:
         economy = ents[0]["economy"]
         base_where = str(plan.get("where") or "")
         if f"'{economy}'" not in base_where:
-            base_where = f"CNT = '{economy}'"
+            others = [c for c in dict.fromkeys(re.findall(r"'([A-Z]{3})'", base_where)) if c != economy]
+            if others and re.fullmatch(r"\s*CNT\s*(=|IN)\s*\(?\s*(?:'[A-Z]{3}'\s*,?\s*)+\)?\s*", base_where, re.I):
+                # "Baku 2022 (QAZ) and the Baku stratum 2025 (AZE)": keep both
+                base_where = "CNT IN (" + ", ".join(f"'{c}'" for c in others + [economy]) + ")"
+            else:
+                base_where = f"CNT = '{economy}'"
         overrides = plan.get("cycle_overrides") if isinstance(plan.get("cycle_overrides"), dict) else {}
         kept = []
         if len(ents) >= 2 and all(e["economy"] == economy for e in ents[:2]):
@@ -923,15 +1068,38 @@ class Agent:
                     overrides.setdefault(c, {})["group_col"] =                         f"CASE WHEN STRATUM IN ({ca}) THEN 1 WHEN STRATUM IN ({cb}) THEN 0 END"
                     kept.append(c)
             plan["group_col"] = overrides[kept[0]]["group_col"] if kept else "STRATUM"
-        else:
+        elif self.STRATA_REST_WORDS.search(question or ""):
+            # "Tashkent city versus the rest of the country": a gap between
+            # the entity's strata and every other stratum of the economy
             ent = ents[0]
-            plan["where"] = base_where
+            measure = plan.get("measure") or ((plan.get("measures") or [None])[0]) or "PV{pv}SCIE"
+            plan.update({"template": "gap", "measure": measure, "measures": None, "minuend": 1,
+                         "subtrahend": 0, "group_label": f"{ent['name']} minus the rest of {economy}",
+                         "where": base_where, "instrument": plan.get("instrument") or "stu_qqq"})
             for c in cycles:
                 codes = ent["codes"].get(c)
                 if codes:
                     lst = ", ".join(f"'{x}'" for x in codes)
-                    overrides.setdefault(c, {})["where"] = f"{base_where} AND STRATUM IN ({lst})"
+                    overrides.setdefault(c, {})["group_col"] = \
+                        f"CASE WHEN STRATUM IN ({lst}) THEN 1 WHEN STRATUM IS NOT NULL THEN 0 END"
                     kept.append(c)
+            plan["group_col"] = overrides[kept[0]]["group_col"] if kept else "STRATUM"
+        else:
+            # One entity: the plan stays the economy's (the OECD-reported
+            # figure) and the app adds a labelled row for the entity — or, for
+            # "excluding <entity>", for the economy without it. A plan filtered
+            # to the strata alone came back labelled as the whole economy.
+            ent = ents[0]
+            plan["where"] = base_where
+            exclude = bool(self.STRATA_EXCLUDE_WORDS.search(question or "")) or planner_excluded
+            codes_by_cycle = {c: ent["codes"][c] for c in cycles if ent["codes"].get(c)}
+            kept = list(cycles) if codes_by_cycle else []   # national rows in every cycle
+            if kept:
+                plan["_strata_rows"] = {
+                    "name": ent["name"], "economy": economy, "mode": "exclude" if exclude else "include",
+                    "label": (f"{economy} excl. {ent['name']}" if exclude else f"{economy}/{ent['name']}")[:48],
+                    "codes": codes_by_cycle,
+                    "labels": {code: ent["labels"].get(code, code) for cs in codes_by_cycle.values() for code in cs}}
         if not kept:
             return
         if len(kept) < len(cycles):
@@ -939,6 +1107,119 @@ class Agent:
         plan["cycles"] = kept
         plan["cycle_overrides"] = overrides
         self._fire("hook:strata_plan")
+
+    # "Level 1 or below" / "Level 1 or lower" / "nivel 1 o menos" is the
+    # OECD's low-performer group: every student below Level 2 (Levels 1a, 1b,
+    # 1c and below 1c). The planner read it as "below Level 1a".
+    LEVEL1_OR_BELOW = re.compile(
+        r"\blevel\s*1\s*(or|and)\s*(below|lower|less|under|beneath)\b|"
+        r"\b(at|in)\s+level\s*1\s+or\s+(below|lower)\b|\bnivel\s*1\s*o\s*(menos|inferior|por debajo)\b",
+        re.IGNORECASE)
+
+    def _fix_level_phrases(self, plan: dict, question: str) -> None:
+        if plan.get("action") == "clarify" or not self.LEVEL1_OR_BELOW.search(question or ""):
+            return
+        changed = False
+        for key in ("measure", "x", "y"):
+            expr = plan.get(key)
+            if not isinstance(expr, str):
+                continue
+            m = re.search(r"PV\{pv\}(MATH|READ|SCIE)\s*<\s*(\d+(?:\.\d+)?)", expr)
+            if not m:
+                continue
+            domain, cut = m.group(1), float(m.group(2))
+            bounds = dict(link_errors.LEVELS[domain])
+            level2 = bounds.get("2")
+            if level2 and abs(cut - level2) > 0.01 and abs(cut - bounds.get("1a", -1)) < 0.01:
+                plan[key] = expr.replace(m.group(2), f"{level2}")
+                changed = True
+        measures = plan.get("measures")
+        if isinstance(measures, list):
+            fixed = []
+            for item in measures:
+                expr = item.get("expr") if isinstance(item, dict) else item
+                if isinstance(expr, str):
+                    m = re.search(r"PV\{pv\}(MATH|READ|SCIE)\s*<\s*(\d+(?:\.\d+)?)", expr)
+                    if m:
+                        bounds = dict(link_errors.LEVELS[m.group(1)])
+                        if abs(float(m.group(2)) - bounds.get("1a", -1)) < 0.01:
+                            new = expr.replace(m.group(2), f"{bounds['2']}")
+                            item = {**item, "expr": new} if isinstance(item, dict) else new
+                            changed = True
+                fixed.append(item)
+            plan["measures"] = fixed
+        if changed:
+            plan["_level1_or_below"] = True
+            self._fire("hook:level1_or_below")
+
+    # a STRATUM filter the planner wrote, with its leading AND and parentheses
+    STRATUM_CLAUSE = re.compile(
+        r"(?:\s*\bAND\s+)?\(?\s*STRATUM\s*(?:NOT\s+IN|IN)\s*\([^)]*\)\s*\)?|"
+        r"(?:\s*\bAND\s+)?\(?\s*STRATUM\s*(?:=|<>|!=)\s*'[^']*'\s*\)?", re.I)
+
+    def _entities_from_codes(self, wheres: list[str]) -> list[dict]:
+        """Entities built from stratum codes in a planner's filter."""
+        codes = [c for w in wheres for m in self.STRATUM_CLAUSE.finditer(w)
+                 for c in re.findall(r"'([^']+)'", m.group(0))]
+        if not codes:
+            return []
+        index = {code: (c, label) for c, code, label, _ in self._strata_index()}
+        by_econ: dict[str, dict] = {}
+        for code in dict.fromkeys(codes):
+            if code not in index:
+                continue
+            cycle, label = index[code]
+            econ = "GBR" if code[:3] in ("QSC", "QUK") else code[:3]
+            name = re.sub(r"^\w{3} - stratum \d+:\s*", "", label).split("/")[0].strip() or code
+            ent = by_econ.setdefault(econ, {"name": name[:40], "economy": econ, "codes": {}, "labels": {}})
+            ent["codes"].setdefault(cycle, []).append(code)
+            ent["labels"][code] = label
+        return list(by_econ.values())
+
+    STRATA_EXCLUDE_WORDS = re.compile(
+        r"\b(excluding|exclude|without|other than|except|apart from|leaving out|minus the|net of)\b",
+        re.IGNORECASE)
+    STRATA_REST_WORDS = re.compile(
+        r"\b(rest of (the )?(country|economy|nation)|remaining (schools|regions|strata|country)|"
+        r"(versus|vs\.?|against|compared (to|with)) (the )?(rest|other (schools|regions|strata)|"
+        r"non-\w+ schools)|everyone else|all other (schools|regions))\b", re.IGNORECASE)
+
+    def _with_stratum_rows(self, res: pd.DataFrame, template: str, mplan: dict, tbl: str,
+                           by: tuple, cwhere: str | None, cycle: str, plan: dict) -> pd.DataFrame:
+        """Rows for a named sampling stratum next to the economy's own row,
+        labelled so they can never be read as the economy: "IDN/DKI Jakarta"
+        or "KAZ excl. Intellectual schools". A filter the planner wrote itself
+        on STRATUM relabels the row the same way."""
+        if res is None or "CNT" not in res.columns or "CNT" not in by:
+            return res
+        strata = plan.get("_strata_rows")
+        if strata and cycle in strata["codes"]:
+            lst = ", ".join(f"'{x}'" for x in strata["codes"][cycle])
+            op = "NOT IN" if strata["mode"] == "exclude" else "IN"
+            base = f"({cwhere}) AND " if cwhere else ""
+            swhere = f"{base}STRATUM {op} ({lst})"
+            if strata["mode"] == "exclude":
+                swhere += " AND STRATUM IS NOT NULL"
+            sres = self._run_template(template, mplan, tbl, by, swhere)
+            sres = self._suppress_small_cells(sres, cycle, plan)
+            sres, _ = self._drop_null_groups(sres, by)
+            sres = sres[sres["CNT"].astype(str) == strata["economy"]].copy()
+            sres["CNT"] = strata["label"]
+            self._fire("hook:stratum_rows")
+            return pd.concat([res, sres], ignore_index=True)
+        if cwhere and re.search(r"\bSTRATUM\s*(=|\bIN\b|\bNOT\s+IN\b)", cwhere, re.I):
+            m = re.search(r"\bSTRATUM\s*(=|IN|NOT\s+IN)\s*\(?\s*((?:'[^']*'\s*,?\s*)+)\)?", cwhere, re.I)
+            if m:
+                codes = re.findall(r"'([^']*)'", m.group(2))
+                labels = {code: label for c, code, label, _ in self._strata_index() if c == cycle}
+                names = [labels.get(code, code).split("/")[0].split(":")[-1].strip() for code in codes[:2]]
+                tag = ("excl. " if "NOT" in m.group(1).upper() else "") + ", ".join(dict.fromkeys(names))
+                if len(codes) > 2:
+                    tag += f" +{len(codes) - 2}"
+                res = res.copy()
+                res["CNT"] = res["CNT"].astype(str).map(lambda c: f"{c}/{tag}"[:48] if not c.endswith(" avg") else c)
+                plan.setdefault("_strata_relabelled", {})[cycle] = {"codes": codes, "tag": tag}
+        return res
 
     @staticmethod
     def _strata_block(hits) -> str:
@@ -948,8 +1229,11 @@ class Agent:
                  "type or school network inside an economy). The app applies the stratum "
                  "filter itself: plan the STATISTIC as if for the whole economy (by "
                  "[\"CNT\"], where = the economy; never group by STRATUM and never put a "
-                 "CASE in `by`; for 'A compared with B' between two such entities plan a "
-                 "gap and the app fills the group_col). Strata for reference:"]
+                 "CASE in `by`) — the app then ADDS the stratum as its own labelled row next "
+                 "to the economy's row, so 'Indonesia and Jakarta' or 'Kazakhstan excluding "
+                 "the NIS schools' IS one table: never clarify that both cannot be shown "
+                 "together. For 'A compared with B' between two such entities plan a gap "
+                 "and the app fills the group_col. Strata for reference:"]
         by_cycle: dict[str, list] = {}
         for cycle, code, label in hits:
             by_cycle.setdefault(cycle, []).append((code, label))
@@ -972,20 +1256,42 @@ class Agent:
         r"\ball[- ](participating |the )?(countries|economies|participants|nations)\b.{0,15}\b(average|mean)\b|"
         r"promedio (mundial|global|de todos)|moyenne (mondiale|globale)", re.IGNORECASE)
 
-    def _comparability_answer(self) -> str:
+    def _comparability_answer(self, codes: list[str] | None = None, text: str = "") -> str:
+        mode_note = ""
+        if codes:
+            years = sorted(set(self.YEAR_RE.findall(text or ""))) or CYCLES
+            changed = self._mode_changes(codes, years)
+            if changed:
+                who = "; ".join(f"{self.economy_names.get(c, c)} ({c}) was tested on {a} in {y1} and on "
+                                f"{b} in {y2}" for c, y1, a, y2, b in changed)
+                mode_note = (f" One more caveat applies here: {who}. The OECD still reports the linked "
+                             "trend with the link error, but the effect of the change of mode is not "
+                             "quantified in the public files, and the PISA 2025 Technical Report (Data "
+                             "Adjudication) recommends caution in interpreting such trends.")
+            else:
+                same = [f"{self.economy_names.get(c, c)} ({c})" for c in codes[:4]
+                        if any(c in self._mode_index().get(y, {}) for y in years)]
+                if same:
+                    mode_note = (f" The test mode (paper or computer, from ADMINMODE) did not change "
+                                 f"for {', '.join(same)} between the cycles named.")
+        example = ("“compare science scores for El Salvador, Sweden and Germany in 2022 and 2025”"
+                   if not codes else
+                   f"“compare reading scores for {', '.join(self.economy_names.get(c, c) for c in codes[:3])} "
+                   f"in {' and '.join(sorted(set(self.YEAR_RE.findall(text or ''))) or ['2018', '2025'])}”")
         return (
             "Yes, with one caveat. PISA scores in mathematics, reading and science are "
             "reported on scales that the OECD links from cycle to cycle, so a 2025 "
             "score can be compared with a 2018 or 2022 score, for the same economy or "
             "for different ones. The caveat is uncertainty: the linking itself adds a "
             "published link error to the standard error of any difference across "
-            "cycles, and this app includes it (for mean scores) so that significance "
-            "matches the OECD's reports. Questionnaire indices (sense of belonging, "
-            "ESCS and other WLE scales) are standardized within each cycle and are NOT "
-            "comparable across cycles; shares of a response code are. To see the "
-            "numbers, ask for both economies over the cycles you need — for example "
-            "“compare science scores for El Salvador, Sweden and Germany in 2022 and "
-            "2025” — and the table lists each economy per cycle with standard errors.")
+            "cycles, and this app includes it (for mean scores and, derived per economy, "
+            "for proficiency-level shares) so that significance matches the OECD's "
+            "reports. Questionnaire indices that the OECD re-standardizes in each cycle "
+            "(ESCS and most WLE scales) are NOT comparable across cycles; indices the OECD "
+            "kept on the earlier cycle's scale, and shares of a response code, are."
+            + mode_note +
+            " To see the numbers, ask for both economies over the cycles you need — for "
+            f"example {example} — and the table lists each economy per cycle with standard errors.")
 
     def _coverage_rate_answer(self) -> str:
         return (
@@ -1248,8 +1554,10 @@ class Agent:
             for code in s.codes():
                 if code in have:
                     continue
-                desc = catalog.describe(code)
-                desc = desc[desc.table_name.str.startswith(s.instrument)]
+                desc = catalog.describe(code.replace("{pv}", "1"))
+                prefixes = {"stu_sch": ("stu_qqq", "sch_qqq"), "stu_crt": ("stu_qqq", "crt_cog")}.get(
+                    s.instrument, (s.instrument,))
+                desc = desc[desc.table_name.str.startswith(prefixes)]
                 if desc.empty:
                     continue
                 have.add(code)
@@ -1312,7 +1620,15 @@ class Agent:
             return None
         alt = {str(ov.get("measure")) for ov in overrides.values()
                if isinstance(ov, dict) and ov.get("measure")}
-        if alt and alt != {expr}:
+        renamed = alt and alt != {expr} and \
+            frozenset({expr.strip().upper(), *[a.strip().upper() for a in alt]}) in self.RENAMED_TREND_INDICES
+        if alt and alt != {expr} and not renamed:
+            # a share of a response code on items with the SAME wording under
+            # different codes (ST184Q01HA 2018 -> ST263Q02JA 2022) is
+            # comparable; the OECD itself reports such trends
+            if self._same_item_wording(expr, alt):
+                plan.setdefault("_same_wording", []).append(f"{expr[:60]} ~ {', '.join(sorted(alt))[:80]}")
+                return None
             return ("different variables are used in different cycles "
                     f"({expr} vs {', '.join(sorted(alt))}), so the values are not on one scale")
         tokens = [t for t in set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr))
@@ -1323,9 +1639,90 @@ class Agent:
                 continue
             label = str(desc.iloc[-1].label or "")
             if t == "ESCS" or self.INDEX_LABEL.search(label):
+                if t != "ESCS":
+                    trend = self._trend_scaled(t, cycles, overrides)
+                    if trend:
+                        plan.setdefault("_trend_index", {})[t] = trend
+                        return None
                 return (f"{label} ({t}) is a questionnaire index standardized within each "
                         "PISA cycle (OECD mean 0, SD 1), so its level is comparable across "
                         "economies within a cycle but its change across cycles is not")
+        return None
+
+    def _same_item_wording(self, expr: str, alternatives: set) -> bool:
+        """True when every expression is a share of response codes on items
+        whose codebook wording is the same once the stem ("Agree:",
+        "Agree/disagree:") and punctuation are removed."""
+        import difflib
+
+        def item_key(e: str) -> str | None:
+            core = self._unwrap_null_safe(str(e))
+            if not re.match(r"^\s*CASE\b", core, re.I) or "100" not in core:
+                return None
+            vars_ = self._case_variables(core)
+            if len(vars_) != 1 or link_errors.domain_of(vars_[0]):
+                return None
+            desc = catalog.describe(vars_[0])
+            if desc.empty:
+                return None
+            label = str(desc.iloc[-1].label or "").lower()
+            label = re.sub(r"^[^:]{0,60}:\s*", "", label)          # drop the stem
+            label = label.replace("can't", "cannot").replace("’", "'")
+            label = re.sub(r"[^a-z0-9 ]", " ", label)
+            m = re.search(rf"\b{re.escape(vars_[0])}\s*(IN\s*\([^)]*\)|[<>=!]+\s*[-\d.]+)", core.split("THEN")[0], re.I)
+            codes = re.sub(r"\s+", "", m.group(1)).upper() if m else ""
+            return re.sub(r"\s+", " ", label).strip() + "|" + codes
+
+        keys = [item_key(e) for e in [expr, *alternatives]]
+        if any(k is None for k in keys):
+            return False
+        base_label, base_codes = keys[0].split("|")
+        for k in keys[1:]:
+            label, codes = k.split("|")
+            if codes != base_codes or difflib.SequenceMatcher(None, base_label, label).ratio() < 0.85:
+                return False
+        return True
+
+    # Indices the OECD renamed between cycles while keeping the scale
+    RENAMED_TREND_INDICES = {frozenset({"BEINGBULLIED", "BULLIED"})}
+    # Known trend scales (OECD reports their change across cycles)
+    KNOWN_TREND_INDICES = {"BULLIED", "BEINGBULLIED", "BELONG"}
+
+    def _index_oecd_mean(self, var: str, cycle: str) -> float | None:
+        """Unweighted mean over OECD members of the weighted country means of
+        an index — ~0 when the OECD re-standardized the index in that cycle."""
+        cache = self.__dict__.setdefault("_index_mean_cache", {})
+        key = (var, cycle)
+        if key not in cache:
+            try:
+                rows = self.con.execute(
+                    f"SELECT CNT, SUM(W_FSTUWT * {var}) / SUM(W_FSTUWT) FROM stu_qqq_{cycle} "
+                    f"WHERE {var} IS NOT NULL AND OECD = 1 GROUP BY CNT").fetchall()
+                vals = [r[1] for r in rows if r[1] is not None]
+                cache[key] = float(np.mean(vals)) if len(vals) >= 5 else None
+            except Exception:  # noqa: BLE001 — not in this cycle's file
+                cache[key] = None
+        return cache[key]
+
+    def _trend_scaled(self, var: str, cycles: list[str], overrides: dict) -> dict | None:
+        """Evidence that an index was kept on an earlier cycle's scale rather
+        than re-standardized: its OECD-average is clearly not 0 in a later
+        cycle (a re-standardized index has OECD mean 0 by construction), or
+        it is a documented trend scale. Returns {cycle: OECD mean} or None."""
+        var = var.upper()
+        cyc = sorted(str(c) for c in cycles)
+        if len(cyc) < 2:
+            return None
+        names = {c: var for c in cyc}
+        for c, ov in overrides.items():
+            if isinstance(ov, dict) and ov.get("measure") and str(c) in names:
+                m = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(ov["measure"]))
+                if m:
+                    names[str(c)] = m[0].upper()
+        means = {c: self._index_oecd_mean(names[c], c) for c in cyc}
+        later = [c for c in cyc[1:] if means.get(c) is not None]
+        if any(abs(means[c]) >= 0.05 for c in later) or var in self.KNOWN_TREND_INDICES:
+            return {c: round(m, 3) for c, m in means.items() if m is not None}
         return None
 
     def _blank_non_comparable_changes(self, table: pd.DataFrame, plan: dict,
@@ -1445,6 +1842,8 @@ class Agent:
             pass
         return text
 
+    CI_WORDS = re.compile(r"\b(confidence intervals?|95\s*%\s*ci\b|\bci\b|intervalos? de confianza|"
+                          r"konfidenzintervall\w*|intervalle de confiance)", re.I)
     CHINA_WORDS = re.compile(r"\b(shanghai|beijing|jiangsu|zhejiang|china|chinese)\b", re.I)
     RANK_WORDS = re.compile(r"\b(rank|ranks|ranked|ranking|rankings|order)\b", re.I)
 
@@ -1555,7 +1954,8 @@ class Agent:
     SHARE_CASE = re.compile(
         r"^\s*CASE\s+WHEN\s+(?:\(?\s*)?(?P<var>[A-Za-z_][A-Za-z0-9_{}]*)\s*\)?\s*"
         r"(?P<op><=|>=|<|>|=|IN)\s*(?P<val>\(?[^)]*?\)?|[-\d.]+)\s+THEN\s+100(?:\.0)?"
-        r"\s+ELSE\s+0(?:\.0)?\s+END\s*$", re.IGNORECASE)
+        r"(?:\s+WHEN\s+(?P=var)\s+(?:IN\s*\([^)]*\)|IS NOT NULL|[<>=!]+\s*[-\d.]+)\s+THEN\s+0(?:\.0)?)?"
+        r"(?:\s+ELSE\s+(?:0(?:\.0)?|NULL))?\s+END\s*$", re.IGNORECASE)
     LEVEL_CUTOFFS = {"420.07": "Level 2 (mathematics)", "407.47": "Level 2 (reading)",
                      "409.54": "Level 2 (science)", "606.99": "Level 5 (mathematics)",
                      "625.61": "Level 5 (reading)", "633.33": "Level 5 (science)"}
@@ -1585,7 +1985,17 @@ class Agent:
             try:
                 labels = json.loads(desc.iloc[-1].value_labels) if not desc.empty and desc.iloc[-1].value_labels else {}
                 key = val.rstrip("0").rstrip(".") if "." in val else val
-                value_text = f"{key} ({labels[key] if key in labels else labels[key + '.0']})" if (key in labels or key + '.0' in labels) else key
+                if op == "IN":
+                    # every code in the list with its label: "(1, 2) [1 =
+                    # Strongly disagree; 2 = Disagree]" — the direction of a
+                    # share is then in the statement, where the prose check sees it
+                    keys = [k.strip().rstrip("0").rstrip(".") if "." in k else k.strip()
+                            for k in re.findall(r"[-\d.]+", val)]
+                    decoded = [f"{k} = {labels.get(k) or labels.get(k + '.0')}" for k in keys
+                               if k in labels or k + ".0" in labels]
+                    value_text = f"({', '.join(keys)})" + (f" [{'; '.join(decoded)}]" if decoded else "")
+                else:
+                    value_text = f"{key} ({labels[key] if key in labels else labels[key + '.0']})" if (key in labels or key + '.0' in labels) else key
             except Exception:  # noqa: BLE001 — a label is a nicety
                 pass
             return f"% with {label} ({var}) {op.lower() if op == 'IN' else op} {value_text}"
@@ -1634,6 +2044,21 @@ class Agent:
                 guard = vars_[0] if len(vars_) == 1 else "COALESCE(" + ", ".join(vars_) + ")"
                 text = f"CASE WHEN ({guard}) IS NULL THEN NULL ELSE ({text}) END"
         return text if text != expr.strip() else expr
+
+    def _null_safe_dummy(self, expr: str | None) -> str | None:
+        """A categorical predictor written CASE WHEN IMMIG = 2 THEN 1 ELSE 0 END
+        puts students with no value on IMMIG into the reference category
+        (natives). Keep NULL as NULL so they drop out listwise, as the method
+        note says — no rescaling (a dummy stays 0/1)."""
+        if not isinstance(expr, str) or not re.match(r"^\s*CASE\b", expr, re.IGNORECASE):
+            return expr
+        text = expr.strip()
+        if self.ELSE_ZERO.search(text):
+            vars_ = self._case_variables(text)
+            if vars_:
+                guard = vars_[0] if len(vars_) == 1 else "COALESCE(" + ", ".join(vars_) + ")"
+                return f"CASE WHEN ({guard}) IS NULL THEN NULL ELSE ({text}) END"
+        return expr
 
     # Measures a question names, matched against what the plan actually
     # uses — a requested measure the plan leaves out is stated, never dropped.
@@ -1811,6 +2236,9 @@ class Agent:
         m = re.fullmatch(r"stu_sch_(\d{4})", table)
         if m:
             return [f"stu_qqq_{m.group(1)}", f"sch_qqq_{m.group(1)}"]
+        m = re.fullmatch(r"stu_crt_(\d{4})", table)
+        if m:
+            return [f"stu_qqq_{m.group(1)}", f"crt_cog_{m.group(1)}"]
         return [table]
 
     def _table_columns(self, table: str) -> set[str]:
@@ -2098,6 +2526,171 @@ class Agent:
                 f"the {template} plan is incomplete — missing {', '.join(missing)}. "
                 "Try naming the variable or measure you want analyzed.")
 
+    # Plan fields a planner has written into `by` as placeholders for their
+    # own value ("by": ["CNT", "group_col"]).
+    BY_PLACEHOLDERS = ("group_col", "variable", "quart_variable", "x", "y", "measure")
+
+    def _auto_instrument(self, plan: dict) -> None:
+        """A variable that lives only in the school file (RATCMP1, SC001Q01TA)
+        or in the creative-thinking file (PV1CRTH_NC) is analysed through the
+        joined student view (stu_sch / stu_crt) — the planner sometimes leaves
+        the instrument at stu_qqq and the binder error reached the user. A
+        single measure that exists in some planned cycles only (creative
+        thinking 2022, global competence 2018) keeps those cycles and the
+        others are stated, as several measures already are."""
+        instrument = str(plan.get("instrument") or "stu_qqq")
+        cycles = [str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE] if str(c) in CYCLES]
+        if not cycles:
+            return
+        if instrument in ("sch_qqq", "tch_qqq") and str(plan.get("template")) != "raw_sql":
+            # the estimator needs the student weights: school characteristics
+            # are reported for the STUDENTS in those schools (the OECD's own
+            # convention: "% of students in schools whose principal reports…")
+            plan["instrument"] = instrument = "stu_sch"
+            plan["_school_file_to_students"] = True
+            self._fire("hook:auto_instrument:sch_to_stu_sch")
+        text = " ".join(str(plan.get(k) or "") for k in self.COVERAGE_FIELDS + ("where", "by"))
+        tokens = [t for t in dict.fromkeys(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text.replace("{pv}", "1")))
+                  if len(t) >= 3 and t not in self.SQL_WORDS and not catalog.describe(t).empty]
+        if instrument == "stu_qqq" and tokens:
+            missing = [t for t in tokens if all(t not in self._table_columns(f"stu_qqq_{c}") for c in cycles)]
+            if missing:
+                in_sch = all(any(t in self._table_columns(f"sch_qqq_{c}") for c in cycles) for t in missing)
+                in_crt = all(any(t in self._table_columns(f"crt_cog_{c}") for c in cycles) for t in missing)
+                if in_sch:
+                    plan["instrument"] = instrument = "stu_sch"
+                    plan["_auto_instrument"] = ("stu_sch", missing)
+                    self._fire("hook:auto_instrument:stu_sch")
+                elif in_crt and self._table_columns("stu_crt_2022"):
+                    plan["instrument"] = instrument = "stu_crt"
+                    plan["_auto_instrument"] = ("stu_crt", missing)
+                    self._fire("hook:auto_instrument:stu_crt")
+        # cycles in which the (single) measure does not exist at all
+        measure = plan.get("measure")
+        if isinstance(measure, str) and measure and not plan.get("measures") and len(cycles) >= 1:
+            mtoks = [t for t in dict.fromkeys(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", measure.replace("{pv}", "1")))
+                     if len(t) >= 3 and t not in self.SQL_WORDS and not catalog.describe(t).empty]
+            if mtoks:
+                overrides = plan.get("cycle_overrides") if isinstance(plan.get("cycle_overrides"), dict) else {}
+                have = [c for c in cycles if self._table_columns(f"{instrument}_{c}")
+                        and all(t in self._table_columns(f"{instrument}_{c}") for t in mtoks)]
+                lacking = [c for c in cycles if self._table_columns(f"{instrument}_{c}") and c not in have
+                           and not (isinstance(overrides.get(c), dict) and overrides[c].get("measure"))]
+                if have and lacking:
+                    plan["cycles"] = have
+                    plan["_measure_cycles_dropped"] = lacking
+                    self._fire("hook:measure_cycles_dropped")
+
+    def _plain_by(self, cols: list[str], plan: dict) -> list[str]:
+        """A CASE expression in `by` ("CASE WHEN MALE = 0 THEN 'Female' …")
+        becomes the variable it recodes: the groups are then the variable's
+        codes, labelled from the codebook in every statement."""
+        out = []
+        for b in cols:
+            if re.match(r"^\s*CASE\b", b, re.I):
+                vars_ = self._case_variables(b)
+                if vars_:
+                    out.append(vars_[0])
+                    plan.setdefault("_case_by_replaced", []).append(f"{b[:60]} → {vars_[0]}")
+                    self._fire("hook:case_by_replaced")
+                continue
+            out.append(b)
+        return list(dict.fromkeys(out))
+
+    def _normalize_plan_shape(self, plan: dict, template: str | None) -> None:
+        """Deterministic repairs of plan shapes the planner gets wrong in ways
+        that would crash or, worse, silently compute the wrong statistic:
+        - a `by` entry naming a plan FIELD ("group_col") stands for its value;
+        - a gap between two ECONOMIES (group_col CNT) is two per-economy rows,
+          whose difference and its change the app states itself (a gap grouped
+          by its own group column crashed);
+        - a benchmark average ("include_average_of") needs per-economy rows:
+          with `by` empty the whole filter was pooled into one student-weighted
+          mean of every student in the database and labelled as the group;
+        - a filter naming several economies with no CNT grouping is the same
+          pooled mean, which is no OECD statistic: the rows are per economy
+          and the group's unweighted average is added as a benchmark row."""
+        if template == "raw_sql":
+            return
+        self._auto_instrument(plan)
+        by = [b for b in (plan.get("by") or []) if isinstance(b, str)]
+        fixed = []
+        for b in by:
+            if b in self.BY_PLACEHOLDERS and isinstance(plan.get(b), str) and plan.get(b):
+                fixed.append(plan[b])
+                plan.setdefault("_by_placeholder", []).append(b)
+            else:
+                fixed.append(b)
+        by = self._plain_by(fixed, plan)
+        overrides = plan.get("cycle_overrides") if isinstance(plan.get("cycle_overrides"), dict) else {}
+        for ov in overrides.values():
+            if isinstance(ov, dict) and isinstance(ov.get("by"), list):
+                ov["by"] = self._plain_by([b for b in ov["by"] if isinstance(b, str)], plan)
+        # a gap grouped by its own group column has one row per group and no
+        # contrast (and crashed on duplicate labels)
+        if template in ("gap", "quartile_gap") and plan.get("group_col") in by:
+            by = [b for b in by if b != plan.get("group_col")]
+            plan["_group_col_dropped_from_by"] = True
+        where = str(plan.get("where") or "")
+        # "ESCS_Q = 4" — an invented quarter column in the filter: the quarters
+        # are computed by quartile_means; the wanted quarter(s) filter its rows
+        m = re.search(r"(?:\bAND\s+)?\(?\s*\b([A-Z][A-Z0-9]*)_Q(?:UART(?:ER|ILE)?S?)?\s*(=|IN)\s*\(?\s*([\d,\s]+?)\s*\)?\s*\)?",
+                      where, re.I)
+        if m and template in ("quartile_means", "quartile_gap", "weighted_mean", "weighted_proportion"):
+            quarters = [int(x) for x in re.findall(r"\d", m.group(3)) if x in "1234"]
+            plan["where"] = re.sub(r"^\s*(AND|OR)\s+", "", where.replace(m.group(0), "").strip(), flags=re.I).strip() or None
+            where = plan["where"] or ""
+            plan.setdefault("quart_variable", m.group(1).upper())
+            if template != "quartile_means":
+                plan["template"] = template = "quartile_means"
+            plan["_quarter_filter"] = quarters or [4]
+            self._fire("hook:quarter_filter")
+        if template == "gap" and str(plan.get("group_col") or "").upper() == "CNT":
+            a, b = str(plan.get("minuend") or "").upper(), str(plan.get("subtrahend") or "").upper()
+            if re.fullmatch(r"[A-Z]{3}", a) and re.fullmatch(r"[A-Z]{3}", b):
+                plan.update({"template": "weighted_mean", "where": f"CNT IN ('{a}', '{b}')",
+                             "group_col": None, "minuend": None, "subtrahend": None,
+                             "_pair": [a, b]})
+                template = "weighted_mean"
+                by = ["CNT"] + [c for c in by if c.upper() != "CNT"]
+                self._fire("hook:economy_gap_to_rows")
+        codes = list(dict.fromkeys(re.findall(r"'([A-Z]{3})'", where)))
+        several = len(codes) >= 2 and re.search(r"\bCNT\s+IN\b", where, re.I) and \
+            not re.search(r"\bNOT\s+IN\b", where, re.I)
+        benchmarks = bool(plan.get("include_oecd_average")) or bool(plan.get("include_average_of"))
+        if "CNT" not in [c.upper() for c in by] and (benchmarks or several) \
+                and template in ("weighted_mean", "weighted_proportion", "gap", "quartile_means",
+                                 "quartile_gap", "percentiles", "percentile_spread",
+                                 "correlation", "regression"):
+            by = ["CNT"] + by
+            plan["_pooled_to_rows"] = True
+            if several and not benchmarks and len(codes) >= 3:
+                # "the average of these countries" = their unweighted average,
+                # the OECD-average convention — shown as a benchmark row
+                plan["include_average_of"] = [codes]
+            self._fire("hook:pooled_to_rows")
+        if not where.strip() and not plan.get("regions") and plan.get("_pooled_to_rows"):
+            # a benchmark group asked for as ONE number ("average of KAZ, UZB,
+            # KGZ, QTJ") with no filter: the rows are the members. A ranking
+            # of every economy with the OECD average beside it keeps its rows.
+            members = set()
+            for bench in self._benchmarks(plan):
+                if isinstance(bench, tuple):
+                    members |= set(bench)
+                elif str(bench).lower() == "oecd":
+                    for c in [str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]]:
+                        if c in CYCLES:
+                            members |= self._oecd_codes(c)
+                else:
+                    canon = regions.canonical(str(bench))
+                    if canon:
+                        members |= set(regions.REGIONS.get(canon, []))
+            if members:
+                plan["where"] = "CNT IN (" + ", ".join(f"'{c}'" for c in sorted(members)) + ")"
+                plan["_members_as_rows"] = True
+                self._fire("hook:members_as_rows")
+        plan["by"] = by
+
     def execute(self, plan: dict) -> tuple[pd.DataFrame, dict]:
         self._validate_plan(plan)
         template = plan.get("template")
@@ -2106,6 +2699,10 @@ class Agent:
         if unknown:
             raise ValueError(f"unknown cycle(s) {unknown}; available: {CYCLES}")
         instrument = plan.get("instrument") or "stu_qqq"
+        self._normalize_plan_shape(plan, template)
+        template = plan.get("template")
+        instrument = plan.get("instrument") or "stu_qqq"
+        cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
         by = tuple(plan.get("by") or ())
         where = plan.get("where") or None
         self._check_fragment(where)
@@ -2134,6 +2731,25 @@ class Agent:
                 if isinstance(value, str):
                     self._check_fragment(value)
         self._align_gender_direction(plan, overrides)
+        # A per-cycle `by` (["CNT", "ST004D01T"] in 2022, ["CNT", "MALE"] in
+        # 2025) applies to that cycle; the columns are renamed to the main
+        # plan's so the cycles merge. It was silently ignored before.
+        by_per_cycle: dict[str, tuple] = {}
+        ov_bys = {c: [b for b in ov.get("by") if isinstance(b, str)]
+                  for c, ov in overrides.items() if isinstance(ov.get("by"), list) and ov.get("by")}
+        if ov_bys and all(c in ov_bys for c in cycles):
+            first = ov_bys[cycles[0]]
+            if all(len(ov_bys[c]) == len(first) for c in cycles):
+                if len(first) > len(by):
+                    by = tuple(first)
+                    plan["by"] = list(by)
+                for c in cycles:
+                    if tuple(ov_bys[c]) != by and len(ov_bys[c]) == len(by):
+                        by_per_cycle[c] = tuple(ov_bys[c])
+                plan["_by_overrides"] = {c: list(v) for c, v in by_per_cycle.items()}
+                self._fire("hook:by_override")
+        for ov in overrides.values():
+            ov.pop("by", None)
         # A stratum fixed by the filter (STRATUM = 'KAZ21', per cycle) must not
         # also be a grouping column: stratum codes differ between cycles, so a
         # trend grouped by STRATUM becomes one blank-riddled row per code.
@@ -2146,6 +2762,18 @@ class Agent:
         if template == "raw_sql":
             table = self._run_raw_sql(plan["sql"])
             prov = self._provenance(plan, [], raw=True)
+            sql_text = str(plan.get("sql") or "")
+            pv_single = re.search(r"\bPV(\d{1,2})(MATH|READ|SCIE)\b", sql_text)
+            weighted = re.search(r"W_FSTUWT", sql_text, re.I)
+            prov["notes"].append(
+                "Computed by direct SQL, outside the survey estimator: "
+                + ("no student weights were applied, so the figures describe the sample, not "
+                   "the population; " if not weighted else "")
+                + (f"a single plausible value (PV{pv_single.group(1)}) was used, so the figure "
+                   "is illustrative and not a PISA estimate; " if pv_single else "")
+                + "no replicate-weight (BRR) standard error is available for it. Ask for the "
+                  "statistic by name (mean, share, gap, correlation) to get the official estimate "
+                  "with its standard error.")
             return table, prov
 
         tables = [f"{instrument}_{c}" for c in cycles]
@@ -2179,6 +2807,14 @@ class Agent:
             plan["_derived_share"] = True
             self._fire("hook:derived_share")
         measures_all = self._measure_list(plan)
+        if template == "regression" and isinstance(plan.get("predictors"), list):
+            # categorical dummies keep NULL as NULL (listwise), never as the
+            # reference category
+            safe = [self._null_safe_dummy(x) if isinstance(x, str) else x for x in plan["predictors"]]
+            if safe != plan["predictors"]:
+                plan["predictors"] = safe
+                plan["_null_safe_dummy"] = True
+                self._fire("hook:null_safe_dummy")
         # shares written as CASE ... ELSE 0 END must not count non-respondents
         for key in ("measure", "x", "y"):
             fixed = self._null_safe_share(plan.get(key))
@@ -2216,13 +2852,27 @@ class Agent:
                     plan.setdefault("_unavailable", {}).setdefault(cycle, []).append(label)
                     continue
                 mplan = {**cplan, "measure": expr} if expr is not None else cplan
-                res = self._run_template(template, mplan, tbl, by, cwhere)
+                cby = by_per_cycle.get(cycle, by)
+                res = self._run_template(template, mplan, tbl, cby, cwhere)
+                if cby != by:
+                    res = res.rename(columns=dict(zip(cby, by)))
+                    for src, dst in zip(cby, by):
+                        # MALE (1 = male, 0 = female) rows recoded to the main
+                        # plan's ST004D01T (2 = male, 1 = female), by label
+                        if src != dst and src in self.GENDER_CODES and dst in self.GENDER_CODES \
+                                and dst in res.columns:
+                            inv = {v: k for k, v in self.GENDER_CODES[dst].items()}
+                            res[dst] = res[dst].map(
+                                lambda v: float(inv[self.GENDER_CODES[src][str(int(v))]])
+                                if not pd.isna(v) and str(int(v)) in self.GENDER_CODES[src]
+                                and self.GENDER_CODES[src][str(int(v))] in inv else v)
                 for who, why in (getattr(res, "attrs", {}) or {}).get("skipped", []):
                     plan.setdefault("_regression_skipped", []).append((f"{who} (PISA {cycle})", why))
                 res = self._suppress_small_cells(res, cycle, plan)
                 res, dropped_groups = self._drop_null_groups(res, by)
                 for col, n in dropped_groups.items():
                     plan.setdefault("_null_groups", {}).setdefault(col, {})[cycle] = n
+                res = self._with_stratum_rows(res, template, mplan, tbl, by, cwhere, cycle, plan)
                 if benchmarks and "CNT" in by:
                     # "The OECD / EU average" means ALL members of the group — when
                     # the question is filtered to a few countries, the average must
@@ -2316,6 +2966,9 @@ class Agent:
                                              "quartile_gap", "percentiles", "percentile_spread"):
             self._blank_non_comparable_changes(table, plan, run_measures, cycles, overrides)
 
+        if plan.get("_quarter_filter") and "quarter" in table.columns:
+            keep = table["quarter"].astype(float).isin([float(q) for q in plan["_quarter_filter"]])
+            table = table[keep].drop(columns=["quarter"]).reset_index(drop=True)
         sort_by = plan.get("sort_by")
         if sort_by:
             candidates = [sort_by, f"estimate_{cycles[-1]}" if sort_by == "estimate" else sort_by]
@@ -2360,6 +3013,21 @@ class Agent:
                 "Nam is not limited to what the link errors capture and recommends caution in "
                 "reporting and interpreting their trends; the change shown here carries only the "
                 "sampling and link-error uncertainty.")
+        if len(cycles) >= 2 and is_score:
+            # any other change of test mode between the first and last cycle
+            # shown (Jordan, Lebanon, Moldova, North Macedonia, Romania, Saudi
+            # Arabia, Ukraine, Argentina: paper in 2018, computer in 2022)
+            plain = [c for c in codes_in_table if re.fullmatch(r"[A-Z]{3}", c)]
+            changed = [x for x in self._mode_changes(plain, cycles) if x[0] not in self.MODE_CHANGE_2025]
+            if changed:
+                who = "; ".join(f"{self._names([c])}: {a} in {y1}, {b} in {y2}" for c, y1, a, y2, b in changed[:8])
+                prov["notes"].append(
+                    "Test mode changed between the cycles shown (from ADMINMODE in the student "
+                    f"files): {who}" + (f"; and {len(changed) - 8} more" if len(changed) > 8 else "")
+                    + ". The OECD reports these trends on the linked scale with the link error; the "
+                    "effect of the change of mode is not quantified in the public files, so read "
+                    "the change with that caution.")
+                self._fire("hook:mode_change_note")
         return table, prov
 
     # Economies whose 2025 test moved from paper to computer (PISA 2025
@@ -2390,12 +3058,34 @@ class Agent:
         if plan.get("include_oecd_average"):
             out.append("OECD")
         raw = plan.get("include_average_of")
-        if isinstance(raw, str):
+        if isinstance(raw, (str, dict)):
             raw = [raw]
         if isinstance(raw, list):
-            codes = [str(x).upper() for x in raw if isinstance(x, str) and re.fullmatch(r"[A-Za-z]{3}", str(x))]
-            names = [x for x in raw if isinstance(x, str) and not re.fullmatch(r"[A-Za-z]{3}", x)]
-            if len(codes) >= 2 and len(codes) == len(raw):
+            labels = plan.setdefault("_group_labels", {})
+            flat = []
+            for x in raw:
+                # a NAMED ad-hoc group: {"label": "Mercosur", "members": [...]}
+                # or a bare list of codes — one benchmark row each, so two
+                # blocks asked for together never merge into one group
+                if isinstance(x, dict):
+                    members = x.get("members") or x.get("codes") or []
+                    codes_x = tuple(sorted({str(c).upper() for c in members
+                                            if isinstance(c, str) and re.fullmatch(r"[A-Za-z]{3}", c)}))
+                    if len(codes_x) >= 2:
+                        label = str(x.get("label") or "").strip()
+                        if label and len(label) <= 28:      # a name, not a member list
+                            labels[codes_x] = label
+                        out.append(codes_x)
+                elif isinstance(x, list):
+                    codes_x = tuple(sorted({str(c).upper() for c in x
+                                            if isinstance(c, str) and re.fullmatch(r"[A-Za-z]{3}", c)}))
+                    if len(codes_x) >= 2:
+                        out.append(codes_x)
+                elif isinstance(x, str):
+                    flat.append(x)
+            codes = [str(x).upper() for x in flat if re.fullmatch(r"[A-Za-z]{3}", str(x))]
+            names = [x for x in flat if not re.fullmatch(r"[A-Za-z]{3}", x)]
+            if len(codes) >= 2 and len(codes) == len(flat):
                 out.append(tuple(sorted(set(codes))))        # ad-hoc group
             else:
                 out.extend(names)
@@ -2422,7 +3112,8 @@ class Agent:
         None when the name is not a known group."""
         present = self.present.get(cycle, set())
         if isinstance(bench, tuple):
-            return "Group avg", set(bench) & present
+            label = ((plan or {}).get("_group_labels") or {}).get(bench) or "Group"
+            return f"{label} avg", set(bench) & present
         key = str(bench).strip().lower()
         if key == "oecd":
             members = self._oecd_codes(cycle)
@@ -2474,7 +3165,12 @@ class Agent:
                     if avg is None:
                         continue
                     if multi:
-                        avg.insert(1, "measure", mlabel)
+                        # the basis may be the result frame itself, which
+                        # already carries the measure column
+                        if "measure" in avg.columns:
+                            avg["measure"] = mlabel
+                        else:
+                            avg.insert(1, "measure", mlabel)
                     per_cycle[c] = pd.concat([per_cycle[c], avg], ignore_index=True)
                     plan.setdefault("_benchmark_members", {}).setdefault(c, {})[label_b] = sorted(common)
 
@@ -2486,10 +3182,14 @@ class Agent:
         countries). Economies are independent samples, so SE = sqrt(sum
         SE_i^2) / N, with N the members that have an estimate."""
         sub = res[res["CNT"].isin(members) & res["estimate"].notna()]
-        if sub.empty:
-            return None
         id_cols = [c for c in res.columns
                    if c not in ("CNT", "estimate", "se", "n_pv")]
+        if id_cols:
+            # a missing grouping value is not a group (no "average of the
+            # students with no gender recorded")
+            sub = sub.dropna(subset=[c for c in id_cols if c in sub.columns])
+        if sub.empty:
+            return None
 
         def agg(group: pd.DataFrame) -> pd.Series:
             n = int(group["estimate"].notna().sum())
@@ -2774,11 +3474,51 @@ class Agent:
                     notes.append(f"PISA {cycle_x}: {self._names(codes)} is left out of the {lab} "
                                  "for this domain, as in the OECD's published tables (its reading "
                                  "results were withheld from the 2018 comparison tables, Annex A9).")
+        contrast_case = any(
+            isinstance(v, str) and re.match(r"^\s*CASE\b", v, re.I) and not re.search(r"\bELSE\b", v, re.I)
+            for v in [plan.get("group_col"), plan.get("measure")] +
+            [ov.get("group_col") for ov in (plan.get("cycle_overrides") or {}).values() if isinstance(ov, dict)])
         for cycle_x, rows in sorted((plan.get("_low_coverage") or {}).items()):
             shown = "; ".join(f"{k}: {pct}% of the weighted population has no value" for k, pct in rows[:6])
-            notes.append(f"PISA {cycle_x}: the variable is missing for a large part of the group "
-                         f"({shown}{'; …' if len(rows) > 6 else ''}); the estimate describes the "
-                         "students who have a value, not the whole population.")
+            if contrast_case:
+                notes.append(f"PISA {cycle_x}: a large part of the group is outside the contrast "
+                             f"({shown}{'; …' if len(rows) > 6 else ''}) — students in categories the "
+                             "contrast does not name (for example towns in a rural-vs-city contrast) "
+                             "plus non-respondents; the estimate describes the compared categories only.")
+            else:
+                notes.append(f"PISA {cycle_x}: the variable is missing for a large part of the group "
+                             f"({shown}{'; …' if len(rows) > 6 else ''}); the estimate describes the "
+                             "students who have a value, not the whole population.")
+        if plan.get("_null_safe_dummy"):
+            notes.append("Categorical predictors written as CASE dummies keep students with no value "
+                         "on the underlying variable as missing (dropped listwise), not as members of "
+                         "the reference category.")
+        if plan.get("_same_wording"):
+            notes.append("The item code differs between cycles but the item wording and response codes "
+                         "are the same, so the share is compared across cycles (as the OECD does for "
+                         "retained items); the stem wording changed slightly (e.g. \"Agree:\" to "
+                         "\"Agree/disagree:\"), which is a caveat, not a break in the series. Sampling SE "
+                         "only — no link error applies to a response-code share.")
+        if plan.get("_trend_index"):
+            for var, means in plan["_trend_index"].items():
+                shown = ", ".join(f"{c}: {m:+.2f}" for c, m in sorted(means.items()))
+                notes.append(f"{var} is treated as a trend scale: its OECD-average is not 0 in every "
+                             f"cycle ({shown}), so the OECD did not re-standardize it in each cycle but "
+                             "kept it on the earlier cycle's scale. The change shown carries sampling "
+                             "error only — the OECD publishes no link error for questionnaire indices.")
+        if plan.get("_measure_cycles_dropped"):
+            notes.append("The measure does not exist in PISA " + ", ".join(plan["_measure_cycles_dropped"])
+                         + " (not assessed in that cycle); only the cycles that have it are shown.")
+        if plan.get("_school_file_to_students"):
+            notes.append("School-questionnaire variables are reported for the students in those "
+                         "schools (students joined to their school, weighted by the final student "
+                         "weight), the OECD's convention for school characteristics — not as a "
+                         "share of schools.")
+        if plan.get("_auto_instrument"):
+            view, vars_ = plan["_auto_instrument"]
+            notes.append(f"{', '.join(vars_)} live(s) in the "
+                         + ("school questionnaire file" if view == "stu_sch" else "creative-thinking cognitive file")
+                         + "; the analysis runs on students joined to it, with the students' official weights.")
         for who, why in (plan.get("_regression_skipped") or [])[:6]:
             notes.append(f"No regression estimate for {who}: {why}.")
         if not members_by_cycle and plan.get("include_oecd_average"):
@@ -2829,6 +3569,59 @@ class Agent:
                          "cycle). Estimates use the same student weights and replicate weights; "
                          "a stratum is a sampling unit rather than an official OECD reporting "
                          "category, stratum codes differ between cycles, and its sample can be small.")
+        strata_rows = plan.get("_strata_rows")
+        if strata_rows:
+            codes_text = "; ".join(
+                f"PISA {c}: " + ", ".join(f"{code} = {strata_rows['labels'].get(code, code)}" for code in cs[:6])
+                + (f" … ({len(cs)} strata)" if len(cs) > 6 else "")
+                for c, cs in sorted(strata_rows["codes"].items()))
+            who = self._names([strata_rows["economy"]])
+            if strata_rows["mode"] == "exclude":
+                notes.append(
+                    f"Rows labelled \"{strata_rows['label']}\" are {who} WITHOUT the sampling "
+                    f"stratum/strata of {strata_rows['name']} ({codes_text}); the row "
+                    f"\"{strata_rows['economy']}\" is the whole economy as the OECD reports it. "
+                    "Both use the official student and replicate weights.")
+            else:
+                notes.append(
+                    f"Rows labelled \"{strata_rows['label']}\" are the sampling stratum/strata of "
+                    f"{strata_rows['name']} inside {who} ({codes_text}); the row "
+                    f"\"{strata_rows['economy']}\" is the whole economy as the OECD reports it. "
+                    "A stratum is a sampling unit coded by the national centre for that cycle, "
+                    "not an official OECD reporting category; its sample can be small, its "
+                    "codes differ between cycles, and both rows use the official weights.")
+        if plan.get("_strata_relabelled"):
+            notes.append("Rows whose label carries a \"/\" are filtered to the sampling strata "
+                         "named after the slash (\"excl.\" = the economy without them), not the "
+                         "whole economy.")
+        if plan.get("_pooled_to_rows"):
+            notes.append("The statistic is computed per economy (never as one pooled mean of "
+                         "students across economies, which is no OECD statistic); a group "
+                         "average, where asked, is the unweighted mean of the members' estimates.")
+        if plan.get("_members_as_rows"):
+            notes.append("The rows are the members of the requested group; the \"avg\" row is "
+                         "their unweighted average with SE = sqrt(sum of SE²)/N.")
+        if plan.get("_pair"):
+            a, b = plan["_pair"]
+            notes.append(f"The difference {self._names([a])} minus {self._names([b])} and, across "
+                         "cycles, the change in that difference are stated in the verified "
+                         "statements (independent samples; the link error cancels in a "
+                         "difference of two economies measured on the same linked scale).")
+        if plan.get("_invented_codes"):
+            notes.append("Economy codes corrected to the PISA codes: " + ", ".join(
+                f"{a} → {b} ({self._names([b])})" for a, b in sorted(plan["_invented_codes"].items())) + ".")
+        if plan.get("_quarter_filter"):
+            qs = ", ".join(str(q) for q in plan["_quarter_filter"])
+            notes.append(f"Only quarter {qs} of {plan.get('quart_variable')} is shown (1 = bottom, 4 = top; "
+                         "quarters cut within each economy with the student weights); the other quarters "
+                         "were computed and left out as the question asked.")
+        if plan.get("_level1_or_below"):
+            notes.append("\"Level 1 or below\" is read the OECD way: every student below Level 2 "
+                         "(Levels 1a, 1b, 1c and below), the low-performer group.")
+        if plan.get("_by_overrides"):
+            notes.append("The grouping variable differs by cycle (" + "; ".join(
+                f"PISA {c}: {', '.join(v)}" for c, v in sorted(plan["_by_overrides"].items()))
+                + "); rows are aligned on the first cycle's column names.")
         if plan.get("_null_safe_share"):
             notes.append("Shares are percentages of students with a valid response: students "
                          "who did not answer the item (or were not asked it) are excluded "
@@ -2941,9 +3734,12 @@ class Agent:
                            if codes else "FALSE")
                     clause_where = f"({where}) AND {reg}" if where else reg
                 clause = f" WHERE {clause_where}" if clause_where else ""
-                n, wsum = self.con.sql(
-                    f"SELECT count(*), sum(W_FSTUWT) FROM {tbl}{clause}").fetchone()
+                has_school = "CNTSCHID" in self._table_columns(tbl)
+                schools_sql = ", count(DISTINCT CNTSCHID)" if has_school else ", NULL"
+                n, wsum, schools = self.con.sql(
+                    f"SELECT count(*), sum(W_FSTUWT){schools_sql} FROM {tbl}{clause}").fetchone()
                 sample.append({"table": tbl, "students": int(n),
+                               "schools": int(schools) if schools else None,
                                "weighted_students": round(wsum) if wsum else None})
             except Exception:
                 sample.append({"table": tbl})
@@ -3118,7 +3914,8 @@ class Agent:
 
     def _economies_in_data(self, text: str) -> list[str]:
         """Economies named in the text that exist in at least one loaded cycle."""
-        every = set().union(*self.present.values()) if self.present else set()
+        present = getattr(self, "present", None) or {}
+        every = set().union(*present.values()) if present else set()
         return self._economies_mentioned(text, sorted(every))
 
     def _economies_mentioned(self, text: str, codes) -> list[str]:
@@ -3140,6 +3937,14 @@ class Agent:
             if re.search(rf"\b{re.escape(code)}\b", caps):
                 found.append(code)
                 continue
+            negatives = regions.NEGATIVE_ALIASES.get(code, [])
+            if negatives and any(f" {n} " in low for n in negatives):
+                # "north korea" names a country that is not KOR — unless the
+                # text also names the economy itself
+                positives = [p for p in regions.ECONOMY_ALIASES.get(code, []) + [names.get(code, "").lower()]
+                             if p.strip() and not any(p in n for n in negatives)]
+                if not any(f" {re.sub(r'[^a-z0-9 ]', ' ', p).strip()} " in low for p in positives):
+                    continue
             label = names.get(code, "")
             base = re.sub(r"\s*\(.*?\)\s*", " ", label).strip().lower()   # "Macao (China)" -> "macao"
             cands = {base, label.lower(), *regions.ECONOMY_ALIASES.get(code, [])}
@@ -3223,18 +4028,44 @@ class Agent:
     # model runs (on the question as typed) and again after routing on the
     # router's English rendering, so a Japanese or Spanish question gets the
     # same safeguards as an English one.
-    def _intercept(self, text: str) -> str | None:
-        if self.LINK_WORDS.search(text):
+    # "How is ESCS constructed / which components changed" is a question
+    # about an index, not about comparing scores across cycles
+    INDEX_QUESTION_WORDS = re.compile(
+        r"\b(constructed|construction|computed|components?|built|derived|composition|"
+        r"how is .{0,30}(index|escs|scale) (made|calculated|built))\b", re.IGNORECASE)
+    MODE_WORDS = re.compile(
+        r"\b(paper|computer)[- ]based\b|\bon paper\b|\bpaper (test|version|form|and pencil)|"
+        r"\b(paper|pencil)\b.{0,25}\b(computer|screen|digital)\b|\bcomputer\b.{0,25}\bpaper\b|"
+        r"\btest(ing)? mode\b|\badministration mode\b|\badminmode\b|\bcomputer[- ]delivered\b|"
+        r"\b(en papel|por computadora|en computadora|na papel|no computador)\b", re.IGNORECASE)
+    AVG_SE_WORDS = re.compile(
+        r"\b(se|standard error|variance|uncertainty)\b.{0,80}\b(difference|minus|gap|deviation)\b"
+        r".{0,60}\b(oecd|average|mean of)\b|\b(oecd|average)\b.{0,40}\b(se|standard error)\b.{0,60}"
+        r"\b(difference|formula|computed|calculated)\b", re.IGNORECASE)
+
+    def _intercept(self, text: str, history: list | None = None) -> str | None:
+        # a follow-up ("why is there no math for 2025?") inherits the economies
+        # of the last exchanges — from the answers too, whose codes are in
+        # capitals whatever language the questions were asked in
+        recent = " ".join(f"{h.get('question', '')} {(h.get('answer') or '')[:600]}" for h in (history or [])[-2:])
+        named_recent = self._economies_in_data(text) or self._economies_in_data(recent)
+        if self.LINK_WORDS.search(text) and not (self.LINK_DATA_REQUEST.search(text)
+                                                 and self._economies_in_data(text)):
             self._fire("intercept:link_error")
-            return self._link_error_answer()
+            return self._link_error_answer(self._last_link_mode)
+        if self.AVG_SE_WORDS.search(text) and not self._economies_in_data(text):
+            self._fire("intercept:avg_se_method")
+            return self._avg_se_answer()
+        if self.OECD_AVG_WHY.search(text):
+            self._fire("intercept:oecd_average_method")
+            return self._oecd_average_answer(text)
         if self.OVERVIEW_WORDS.search(text):
             self._fire("intercept:overview")
             return self._overview_answer()
         if self.WHY_MISSING_WORDS.search(text):
-            named = self._economies_in_data(text)
-            if named:
+            if named_recent:
                 self._fire("intercept:why_missing")
-                return self._missing_results_answer(named)
+                return self._missing_results_answer(named_recent)
         if self.COUNT_WORDS.search(text) and not self.OTHER_STAT_WORDS.search(text):
             named = self._economies_in_data(text)
             if named:
@@ -3246,11 +4077,191 @@ class Agent:
         if self.COVERAGE_RATE_WORDS.search(text):
             self._fire("intercept:coverage_rate")
             return self._coverage_rate_answer()
-        if self.COMPARABLE_WORDS.search(text) and (len(set(self.YEAR_RE.findall(text))) >= 2
-                                                   or re.search(r"\b(cycles?|years?|over time)\b", text, re.I)):
+        if self.MODE_WORDS.search(text) and not re.search(r"\b(score|scores|mean|average|gap|share|percent)\b.{0,40}\b(by|per|for) (paper|computer)", text, re.I):
+            self._fire("intercept:test_mode")
+            return self._mode_answer(named_recent, text)
+        if self.COMPARABLE_WORDS.search(text) and not self.INDEX_QUESTION_WORDS.search(text) \
+                and (len(set(self.YEAR_RE.findall(text))) >= 2
+                     or re.search(r"\b(cycles?|years?|over time)\b", text, re.I)):
             self._fire("intercept:comparability")
-            return self._comparability_answer()
+            return self._comparability_answer(named_recent, text)
         return None
+
+    _last_link_mode: str | None = None
+
+    OECD_AVG_WHY = re.compile(
+        r"\b(why|how)\b.{0,60}\boecd (average|mean)\b.{0,80}\b(differ|different|match|computed|calculated|"
+        r"defined|built|members?|table|volume)\b|\bhow (is|do you (compute|calculate)) the oecd (average|mean)\b|"
+        r"\bwhich (countries|economies|members) (are|is) in (the|your) oecd (average|mean)\b", re.IGNORECASE)
+
+    def _oecd_average_answer(self, text: str) -> str:
+        counts = {c: len(self._oecd_codes(c)) for c in CYCLES if c in self.present}
+        members = ", ".join(f"PISA {c}: {n} members" for c, n in sorted(counts.items()))
+        years = sorted(set(self.YEAR_RE.findall(text or "")))
+        value = ""
+        if years and years[0] in counts:
+            try:
+                domain = "READ" if re.search(r"\bread", text, re.I) else "SCIE" if re.search(r"\bscien", text, re.I) else "MATH"
+                excluded = self.AVERAGE_EXCLUSIONS.get(("OECD avg", years[0], domain), set())
+                codes = sorted(self._oecd_codes(years[0]) - excluded)
+                lst = ", ".join(f"'{c}'" for c in codes)
+                rows = self.con.execute(
+                    f"SELECT CNT, SUM(W_FSTUWT * PV1{domain}) / SUM(W_FSTUWT) FROM stu_qqq_{years[0]} "
+                    f"WHERE CNT IN ({lst}) AND PV1{domain} IS NOT NULL GROUP BY CNT").fetchall()
+                vals = [r[1] for r in rows if r[1] is not None]
+                if vals:
+                    value = (f" For {years[0]} {link_errors.DOMAIN_NAMES[domain]}, the app's OECD average is "
+                             f"{np.mean(vals):.1f} (first plausible value, {len(vals)} members"
+                             + (f", {self._names(sorted(excluded))} excluded as in the OECD's tables" if excluded else "")
+                             + "), which should round to the published figure; ask for it as a data question "
+                             "to get the 10-PV estimate with its standard error.")
+            except Exception:  # noqa: BLE001 — the method text stands on its own
+                value = ""
+        return (
+            "The OECD average in this app follows the OECD's own convention: the unweighted mean of "
+            "the OECD member countries' estimates (each member counts once, whatever its size), with "
+            f"SE = sqrt(sum of the members' SE²) / N — over the members present in the cycle ({members}), "
+            "never over all participating economies. In a trend the same members enter both cycles; "
+            "Spain is left out of the 2018 reading average as in the OECD's tables (Annex A9)." + value +
+            " Reasons a figure can still differ from a published table: rounding; a table that uses a "
+            "different member set (e.g. the 'OECD average-35' of earlier reports); a table computed on "
+            "the trend membership; or a Volume printed before a data correction. Every OECD-average row "
+            "in an answer states the members it was computed on in the provenance card.")
+
+    REGION_LIST_WORDS = re.compile(
+        r"\b(per|by|each|every|across|all|for the different|broken down by|breakdown by) "
+        r"(region|regions|province|provinces|state|states|oblast|oblasts|governorate|governorates|"
+        r"emirate|emirates|department|departments|canton|cantons|prefecture|prefectures|"
+        r"district|districts|county|counties)\b|\bregional (results|breakdown|ranking|scores)\b|"
+        r"\b(results|scores) (per|by) region\b|\bsub-?national (results|breakdown)\b", re.IGNORECASE)
+
+    def _regions_answer(self, codes: list[str], question: str) -> str | None:
+        """PISA reports economies nationally; the only sub-national handles
+        in the public files are the sampling strata. Name them for the
+        economy asked about, with the caveat, instead of "no regional data"."""
+        index = self._strata_index()
+        years = sorted(set(self.YEAR_RE.findall(question or ""))) or [c for c in reversed(CYCLES) if c in self.present][:1]
+        for code in codes[:1]:
+            for cycle in years:
+                rows = [(c, code_s, label) for c, code_s, label, _ in index
+                        if c == cycle and (code_s.startswith(code) or
+                                           (code == "GBR" and code_s[:3] in ("QSC", "QUK")))]
+                if not rows:
+                    continue
+                segments = []
+                for _, _, label in rows:
+                    body = re.sub(r"^\w{3} - stratum \d+:\s*", "", label)
+                    first = re.split(r"[/,:;()–]|\s-\s", body)[0].strip()
+                    if first and not first.lower().startswith("undisclosed"):
+                        segments.append(first)
+                distinct = list(dict.fromkeys(segments))
+                if not distinct:
+                    continue
+                name = self.economy_names.get(code, code)
+                listed = "; ".join(distinct[:30]) + (f"; … ({len(distinct)} in all)" if len(distinct) > 30 else "")
+                return (f"PISA reports {name} ({code}) as one economy: the OECD publishes no official "
+                        f"regional results for it, and the public file carries no region variable. What "
+                        f"the file does carry is the SAMPLING STRATUM each school was drawn from — in "
+                        f"PISA {cycle}, {len(rows)} strata labelled by the national centre: {listed}. A "
+                        "stratum estimate uses the official weights but is a sampling unit, not an "
+                        "OECD reporting category; its sample can be small (the app blanks anything "
+                        "under 30 students or 5 schools) and the labels change between cycles. Name "
+                        f"one to see it beside the national figure — for example “mean mathematics "
+                        f"score in {name} {cycle} and in {distinct[0]}”.")
+        return None
+
+    def _avg_se_answer(self) -> str:
+        return (
+            "The standard error of an economy's difference from an OECD (or any group) average "
+            "is computed as the OECD's Data Analysis Manual prescribes for an average of "
+            "independent samples. The average is the unweighted mean of the members' estimates, "
+            "so SE_avg = sqrt(sum of the members' SE²) / N. For an economy that is NOT a member, "
+            "var(economy − avg) = SE_economy² + SE_avg² (independent samples). For a member, its "
+            "own estimate is inside the average, so var(economy − avg) = SE_economy² × (1 − 2/N) "
+            "+ SE_avg². Within one economy, differences between groups (a gender gap, a quartile "
+            "gap) are instead computed replicate by replicate with the 80 Fay-BRR weights, which "
+            "carries the covariance between the groups. Every difference the app states in its "
+            "verified statements names which of the two it used.")
+
+    # ---------- test administration mode (paper / computer) ----------
+
+    def _mode_index(self) -> dict[str, dict[str, str]]:
+        """{cycle: {CNT: 'paper' | 'computer' | 'mixed'}} from ADMINMODE in the
+        student files (1 = paper, 2 = computer in 2018/2022; the reverse in
+        2025 — read from each cycle's value labels)."""
+        cache = self.__dict__.get("_mode_cache")
+        if cache is not None:
+            return cache
+        out: dict[str, dict[str, str]] = {}
+        for cycle in CYCLES:
+            if cycle not in self.present:
+                continue
+            try:
+                desc = catalog.describe("ADMINMODE", cycle=cycle)
+                desc = desc[desc.table_name.str.startswith("stu_qqq")]
+                labels = json.loads(desc.iloc[0].value_labels) if not desc.empty and desc.iloc[0].value_labels else {}
+                meaning = {}
+                for k, v in labels.items():
+                    code = str(int(float(k)))
+                    meaning[code] = "paper" if "paper" in str(v).lower() else "computer"
+                rows = self.con.execute(
+                    f"SELECT CNT, CAST(ADMINMODE AS INTEGER), COUNT(*) FROM stu_qqq_{cycle} "
+                    "WHERE ADMINMODE IS NOT NULL GROUP BY 1, 2").fetchall()
+                per: dict[str, dict[str, int]] = {}
+                for cnt, code, n in rows:
+                    per.setdefault(cnt, {})[meaning.get(str(code), "computer")] = per.get(cnt, {}).get(
+                        meaning.get(str(code), "computer"), 0) + int(n)
+                out[cycle] = {cnt: (max(d, key=d.get) if max(d.values()) >= 0.9 * sum(d.values()) else "mixed")
+                              for cnt, d in per.items()}
+            except Exception:  # noqa: BLE001 — a missing variable means no mode information
+                out[cycle] = {}
+        self._mode_cache = out
+        return out
+
+    def _mode_changes(self, codes, cycles) -> list[tuple[str, str, str, str, str]]:
+        """(code, first cycle, mode, last cycle, mode) for economies whose
+        mode differs between the first and last of `cycles`."""
+        modes = self._mode_index()
+        cycles = sorted(str(c) for c in cycles if str(c) in modes)
+        if len(cycles) < 2:
+            return []
+        first, last = cycles[0], cycles[-1]
+        out = []
+        for code in codes:
+            a, b = modes[first].get(code), modes[last].get(code)
+            if a and b and a != b:
+                out.append((code, first, a, last, b))
+        return out
+
+    def _mode_answer(self, codes: list[str], text: str) -> str:
+        modes = self._mode_index()
+        if codes:
+            parts = []
+            for code in codes[:6]:
+                per = [f"PISA {c}: {modes[c][code]}" for c in sorted(modes) if code in modes[c]]
+                if per:
+                    parts.append(f"{self.economy_names.get(code, code)} ({code}) — " + ", ".join(per))
+            if not parts:
+                return ("The administration mode is recorded in the public files (ADMINMODE), but "
+                        "none of the named economies appears in the loaded cycles.")
+            changed = self._mode_changes(codes[:6], sorted(modes))
+            caution = ""
+            if changed:
+                caution = (" A change of mode matters for trends: the OECD reports the linked trend "
+                           "with the link error, but mode effects are not quantified in the public "
+                           "files; the PISA 2025 Technical Report (Data Adjudication) recommends "
+                           "caution for economies that moved from paper to computer.")
+            return ("From the ADMINMODE variable in the student files (the mode each sampled "
+                    "student was tested in): " + "; ".join(parts) + "." + caution)
+        lines = []
+        for c in sorted(modes):
+            paper = sorted(k for k, v in modes[c].items() if v == "paper")
+            mixed = sorted(k for k, v in modes[c].items() if v == "mixed")
+            lines.append(f"PISA {c}: paper-based in {self._names(paper) if paper else 'no economy'}"
+                         + (f"; mixed in {self._names(mixed)}" if mixed else "")
+                         + "; computer-based everywhere else")
+        return ("From the ADMINMODE variable in the student files: " + ". ".join(lines) +
+                ". Name an economy to see its mode in each cycle.")
 
     AI_WORDS = re.compile(r"\b(ai|a\.i\.|artificial intelligence|chatgpt|chatbots?|"
                           r"generative ai|llm|llms)\b|人工知能|生成AI|チャットボット", re.IGNORECASE)
@@ -3288,9 +4299,148 @@ class Agent:
         except Exception:  # noqa: BLE001 — never lose the answer over a translation
             return text
 
+    BEST_COUNTRY_WORDS = re.compile(
+        r"\b(which|what|who)\b.{0,20}\b(country|countries|economy|economies|nation|nations|system|systems)\b"
+        r".{0,25}\b(best|top|highest|strongest|leads?|leading|number one|first|winner|wins?)\b|"
+        r"\b(best|top) (performing |scoring )?(country|countries|economy|economies|nation|system)\b|"
+        r"\b(who|which) (is|are|was|were) (the )?(best|top|number one|winner|leader)\b|"
+        r"\bcu[aá]l (es el|fue el) mejor pa[ií]s\b|\bqu[eé] pa[ií]s (es|fue) (el )?mejor\b", re.IGNORECASE)
+
+    # Economy codes a planner invents from ISO habits for economies whose PISA
+    # code differs (Tajikistan is Dushanbe QTJ; Taiwan is Chinese Taipei TAP)
+    INVENTED_CODES = {"TJK": "QTJ", "TWN": "TAP", "IRQ": "QKI", "XKX": "KSV", "XKO": "KSV", "RKS": "KSV",
+                      "UKB": "GBR", "UK": "GBR", "PAL": "PSE", "PS": "PSE", "KOS": "KSV", "MO": "MAC",
+                      "CHN": "QCI", "MCO": "QMC", "RUM": "QMR"}
+
+    def _fix_invented_codes(self, plan: dict) -> None:
+        every = set().union(*self.present.values()) if getattr(self, "present", None) else set()
+
+        def fix_text(text: str) -> str:
+            def repl(m):
+                code = m.group(1)
+                if code not in every and code in self.INVENTED_CODES and self.INVENTED_CODES[code] in every:
+                    plan.setdefault("_invented_codes", {})[code] = self.INVENTED_CODES[code]
+                    return f"'{self.INVENTED_CODES[code]}'"
+                return m.group(0)
+            return re.sub(r"'([A-Z]{2,3})'", repl, text)
+
+        for key in ("where",):
+            if isinstance(plan.get(key), str):
+                plan[key] = fix_text(plan[key])
+        for ov in (plan.get("cycle_overrides") or {}).values():
+            if isinstance(ov, dict) and isinstance(ov.get("where"), str):
+                ov["where"] = fix_text(ov["where"])
+        groups = plan.get("include_average_of")
+        if isinstance(groups, list):
+            fixed = []
+            for g in groups:
+                if isinstance(g, dict) and isinstance(g.get("members"), list):
+                    g = {**g, "members": [self.INVENTED_CODES.get(c, c) if c not in every else c for c in g["members"]]}
+                elif isinstance(g, list):
+                    g = [self.INVENTED_CODES.get(c, c) if c not in every else c for c in g]
+                elif isinstance(g, str) and g not in every and g in self.INVENTED_CODES:
+                    plan.setdefault("_invented_codes", {})[g] = self.INVENTED_CODES[g]
+                    g = self.INVENTED_CODES[g]
+                fixed.append(g)
+            plan["include_average_of"] = fixed
+        if plan.get("_invented_codes"):
+            self._fire("hook:invented_code")
+
+    CANNOT_COMPUTE = re.compile(
+        r"\b(cannot|can'?t|unable to|not able to|does not|doesn'?t) (directly )?(compute|calculate|"
+        r"provide|determine|perform|support)\b.{0,80}\b(difference|gap|change|significan|standard error|"
+        r"tied|compar)", re.IGNORECASE)
+
+    # Methods asked for by name that the app does not implement: each gets an
+    # explicit NOT DONE line, never a silent substitute.
+    UNSUPPORTED = [
+        (re.compile(r"\b(country|economy)?[- ]?fixed[- ]effects?\b|\bpooled (regression|model) (across|over)\b", re.I),
+         "Pooled regressions with country fixed effects are not available: the app estimates each "
+         "economy separately (and, when asked, the unweighted OECD average of the per-economy "
+         "coefficients), never one pooled model across economies."),
+        (re.compile(r"\br\s*(²|\^2|squared)\b|\bvariance explained\b", re.I),
+         "R² / variance explained is not reported by the regression template."),
+        (re.compile(r"\b(icc|intra-?class correlation|between-school variance|variance decomposition|"
+                    r"multilevel|hierarchical linear|hlm|random effects?)\b", re.I),
+         "Variance decomposition (ICC, between-school share) and multilevel models are not "
+         "available; the app reports single-level weighted estimates."),
+        (re.compile(r"\b(cohen'?s d|effect size in (sd|standard deviation)|standardi[sz]ed (effect|coefficient|beta))\b", re.I),
+         "Effect sizes in standard-deviation units (Cohen's d, standardized betas) are not computed: "
+         "coefficients are per unit of the predictor and outcomes are on the PISA score scale."),
+        (re.compile(r"\bdesign effect\b|\bdeff\b|\bsimple random sampl", re.I),
+         "Design effects and simple-random-sampling standard errors are not reported; every SE is "
+         "the Fay-BRR replicate-weight SE, which already reflects the sample design."),
+        (re.compile(r"\bunweighted (mean|average|share|percentage)\b|\bwithout (the )?weights?\b", re.I),
+         "Unweighted statistics are not reported: every estimate uses the final student weight, "
+         "as the OECD requires for population estimates."),
+        (re.compile(r"\bcoverage[- ]adjust|adjust(ed|ing)? for (coverage|exclusion)", re.I),
+         "No coverage adjustment is applied: the OECD's Coverage Index is a published table, not "
+         "a variable in the files, so the estimate cannot be corrected for it here."),
+        (re.compile(r"\b(resilien(t|ce)|academically resilient)\b", re.I),
+         "The OECD's 'academically resilient' share (disadvantaged students in the top quarter of "
+         "performance) is not a template here; the app can give the mean by ESCS quarter and the "
+         "share above a level within the bottom ESCS quarter instead."),
+    ]
+
+    # "explain that more simply", "give me five bullets", "summarize the
+    # takeaways": a rewrite of the previous answer, not a new analysis
+    REWRITE_WORDS = re.compile(
+        r"\b(simpler|simplify|simple terms|plain (english|language|words)|layman|in other words|"
+        r"bullet|bullets|bullet points|takeaways?|key points|summari[sz]e (that|this|it|the (above|previous|last))|"
+        r"tl;?dr|shorter|shorten|rephrase|reword|explain (that|this|it) (again|to me|more|better)|"
+        r"(five|5|three|3|ten|10) (points|bullets|lines|sentences)|for my (staff|team|class|boss|students|principal)|"
+        r"sin siglas|m[aá]s sencillo|m[aá]s simple|resum[ei]|en pocas palabras|plus simple|einfacher|"
+        r"zusammenfass\w*|mais simples|resumo)\b", re.IGNORECASE)
+
+    def _rewrite_previous(self, question: str, history: list | None, language: str | None) -> str | None:
+        """The previous answer restated as asked; numbers are checked against
+        it and, when the rewrite invents any, the previous answer is repeated."""
+        # the last SUBSTANTIVE answer (one that came from an analysis, or at
+        # least carries numbers), not a "no advice" reply that followed it
+        answered = [h for h in reversed(history or []) if (h.get("answer") or "").strip()]
+        last = next((h for h in answered if h.get("explanation")
+                     or any(v >= 13 for _, v, _ in summ._numbers_in(str(h["answer"])))), None) \
+            or (answered[0] if answered else None)
+        if not last:
+            return None
+        previous = str(last["answer"])
+        try:
+            draft = self._plain(generate(
+                f"REQUEST: {question}\n\nPREVIOUS ANSWER (restate this as requested; keep every "
+                f"number, standard error and economy exactly; add nothing that is not in it; "
+                f"if asked for bullets, write bullets; if asked for simpler language, drop the "
+                f"acronyms and explain 'SE' as 'margin of error'):\n{previous}",
+                system=("You restate a statistics answer in PISA Explorer. You never add "
+                        "numbers, causes or countries that are not in the previous answer."
+                        + ("" if not language or language.lower() == "english"
+                           else f" Write in {language}.")))).strip()
+        except llm.LLMError:
+            return previous
+        allowed = {(v, d) for _, v, d in summ._numbers_in(previous)}
+        allowed |= {(round(v), 0) for v, _ in allowed}
+        bad = [raw for raw, v, d in summ._numbers_in(draft)
+               if not summ.YEAR.match(raw) and not (d == 0 and v <= 12) and (v, d) not in allowed
+               and not any(abs(v - a) <= 0.5 * 10 ** (-d) + 1e-9 for a, _ in allowed)]
+        if bad or not draft:
+            self._fire("rewrite:numbers_changed")
+            return previous
+        return draft
+
     def _ask(self, question: str, history: list | None) -> AgentResult:
         context = self._transcript(history)
-        early = self._intercept(question)
+        if history and self.REWRITE_WORDS.search(question) and not self._economies_in_data(question) \
+                and len(question) < 160:
+            self._fire("intercept:rewrite")
+            lang = None
+            if not self._looks_english(question):
+                try:
+                    lang = str(generate_json(f"Question: {question}", system=TERMS_SYSTEM + self.facts).get("language") or None)
+                except llm.LLMError:
+                    lang = None
+            rewritten = self._rewrite_previous(question, history, lang)
+            if rewritten:
+                return AgentResult(question, rewritten, route="conversational")
+        early = self._intercept(question, history)
         if early:
             if not self._looks_english(question):
                 # the deterministic answers are English; find the user's
@@ -3307,7 +4457,7 @@ class Agent:
         language = str(route.get("language") or "English")
         q_en = str(route.get("question_en") or question).strip() or question
         if q_en != question:
-            early = self._intercept(q_en)
+            early = self._intercept(q_en, history)
             if early:
                 return AgentResult(question, self._localize(early, language),
                                    route="conversational")
@@ -3319,6 +4469,16 @@ class Agent:
                 self._fire("intercept:participation")
                 return AgentResult(question, self._localize(self._participation_answer(named), language),
                                    route="conversational")
+            outside = regions.non_pisa_named(q_en)
+            if outside:
+                self._fire("intercept:participation_none")
+                return AgentResult(question, self._localize(
+                    f"No — {', '.join(outside)} has not taken part in PISA 2018, 2022 or 2025 "
+                    "(nor in any earlier cycle, for the countries never assessed) and is not in "
+                    "the PISA 2018, 2022 or 2025 public-use databases loaded here, so no statistic "
+                    "can be computed. Ask “did <economy> participate?” "
+                    "for any economy, or name one from the participant lists.", language),
+                    route="conversational")
         if not route.get("data_question"):
             if self.VIZ_WORDS.search(q_en):
                 self._fire("intercept:viz")
@@ -3332,9 +4492,17 @@ class Agent:
             ai_data = bool(self.AI_WORDS.search(q_en) and self.AI_DATA_WORDS.search(q_en)
                            and not re.search(r"literacy", q_en, re.I))
             strata = self._strata_hits(q_en)
-            if not named and not ai_data and not strata:
+            best = bool(self.BEST_COUNTRY_WORDS.search(q_en))
+            if not named and not ai_data and not strata and not best:
                 return AgentResult(question, route.get("direct_answer")
                                    or "Could you rephrase that?", route="conversational")
+            if best and not named and not ai_data and not strata:
+                # "which country is best": a ranking in the three subjects,
+                # not an opinion about the word "best"
+                self._fire("route:force_analyze:best")
+                route = {"data_question": True, "intent": "analyze",
+                         "search_terms": ["mathematics", "reading", "science"]}
+                q_en = q_en + " (rank all economies by their mean score in mathematics, reading and science in the latest cycle, with the OECD average)"
             # The router called it conversational, but the question names an
             # economy that IS in the data (or asks about AI use, which the 2025
             # questionnaire covers, or a school network / region that is a
@@ -3353,12 +4521,27 @@ class Agent:
                      "search_terms": route.get("search_terms") or
                      [w for w in re.split(r"\b(?:questions?|items?)\s+(?:about|on|regarding)\s+", q_en, flags=re.I)[-1:]
                       if w.strip()]}
+        if route.get("intent") == "explore" and standards.matching(q_en) and self.ANALYSIS_WORDS.search(q_en) \
+                and not self.ITEM_ASK_WORDS.search(q_en):
+            # "which economies took the global competence test and what was the
+            # mean in Colombia": a statistic on a standard measure, not a listing
+            self._fire("route:explore_to_analyze")
+            route = {**route, "intent": "analyze"}
         if route.get("intent") == "explore":
-            result = self._explore(q_en, route.get("search_terms") or [])
+            # a variable code the user (or the thread) names is listed first
+            recent = q_en + " " + " ".join(h.get("question", "") for h in (history or [])[-2:])
+            codes = [c for c in dict.fromkeys(re.findall(r"\b[A-Z][A-Z0-9_]{4,}\b", recent))
+                     if not catalog.describe(c).empty]
+            result = self._explore(q_en, codes + list(route.get("search_terms") or []))
             result.answer = self._localize(result.answer, language)
             return result
 
         named = self._economies_in_data(q_en)
+        if named and self.REGION_LIST_WORDS.search(q_en) and not self._strata_entities(q_en):
+            regional = self._regions_answer(named, q_en)
+            if regional:
+                self._fire("intercept:regions_list")
+                return AgentResult(question, self._localize(regional, language), route="conversational")
         outside = regions.non_pisa_named(q_en)
         if outside and not named:
             # "students in India": a country that has never been in PISA —
@@ -3369,7 +4552,25 @@ class Agent:
                 "databases loaded here, so no statistic can be computed. Ask “did <economy> "
                 "participate?” to check any economy, or name one from the participant lists.",
                 language), route="conversational")
-        hits = self._with_standard_cards(self._retrieve(route.get("search_terms") or []), q_en)
+        terms = list(route.get("search_terms") or [])
+        quoted = [q.strip() for q in re.findall(r"[“\"']([^”\"']{12,160})[”\"']", q_en)
+                  if len(q.split()) >= 3]
+        hits = self._retrieve(quoted + terms) if quoted else self._retrieve(terms)
+        if quoted:
+            # item wording quoted by the user: the closest label in EVERY cycle
+            # (the 2018 form of a 2022 item was being lost to the cap)
+            self._fire("retrieve:quoted_phrase")
+            extras = []
+            for phrase in quoted[:2]:
+                for cycle in CYCLES:
+                    if cycle in self.present:
+                        extras.append(catalog.search(phrase, cycle=cycle, limit=2))
+            if extras:
+                extra = pd.concat(extras, ignore_index=True)
+                hits = pd.concat([hits, extra], ignore_index=True) if hits is not None and not hits.empty else extra
+                hits = hits.drop_duplicates(subset=["variable", "table_name"])
+        hits = self._with_standard_cards(hits, q_en)
+        unsupported = [note for rx, note in self.UNSUPPORTED if rx.search(q_en)]
         question_block = (f"QUESTION: {question}" if q_en == question
                           else f"QUESTION (original, {language}): {question}\nQUESTION (English): {q_en}")
         standard_block = standards.prompt_block(standards.matching(q_en))
@@ -3382,10 +4583,63 @@ class Agent:
                                       regions=self.regions_block,
                                       levels=link_errors.levels_prompt()),
         )
+        if plan.get("action") != "clarify" and history and plan.get("template") in self.REQUIRED_FIELDS:
+            # a follow-up ("and 2018?") whose plan lost the measure of the
+            # analysis it continues: one re-plan with the continuation spelled out
+            try:
+                self._validate_plan(plan)
+            except ValueError as e:
+                self._fire("hook:replan_incomplete")
+                try:
+                    plan = generate_json(
+                        f"{context}{question_block}\n\n{standard_block}{strata_block}VARIABLE CARDS:\n{self._cards(hits, named)}"
+                        f"\n\nYOUR PREVIOUS PLAN WAS INCOMPLETE ({e}). This question continues the "
+                        "analysis in the conversation: copy its template, measure(s), grouping and "
+                        "filter from the previous exchange and change only what the question asks "
+                        "(the cycle, the economy, the subject).",
+                        system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
+                                                  regions=self.regions_block,
+                                                  levels=link_errors.levels_prompt()))
+                except llm.LLMError:
+                    pass
+        clarify_text = str(plan.get("clarify") or "")
+        if plan.get("action") == "clarify" and strata_block and \
+                re.search(r"\b(stratum|strata|both|single table|one table|one output|separately)\b", clarify_text, re.I):
+            # the planner declined to show an economy and its stratum together:
+            # the app does exactly that — re-plan for the economy alone
+            self._fire("hook:replan_stratum")
+            try:
+                plan = generate_json(
+                    f"{context}{question_block}\n\n{standard_block}{strata_block}VARIABLE CARDS:\n{self._cards(hits, named)}"
+                    "\n\nDO NOT CLARIFY: plan the statistic for the whole economy (by [\"CNT\"], where = "
+                    "the economy); the app adds the stratum's own labelled row next to it.",
+                    system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
+                                              regions=self.regions_block,
+                                              levels=link_errors.levels_prompt()))
+            except llm.LLMError:
+                pass
+        if plan.get("action") == "clarify" and self.CANNOT_COMPUTE.search(str(plan.get("clarify") or "")) \
+                and len(named) >= 2:
+            # the planner declined a pairwise question the app answers from
+            # its own statements: one re-plan with the rule spelled out
+            self._fire("hook:replan_pairwise")
+            try:
+                plan = generate_json(
+                    f"{context}{question_block}\n\n{standard_block}{strata_block}VARIABLE CARDS:\n{self._cards(hits, named)}"
+                    "\n\nDO NOT CLARIFY: plan the statistic for every economy named, in one table "
+                    f"(where = \"CNT IN ({', '.join(repr(c) for c in named)})\", by = [\"CNT\"]); the app "
+                    "computes every pairwise difference, the change in a difference and ties itself.",
+                    system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
+                                              regions=self.regions_block,
+                                              levels=link_errors.levels_prompt()))
+            except llm.LLMError:
+                pass
         plan["_question"] = q_en
         plan["_language"] = language
+        self._fix_invented_codes(plan)
         self._apply_standards(plan, q_en)
         self._apply_strata(plan, q_en)
+        self._fix_level_phrases(plan, q_en)
         if self.WORLD_AVERAGE_WORDS.search(q_en + " " + question) and plan.get("action") != "clarify":
             # "world average" is the average of every participant, never the OECD's
             groups = plan.get("include_average_of") or []
@@ -3409,6 +4663,13 @@ class Agent:
         self._verify_substitution_claims(plan)
         if plan.get("_claim_corrected"):
             self._fire("hook:verify_substitution_claims")
+        if unsupported and plan.get("action") != "clarify":
+            # a method the app does not offer, asked for by name: said in the
+            # notes rather than silently replaced by something else
+            self._fire("hook:unsupported_method")
+            note = " ".join(unsupported)
+            plan["limitation_note"] = (f"{plan['limitation_note']} {note}"
+                                       if plan.get("limitation_note") else note)
         dropped = self._dropped_measures(q_en, plan)
         if dropped and plan.get("action") != "clarify":
             self._fire("hook:dropped_measures")
@@ -3500,16 +4761,42 @@ class Agent:
                     + "; ".join(positions) + ".")
         sample_line = "; ".join(
             f"{smp['table']}: {smp['students']:,} students sampled"
+            + (f" in {smp['schools']:,} schools" if smp.get("schools") else "")
             + (f", representing {smp['weighted_students']:,} 15-year-olds (sum of weights)"
                if smp.get("weighted_students") else "")
             for smp in provenance.get("sample") or [] if smp.get("students") is not None)
+        if self.CI_WORDS.search(q_en):
+            # a confidence interval asked for: computed here (estimate ± 1.96 SE),
+            # so the summary never has to do the arithmetic
+            for est_col in [c for c in table.columns if ESTIMATE_COL.match(c) or c == "change"]:
+                se_col = summ.SE_FOR.get(est_col) or est_col.replace("estimate", "se")
+                if se_col in table.columns and f"ci95_low{est_col.replace('estimate', '')}" not in table.columns:
+                    suffix = "" if est_col == "estimate" else ("_change" if est_col == "change" else est_col.replace("estimate", ""))
+                    table[f"ci95_low{suffix}"] = (table[est_col] - summ.Z * table[se_col]).round(2)
+                    table[f"ci95_high{suffix}"] = (table[est_col] + summ.Z * table[se_col]).round(2)
+            provenance["notes"].append("95% confidence intervals = estimate ± 1.96 × SE (ci95_low, ci95_high columns).")
+            self._fire("hook:ci_columns")
         sample_block = (f"SAMPLE SIZES (within the question's filter): {sample_line}" + chr(10)
                         if sample_line else "")
         focus_codes = self._economies_mentioned(
             q_en + " " + " ".join(h.get("question", "") for h in (history or [])[-2:]),
             table["CNT"].astype(str).unique()) if "CNT" in table.columns else []
+        label_tables = [f"{plan.get('instrument') or 'stu_qqq'}_{c}"
+                        for c in sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]}, reverse=True)]
+
+        def category_label(col, value):
+            # the label from whichever cycle's codebook has it (a 2025 row
+            # recoded to the 2022 gender column still gets "Female")
+            for tbl in label_tables:
+                text = self._category_label(col, value, tbl)
+                if "(" in text:
+                    return text
+            return text
+
         facts = summ.fact_sentences(table, plan, provenance, self.economy_names,
-                                    self._measure_label, focus_codes=focus_codes)
+                                    self._measure_label, focus_codes=focus_codes,
+                                    category_label=category_label,
+                                    low_coverage=plan.get("_low_coverage"))
         provenance["facts"] = facts
         summary_prompt = (
             f"QUESTION: {question}\n"
@@ -3526,6 +4813,9 @@ class Agent:
         answer, mode, issues = self._summarize(summary_prompt, facts, table, provenance,
                                                plan, q_en, language)
         provenance["summary_mode"] = mode
+        modes = plan.get("_link_error_modes") or {}
+        if modes:
+            self._last_link_mode = next(iter(modes.values()))
         return AgentResult(question, answer.strip(), plan=plan, table=table,
                            provenance=provenance, retrieved=hits,
                            notes=provenance["notes"], summary_mode=mode,
@@ -3580,6 +4870,11 @@ class Agent:
             first_issues = first_issues or [f"LLM error: {e}"]
         self._fire("summary:app_authored")
         answer = " ".join(facts)
+        samples = [s for s in provenance.get("sample") or [] if s.get("students") is not None]
+        if samples:
+            answer += " Sample: " + "; ".join(
+                f"{s['students']:,} students" + (f" in {s['schools']:,} schools" if s.get("schools") else "")
+                + f" ({s['table']})" for s in samples) + "."
         if provenance.get("notes"):
             answer += " Notes: " + " ".join(provenance["notes"][:3])
         return self._localize(answer, language), "app-authored", first_issues

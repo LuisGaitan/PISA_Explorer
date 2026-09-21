@@ -66,10 +66,23 @@ def _measure_word(plan: dict, label_of) -> str:
 
 # ---------- app-authored statements ----------
 
+KNOWN_COLS = {"estimate", "se", "n_pv", "cycle", "rank", "change", "se_change", "n",
+              "n_schools", "wcov", "category", "ci95_low", "ci95_high"}
+SE_COL = re.compile(r"^se(_\d{4})?$")
+
+
+def _pair_se(sa, sb) -> float:
+    return float(np.sqrt(float(sa) ** 2 + float(sb) ** 2))
+
+
 def fact_sentences(table: pd.DataFrame, plan: dict, provenance: dict,
-                   names: dict, label_of, focus_codes=(), max_rows: int = 8) -> list[str]:
+                   names: dict, label_of, focus_codes=(), max_rows: int = 8,
+                   category_label=None, low_coverage=None) -> list[str]:
     """Deterministic sentences stating what the table holds. `label_of`
-    renders a measure expression ("PV{pv}MATH" -> "Mathematics score")."""
+    renders a measure expression ("PV{pv}MATH" -> "Mathematics score");
+    `category_label(column, value)` renders a grouping value with its
+    codebook label ("ST004D01T = 1 (Female)"); `low_coverage` maps a cycle to
+    [(row key, % of the weighted population without a value)]."""
     if table is None or table.empty:
         return ["The analysis returned no rows."]
     t = table.reset_index(drop=True)
@@ -78,11 +91,28 @@ def fact_sentences(table: pd.DataFrame, plan: dict, provenance: dict,
     multi_cycle = bool(cycles)
     single_cycle = str(t["cycle"].iloc[0]) if "cycle" in t.columns else \
         (sorted({str(c) for c in plan.get("cycles") or []}) or [""])[0]
+    # grouping columns beyond the standard ones (a gender or immigrant
+    # background column): every statement names the group WITH its label
+    extra_cols = [c for c in t.columns
+                  if c not in ("CNT", "measure", "contrast", "quarter", "percentile", "term",
+                               "row_label", "row", "col_label", "col", "category")
+                  and c not in KNOWN_COLS and not ESTIMATE_COL.match(c) and not SE_COL.match(c)
+                  and not c.startswith("ci95")]
     key_cols = [c for c in ("CNT", "measure", "contrast", "quarter", "percentile",
                             "term", "row_label", "row", "col_label", "col", "category")
-                if c in t.columns]
+                if c in t.columns] + extra_cols
     ranked = "rank" in t.columns
+    ascending = ranked and plan.get("sort_desc") is False
+    n_ranked = int(t["rank"].notna().sum()) if ranked else 0
     out = []
+
+    def group_label(c, v) -> str:
+        if category_label is not None:
+            try:
+                return str(category_label(c, v))
+            except Exception:  # noqa: BLE001 — a label is a nicety
+                pass
+        return f"{c} = {int(v) if isinstance(v, float) and v.is_integer() else v}"
 
     def row_key(r) -> str:
         parts = []
@@ -100,9 +130,32 @@ def fact_sentences(table: pd.DataFrame, plan: dict, provenance: dict,
                 parts.append(f"P{int(v)}")
             elif c == "term" and str(v) == "(intercept)":
                 parts.append("intercept (predicted score when every predictor is 0 — not the mean)")
+            elif c in extra_cols:
+                parts.append(group_label(c, v))
             else:
                 parts.append(str(v))
         return ", ".join(parts) or "overall"
+
+    by_cols = [c for c in (plan.get("by") or []) if isinstance(c, str) and c in t.columns]
+    for c in ("quarter", "percentile", "term"):
+        if c in t.columns and c not in by_cols:
+            by_cols.append(c)
+
+    def coverage_flag(r) -> str:
+        if not low_coverage or not by_cols:
+            return ""
+        key = ", ".join(str(r[c]) for c in by_cols)
+        hits = []
+        for cyc, rows in (low_coverage or {}).items():
+            for k, pct in rows:
+                if k == key:
+                    hits.append((cyc, pct))
+        if not hits:
+            return ""
+        if multi_cycle:
+            return " [" + "; ".join(f"PISA {c}: {p}% of the weighted population has no value on the "
+                                    "variable" for c, p in sorted(hits)) + "]"
+        return f" [{hits[0][1]}% of the weighted population has no value on the variable]"
 
     def level(r, est_col, se_col) -> str:
         est, se = r.get(est_col), r.get(se_col)
@@ -140,18 +193,39 @@ def fact_sentences(table: pd.DataFrame, plan: dict, provenance: dict,
         idx = list(t.index[:3]) + list(t.index[-3:])
         if "CNT" in t.columns and focus_codes:
             idx += list(t.index[t["CNT"].astype(str).isin(set(focus_codes))])
+        if "CNT" in t.columns:
             idx += list(t.index[t["CNT"].astype(str).str.endswith(" avg")])
+        if not ranked:
+            # an unsorted table: the extremes are not the first and last rows,
+            # so the largest and smallest value of every group are stated
+            # ("which has the highest share ... in the top quarter")
+            val_col = "change" if multi_cycle and "change" in t.columns else (
+                f"estimate_{cycles[-1]}" if multi_cycle else "estimate")
+            group_cols = [c for c in ("measure", "quarter", "percentile", "term", "contrast") + tuple(extra_cols)
+                          if c in t.columns]
+            if val_col in t.columns:
+                groups = t.groupby(group_cols, dropna=False, sort=False) if group_cols else [(None, t)]
+                for _, g in groups:
+                    vals = g[val_col].dropna()
+                    if not vals.empty:
+                        idx += [vals.idxmax(), vals.idxmin()]
         rows = t.loc[sorted(set(idx))]
         out.append(f"The table has {len(t)} rows" +
-                   (f" ({int(t['rank'].notna().sum())} ranked economies" if ranked else "") +
+                   (f" ({n_ranked} ranked economies" if ranked else "") +
                    f"; the statements below cover the first three, the last three"
+                   + (", the largest and smallest values" if not ranked else "")
                    + (" and the economies named in the question" if focus_codes else "") + ".")
+    if ascending:
+        out.append(f"Ranks count from the highest value (rank 1 = largest of the {n_ranked}); "
+                   "the table is sorted smallest first, so the first row is the smallest value.")
 
     for _, r in rows.iterrows():
-        key = row_key(r)
+        key = row_key(r) + coverage_flag(r)
         pos = ""
         if ranked and not pd.isna(r.get("rank")):
-            pos = f"rank {int(r['rank'])} of {int(t['rank'].notna().sum())}, "
+            pos = f"rank {int(r['rank'])} of {n_ranked}, "
+            if ascending:
+                pos = f"rank {int(r['rank'])} of {n_ranked} from the top ({n_ranked - int(r['rank']) + 1}th smallest), "
         if multi_cycle:
             path = " → ".join(f"{c}: {level(r, f'estimate_{c}', f'se_{c}')}" for c in cycles)
             sentence = f"{head} {what} — {key}: {pos}{path}".replace("  ", " ")
@@ -179,54 +253,131 @@ def fact_sentences(table: pd.DataFrame, plan: dict, provenance: dict,
                     sentence += f", {verdict}"
             out.append(sentence.replace("  ", " ") + ".")
 
-    # pairwise differences between the economies the question names, and
-    # between each of them and any benchmark-average row — the only way a
-    # "significantly higher than" claim can be checked
-    if not multi_cycle and not contrastive and "CNT" in t.columns and "estimate" in t.columns:
+    # ---- statements the app must make itself: pairwise differences ----
+    # between the economies the question names (or every pair when there are
+    # few), between each of them and any benchmark-average row, the change in
+    # a difference across cycles (= the difference of two changes; the link
+    # error cancels), and which economies are statistically tied with a
+    # named one in a ranking — the only way such claims can be checked.
+    if "CNT" in t.columns and (("estimate" in t.columns) or multi_cycle):
         members = plan.get("_benchmark_members") or {}
-        cycle_key = single_cycle or (next(iter(members)) if members else "")
+        cycle_key = single_cycle or (cycles[-1] if multi_cycle else "")
         member_sets = members.get(cycle_key, {}) if isinstance(members, dict) else {}
-        # per measure when several are stacked ("math, reading and science")
-        groups = t.groupby("measure", sort=False) if "measure" in t.columns else [(None, t)]
-        for mlabel, tm in groups:
+        pair_ok = template in ("weighted_mean", "weighted_proportion", "gap", "quartile_gap",
+                               "percentile_spread", "quartile_means", "percentiles")
+        group_cols = [c for c in ["measure", "quarter", "percentile", "contrast"] + extra_cols
+                      if c in t.columns]
+        groups = t.groupby(group_cols, dropna=False, sort=False) if group_cols else [(None, t)]
+        for gkey, tm in groups:
+            if not pair_ok:
+                break
+            tm = tm[tm["CNT"].notna()]
+            if tm.empty or tm["CNT"].astype(str).duplicated().any():
+                continue
+            gparts = []
+            if group_cols:
+                keyvals = gkey if isinstance(gkey, tuple) else (gkey,)
+                for c, v in zip(group_cols, keyvals):
+                    if pd.isna(v):
+                        continue
+                    gparts.append(group_label(c, v) if c in extra_cols else
+                                  (f"quarter {int(v)}" if c == "quarter" else
+                                   f"P{int(v)}" if c == "percentile" else str(v)))
+            tag = f" ({'; '.join(gparts)})" if gparts else ""
             all_codes = [str(c) for c in tm["CNT"]]
             avgs = [c for c in all_codes if c.endswith(" avg")]
-            codes = [c for c in focus_codes if c in set(all_codes)]
-            ranked_top = [c for c in all_codes if not c.endswith(" avg")][:3] if ranked else []
-            if len(tm) - len(avgs) <= 4 and not codes:
-                codes = [c for c in all_codes if not c.endswith(" avg")]
+            econ = [c for c in all_codes if not c.endswith(" avg")]
+            focus = [c for c in focus_codes if c in set(econ)]
+            pair_ids = [x for x in (plan.get("_pair") or []) if x in set(econ)]
+            codes = list(dict.fromkeys(pair_ids + focus))
+            if len(econ) <= 4:
+                codes = econ
+            ranked_top = econ[:3] if ranked else []
             codes = list(dict.fromkeys(codes[:4] + (ranked_top if avgs else [])))
             sub = tm.set_index(tm["CNT"].astype(str))
-            tag = f" ({mlabel})" if mlabel else ""
+            contrast_word = ("difference" if template in ("gap", "quartile_gap", "percentile_spread")
+                             else "estimate")
 
-            def pair(a, b):
-                ea, eb = sub.loc[a, "estimate"], sub.loc[b, "estimate"]
-                sa, sb = sub.loc[a, "se"], sub.loc[b, "se"]
+            def pair(a, b, est="estimate", se="se", cyc=""):
+                ea, eb = sub.loc[a, est], sub.loc[b, est]
+                sa, sb = sub.loc[a, se], sub.loc[b, se]
                 if any(pd.isna(x) for x in (ea, eb, sa, sb)):
-                    return
+                    return None
                 diff = float(ea) - float(eb)
                 if b.endswith(" avg"):
                     n = len(member_sets.get(b, []) or [])
                     if n and a in set(member_sets.get(b, [])):
                         # a member's own estimate is inside the average:
                         # var(a - avg) = SE_a^2 (1 - 2/N) + SE_avg^2
-                        se = float(np.sqrt(float(sa) ** 2 * (1 - 2 / n) + float(sb) ** 2))
+                        s = float(np.sqrt(float(sa) ** 2 * (1 - 2 / n) + float(sb) ** 2))
                         how = f"the economy's share of the {n}-member average accounted for"
                     else:
-                        se = float(np.sqrt(float(sa) ** 2 + float(sb) ** 2))
+                        s = _pair_se(sa, sb)
                         how = "independent samples"
                 else:
-                    se = float(np.sqrt(float(sa) ** 2 + float(sb) ** 2))
+                    s = _pair_se(sa, sb)
                     how = "independent samples"
-                out.append(f"{_name(a, names)} minus {_name(b, names)}{tag}: {fmt(diff)} "
-                           f"(SE {fmt(se)}, {how}), {_sig(diff, se)}.")
+                head_txt = (f"{contrast_word.capitalize()} for {_name(a, names)} minus for {_name(b, names)}"
+                            if contrast_word == "difference" else
+                            f"{_name(a, names)} minus {_name(b, names)}")
+                out.append(f"{head_txt}{tag}{cyc}: {fmt(diff)} (SE {fmt(s)}, {how}), {_sig(diff, s)}.")
+                return diff, s
 
-            for i, a in enumerate(codes):
-                for b in codes[i + 1:]:
-                    if a in focus_codes or b in focus_codes or len(tm) - len(avgs) <= 4:
+            if not multi_cycle:
+                for i, a in enumerate(codes):
+                    for b in codes[i + 1:]:
+                        if a in focus or b in focus or len(econ) <= 4 or {a, b} <= set(pair_ids):
+                            pair(a, b)
+                    for b in avgs:
                         pair(a, b)
-                for b in avgs:
-                    pair(a, b)
+                # statistically tied economies and the rank range of a named one
+                if len(econ) >= 5 and "se" in tm.columns:
+                    for a in (pair_ids or focus)[:2]:
+                        ea, sa = sub.loc[a, "estimate"], sub.loc[a, "se"]
+                        if pd.isna(ea) or pd.isna(sa):
+                            continue
+                        tied, above, below = [], 0, 0
+                        for b in econ:
+                            if b == a:
+                                continue
+                            eb, sb = sub.loc[b, "estimate"], sub.loc[b, "se"]
+                            if pd.isna(eb) or pd.isna(sb):
+                                continue
+                            d = float(eb) - float(ea)
+                            if abs(d) <= Z * _pair_se(sa, sb):
+                                tied.append(b)
+                            elif d > 0:
+                                above += 1
+                            else:
+                                below += 1
+                        tied_txt = (", ".join(_name(c, names) for c in tied[:25])
+                                    + (f" and {len(tied) - 25} more" if len(tied) > 25 else "")) if tied else "none"
+                        sentence = (f"Economies whose {contrast_word} is not statistically different from "
+                                    f"{_name(a, names)}{tag} (independent samples, 1.96 SE): {tied_txt}")
+                        if ranked and not pd.isna(sub.loc[a].get("rank")):
+                            lo, hi = above + 1, above + 1 + len(tied)
+                            sentence += (f"; {above} economies are significantly higher and {below} "
+                                         f"significantly lower, so its position could be anywhere from "
+                                         f"rank {lo} to rank {hi}")
+                        out.append(sentence + ".")
+            else:
+                first, last = cycles[0], cycles[-1]
+                for i, a in enumerate(codes):
+                    for b in codes[i + 1:]:
+                        if not (a in focus or b in focus or len(econ) <= 4 or {a, b} <= set(pair_ids)):
+                            continue
+                        d_last = pair(a, b, f"estimate_{last}", f"se_{last}", f", PISA {last}")
+                        d_first = pair(a, b, f"estimate_{first}", f"se_{first}", f", PISA {first}")
+                        if d_last and d_first:
+                            change = d_last[0] - d_first[0]
+                            s = float(np.sqrt(d_last[1] ** 2 + d_first[1] ** 2))
+                            out.append(
+                                f"Change {last} minus {first} in ({_name(a, names)} minus {_name(b, names)}){tag} "
+                                f"— equal to the change for {_name(a, names)} minus the change for {_name(b, names)}: "
+                                f"{fmt(change)} (SE {fmt(s)}, sampling error of the four estimates; the "
+                                f"link error cancels), {_sig(change, s)}.")
+                    for b in avgs:
+                        pair(a, b, f"estimate_{last}", f"se_{last}", f", PISA {last}")
     return out
 
 
@@ -252,6 +403,31 @@ FORBIDDEN = [
      "speaks as a language model"),
     (re.compile(r"(developed|built|made|created) by the OECD|OECD'?s? (own )?(tool|app|explorer)", re.I),
      "presents the app as an OECD product"),
+    (re.compile(r"\b(partial (data|table|view|results?)|table is partial|(provided|available|shown) "
+                r"(data|table|rows) (is|are|only|does)|does not include (data for )?all|"
+                r"only (includes|contains|shows|covers) (data for )?(some|a subset|part)|"
+                r"a complete list would require|based on the (available|provided|partial) (data|table)|"
+                r"(provided |available )?(results|data|table|output) (do|does) not (contain|include|show)"
+                r"( any)? (data|rows|results|values))\b", re.I),
+     "describes the result as partial or incomplete (the full table is in the result; use the verified statements)"),
+    (re.compile(r"\b(cannot|can'?t|unable to|not able to) (directly )?(compute|calculate|perform|test|determine) "
+                r"(the |a |statistical )?(difference|significance|standard error|comparison)\b", re.I),
+     "claims the app cannot compute a difference or its significance (the verified statements contain them)"),
+]
+# Word pairs that name opposite groups: a number the verified statements
+# attach to one side must not be attributed to the other in the prose
+# ("the female mean" reported as boys'; a share who DISAGREE reported as
+# agreeing).
+OPPOSITES = [
+    (re.compile(r"\b(male|males|boys?|men|masculin\w*|niños|chicos|garçons)\b", re.I),
+     re.compile(r"\b(female|females|girls?|women|femenin\w*|niñas|chicas|filles)\b", re.I), "male", "female"),
+    (re.compile(r"\bdisagree\w*|\bdesacuerdo\b", re.I), re.compile(r"\bagree\w*|\bacuerdo\b", re.I),
+     "disagree", "agree"),
+    (re.compile(r"\bprivate\b|\bprivad[ao]s?\b", re.I), re.compile(r"\bpublic\b|\bpúblic[ao]s?\b", re.I),
+     "private", "public"),
+    (re.compile(r"\brural(es)?\b", re.I), re.compile(r"\burban[ao]?s?\b", re.I), "rural", "urban"),
+    (re.compile(r"\b(immigrants?|foreign-born|first-generation|second-generation|inmigrantes?)\b", re.I),
+     re.compile(r"\b(native|natives|non-immigrants?|native-born|nativos?)\b", re.I), "immigrant", "native"),
 ]
 CAUSAL = re.compile(r"\b(due to|because of|caused by|driven by|attributable to|as a result of|"
                     r"thanks to|owing to|is the result of|led to|resulted in)\b", re.I)
@@ -300,6 +476,7 @@ def check_prose(text: str, table: pd.DataFrame | None, provenance: dict | None,
     plan = plan or {}
     notes_text = " ".join(prov.get("notes") or []) + " " + str(prov.get("method") or "")
     sample_text = " ".join(str(s.get("students") or "") + " " + str(s.get("weighted_students") or "")
+                           + " " + str(s.get("schools") or "")
                            for s in (prov.get("sample") or []))
 
     # 1. numbers — non-English drafts write thousands as "6 770" or "6.770"
@@ -359,6 +536,49 @@ def check_prose(text: str, table: pd.DataFrame | None, provenance: dict | None,
             issues.append(f"claims '{claim}' but no such verdict is in the result: "
                           f"\"{sentence.strip()[:120]}\"")
             break
+
+    # 3b. a number attributed to the opposite group of the one the app stated
+    facts = prov.get("facts") or []
+    for a_rx, b_rx, a_word, b_word in OPPOSITES:
+        sides: list[tuple[float, int, str]] = []
+        for line in facts:
+            if a_word == "disagree":
+                # an item stem ("Agree:", "Agree/disagree: Your intelligence…")
+                # names no side; only the decoded codes do
+                line = re.sub(r"\bagree\s*/\s*disagree\s*:|\bagree\s*:|to what extent do you agree or disagree",
+                              " ", line, flags=re.I)
+            sa, sb = bool(a_rx.search(line)), bool(b_rx.search(line))
+            if sa == sb:
+                continue
+            for _, n, d in _numbers_in(line):
+                if d == 0 and n <= 12:
+                    continue
+                sides.append((n, d, a_word if sa else b_word))
+        if not sides:
+            continue
+        flagged = False
+        for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
+            sa, sb = bool(a_rx.search(sentence)), bool(b_rx.search(sentence))
+            if sa == sb:
+                continue
+            side = a_word if sa else b_word
+            for raw, n, d in _numbers_in(sentence):
+                if YEAR.match(raw) or (d == 0 and n <= 12):
+                    continue
+                stated = {s for (fn, fd, s) in sides if abs(fn - n) <= 0.5 * 10 ** (-min(d, fd)) + 1e-9}
+                if stated and side not in stated:
+                    issues.append(f"attributes {raw} to the {side} group but the verified statement "
+                                  f"gives it for the {', '.join(sorted(stated))} group: "
+                                  f"\"{sentence.strip()[:120]}\"")
+                    flagged = True
+                    break
+            if flagged:
+                break
+
+    # 3c. a standard error rounded away to 0.0 (the facts keep two decimals)
+    if re.search(r"\(\s*(SE|EE|ET|SE\s*=)\s*0(?:[.,]0+)?\s*\)", text or "", re.I) \
+            and not any(re.search(r"\(SE 0\.00?\)", line) for line in facts):
+        issues.append("rounds a standard error to 0.0 (copy the SE as the verified statement gives it)")
 
     # 4. forbidden phrasings, unless the app's notes say the same
     for rx, why in FORBIDDEN:

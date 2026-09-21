@@ -77,9 +77,13 @@ def test_every_standard_variable_exists_in_the_catalog_for_its_cycles():
     if not (CATALOG_DIR / "variables.parquet").exists():
         pytest.skip("no local catalog (CI)")
     cat = pd.read_parquet(CATALOG_DIR / "variables.parquet")
+    # virtual joined views map to the physical files the catalog knows
+    physical = {"stu_sch": ("stu_qqq", "sch_qqq"), "stu_crt": ("stu_qqq", "crt_cog")}
     for s in standards.STANDARDS:
         for cycle, var in s.variables.items():
-            hit = cat[(cat.variable == var) & (cat.cycle == cycle) & (cat.instrument == s.instrument)]
+            instruments = physical.get(s.instrument, (s.instrument,))
+            hit = cat[(cat.variable == var.replace("{pv}", "1")) & (cat.cycle == cycle)
+                      & (cat.instrument.isin(instruments))]
             assert not hit.empty, f"{s.construct}: {var} not in {s.instrument}_{cycle}"
         for var in s.companions:
             assert (cat.variable == var).any(), f"{s.construct}: companion {var} unknown"

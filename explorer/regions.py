@@ -29,6 +29,8 @@ REGIONS: dict[str, list[str]] = {
     "Central Asia": ["KAZ", "KGZ", "QTJ", "UZB"],
     "Caucasus": ["ARM", "AZE", "GEO", "QAZ"],
     "Middle East": ["ARE", "ISR", "JOR", "LBN", "PSE", "QAT", "QKI", "SAU", "TUR"],
+    # Arab League members present (QKI = Iraq's Kurdistan Region, 2025 only)
+    "Arab countries": ["ARE", "JOR", "LBN", "MAR", "PSE", "QAT", "QKI", "SAU"],
     "North Africa": ["MAR"],
     "Sub-Saharan Africa": ["KEN", "MUS", "RWA", "ZMB"],
     "Europe": [
@@ -67,6 +69,14 @@ ALIASES: dict[str, str] = {
     "mena": "Middle East and North Africa",
     "middle east": "Middle East",
     "gulf": "Middle East",
+    "arab": "Arab countries",
+    "arab countries": "Arab countries",
+    "arab world": "Arab countries",
+    "arab states": "Arab countries",
+    "arab league": "Arab countries",
+    "arabic countries": "Arab countries",
+    "arabic speaking countries": "Arab countries",
+    "arab region": "Arab countries",
     "nordic": "Nordic countries",
     "nordics": "Nordic countries",
     "scandinavia": "Nordic countries",
@@ -90,7 +100,7 @@ ALIASES: dict[str, str] = {
 ECONOMY_ALIASES: dict[str, list[str]] = {
     "TAP": ["taiwan", "chinese taipei", "taipei"],
     "TUR": ["turkey", "turkiye", "türkiye"],
-    "KOR": ["south korea", "korea", "republic of korea"],
+    "KOR": ["south korea", "korea", "republic of korea", "corea", "corea del sur"],
     "ARE": ["uae", "united arab emirates", "emirates"],
     "GBR": ["uk", "united kingdom", "britain", "great britain", "england", "scotland", "wales"],
     "USA": ["usa", "united states"],
@@ -150,6 +160,18 @@ NON_PISA: dict[str, str] = {
     "haiti": "Haiti", "honduras": "Honduras", "nicaragua": "Nicaragua", "laos": "Laos",
     "mozambique": "Mozambique", "senegal": "Senegal", "zimbabwe": "Zimbabwe",
     "cameroon": "Cameroon", "ivory coast": "Côte d'Ivoire", "mongolia 2018": "Mongolia (before 2022)",
+    "north korea": "North Korea (DPRK)", "dprk": "North Korea (DPRK)",
+    "democratic people s republic of korea": "North Korea (DPRK)", "corea del norte": "North Korea (DPRK)",
+    "massachusetts": "Massachusetts (a PISA 2015 subnational participant only)",
+    "north carolina": "North Carolina (a PISA 2015 subnational participant only)",
+}
+
+# Words that mean an economy is NOT the one an alias would match ("north
+# korea" is not KOR): alias matching is skipped for the code when present.
+NEGATIVE_ALIASES: dict[str, list[str]] = {
+    "KOR": ["north korea", "dprk", "corea del norte", "pyongyang"],
+    "IRL": ["northern ireland"],
+    "MKD": ["macedonia greece"],
 }
 
 

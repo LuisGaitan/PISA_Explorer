@@ -342,7 +342,16 @@ def regression(con, table, y, xs, by=(), where=None,
                 stats = group_stats(g, mask)
             x_use, y_use, w_use = x_mat[mask], yv[mask], weights[mask]
             if mask.sum() <= len(terms):
-                problem = "fewer complete observations than predictors"
+                # name a predictor (or the outcome) with no values at all in
+                # this group — "not administered", not "insufficient data"
+                empty = [terms[j + 1] for j in range(x_mat.shape[1] - 1)
+                         if np.isnan(x_mat[:, j + 1]).all()]
+                if np.isnan(yv).all():
+                    problem = "the outcome has no values in this group (not administered)"
+                elif empty:
+                    problem = f"{', '.join(empty)} has no values in this group (not administered there)"
+                else:
+                    problem = "fewer complete observations than predictors"
             else:
                 # A predictor that is constant in this group (a dummy for a
                 # category nobody is in, a variable with one value) or a linear

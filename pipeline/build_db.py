@@ -88,6 +88,25 @@ def main() -> int:
         built.append(f"stu_sch_{cycle}")
         log.info(f"stu_sch_{cycle}: joined view, {len(sch_only)} school columns")
 
+    # stu_crt_2022: students joined to the creative-thinking cognitive file,
+    # which carries the creative-thinking plausible values but no weights —
+    # the join gives them the student's W_FSTUWT and replicate weights.
+    if "stu_qqq_2022" in built and "crt_cog_2022" in built:
+        crt_cols = [r[0] for r in con.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'crt_cog_2022' "
+            "ORDER BY ordinal_position").fetchall()]
+        stu_cols = {r[0] for r in con.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'stu_qqq_2022'").fetchall()}
+        crt_only = [c for c in crt_cols if c not in stu_cols]
+        crt_select = ", ".join(f'c."{c}"' for c in crt_only)
+        con.execute(
+            "CREATE OR REPLACE VIEW stu_crt_2022 AS "
+            f"SELECT s.*, {crt_select} FROM stu_qqq_2022 s LEFT JOIN crt_cog_2022 c "
+            "ON s.CNT = c.CNT AND s.CNTSTUID = c.CNTSTUID"
+        )
+        built.append("stu_crt_2022")
+        log.info(f"stu_crt_2022: joined view, {len(crt_only)} creative-thinking columns")
+
     catalog_dir = DB_PATH.parent / "catalog"
     for table, filename in (("catalog_variables", "variables.parquet"),
                             ("catalog_comparability", "comparability.parquet")):
