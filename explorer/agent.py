@@ -4144,6 +4144,9 @@ class Agent:
         """Codes of economies named in the text, by code or by name (the
         catalog's CNT labels), longest names first so 'Korea' does not match
         inside 'North Korea'-style labels."""
+        codes = list(codes)
+        if not codes:
+            return []                     # nothing loaded (CI, offline tests): no catalog read
         names = {}
         for cycle in ("2025", "2022", "2018"):
             desc = catalog.describe("CNT", cycle=cycle)
