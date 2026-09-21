@@ -154,7 +154,8 @@ Beijing, Shanghai, Jiangsu, Zhejiang; 2018 and 2025 only), TAP = Chinese
 Taipei, MAC = Macao (China), HKG = Hong Kong (China), KSV = Kosovo, QAT =
 Qatar, QAZ = Baku (Azerbaijan; 2018/2022) vs AZE = Azerbaijan (2025), QUR =
 Ukrainian regions (2022) / QUA = Ukrainian regions (2025), QKI = Kurdistan
-Region (Iraq; 2025), QTJ = Dushanbe (Tajikistan; 2025), QMR = Moscow and QRT =
+Region (Iraq; 2025), QTJ = Dushanbe (Tajikistan; 2025), QMC = Moscow City (2018,
+released separately by the OECD), QMR = Moscow region and QRT =
 Tatarstan (2018), RUS = Russia (2018). Never invent codes: an economy is a
 single CNT value. Not every economy is in every cycle (e.g. ARM, KEN, KGZ,
 MUS, RWA, ZMB, ECU joined in 2025; JAM only 2022; BIH, BLR, UKR only 2018).
@@ -397,9 +398,21 @@ percentile_spread. Two categorical variables against each other => crosstab.
 "Controlling for" / "after accounting for" => regression.
 Share below/above a PISA proficiency level => weighted_mean with a threshold
 measure, e.g. "% below Level 2 in math" => measure =
-"CASE WHEN PV{{pv}}MATH < 420.07 THEN 100.0 ELSE 0.0 END"
-(Level 2 lower bounds — math 420.07, reading 407.47, science 409.54;
- Level 5 lower bounds — math 606.99, reading 625.61, science 633.33)."""
+"CASE WHEN PV{{pv}}MATH < 420.07 THEN 100.0 ELSE 0.0 END"; "top performers"
+= Level 5 or above (>= the Level 5 bound); "low achievers" = below Level 2.
+Proficiency-level LOWER BOUNDS (use these exact values, never invent one):
+{levels}
+"P90-P10", "P75-P25", interdecile / interquartile range, "dispersion",
+"spread", "inequality of scores" => template percentile_spread (upper,
+lower) — never percentiles followed by a subtraction in the summary.
+"World average" / "global average" / "average of all participants" =>
+include_average_of = ["All participants"] (the app averages every economy
+in the cycle); the OECD average is a DIFFERENT benchmark (member countries
+only) — never substitute one for the other silently.
+"Which policy works best" / "should countries do X" / "effect of a policy"
+=> analyze the within-cycle association (regression or correlation, latest
+cycle unless one is named) and put in limitation_note that PISA cannot
+evaluate policies causally — never a cross-cycle regression."""
 
 SUMMARY_SYSTEM = """You summarize PISA analysis results for a general audience.
 Write 2-5 sentences. Cite the key numbers with their standard errors like
@@ -520,7 +533,24 @@ class Agent:
         self.economy_names = self._economy_names()
         self.facts = self._facts_block()
         self.regions_block = regions.prompt_block(self.present)
+        self.no_school_link = self._no_school_link()
         self._fired: list[str] = []
+
+    def _no_school_link(self) -> dict[str, set[str]]:
+        """Economies whose student file carries no school identifier (five in
+        2025): their students cannot be joined to the school questionnaire,
+        so school-variable analyses have nothing for them — a fact stated,
+        never an empty result or a "did not take part"."""
+        out: dict[str, set[str]] = {}
+        for cycle in self.coverage:
+            try:
+                rows = self.con.sql(f"SELECT CNT FROM stu_qqq_{cycle} GROUP BY CNT "
+                                    "HAVING count(CNTSCHID) = 0").fetchall()
+            except Exception:  # noqa: BLE001
+                continue
+            if rows:
+                out[cycle] = {r[0] for r in rows}
+        return out
 
     # Every intercept and post-hoc hook that changes an answer records its
     # name here; the list rides on the event so the admin dashboard shows
@@ -666,7 +696,8 @@ class Agent:
 
     WHY_WORDS = re.compile(
         r"\b(why|factor|factors|cause|causes|caused|reason|reasons|explain|explains|"
-        r"behind|driver|drivers|due to|because|attributable|impact of|effect of)\b",
+        r"behind|driver|drivers|due to|because|attributable|impact of|effect of|"
+        r"policy|policies|works best|should (countries|schools|governments)|intervention)\b",
         re.IGNORECASE)
     WHY_NOTE = ("PISA is a repeated cross-sectional survey of different students "
                 "each cycle: it can show what changed, not what caused the change. "
@@ -767,15 +798,44 @@ class Agent:
         self._strata_cache = out
         return out
 
-    def _strata_hits(self, question: str, limit: int = 12) -> list[tuple[str, str, str]]:
-        """Strata whose label contains a distinctive word of the question
-        ("Intellectual schools" for "Nazarbayev Intellectual schools"): a word
-        counts when it is rare among labels, so 'urban' or 'public' never match."""
+    # Adjudicated sub-national entities that live inside another economy's
+    # file: the alias selects their strata (codes differ per cycle).
+    # alias -> (code prefixes, label regex): a stratum belongs to the entity
+    # when its code starts with a prefix OR its label matches
+    STRATA_ALIASES = {
+        "scotland": (("QSC",), re.compile(r"^QSC\b|scotland", re.I)),
+        "england": ((), re.compile(r"\bengland\b", re.I)),
+        "wales": ((), re.compile(r"\bwales\b", re.I)),
+        "northern ireland": ((), re.compile(r"northern ireland", re.I)),
+    }
+
+    def _strata_entities(self, question: str) -> list[dict]:
+        """The sub-economy entities a question names, each with its stratum
+        codes per cycle: [{"name", "economy", "codes": {cycle: [code, ...]},
+        "labels": {code: label}}]. Two routes: (a) a fixed alias for an
+        adjudicated sub-national entity (Scotland = the QSC strata of GBR);
+        (b) a label PHRASE of two or more consecutive words that appears in
+        the question ("Intellectual schools" for "Nazarbayev Intellectual
+        schools") - a single rare word is not enough, it hijacked ordinary
+        questions ("summary", "position")."""
         index = self._strata_index()
         if not index:
             return []
-        # words that name an economy ("Mexico" in "Undisclosed STRATUM - Mexico")
-        # are not stratum words
+        low_q = " " + re.sub(r"[^a-z0-9 ]", " ", (question or "").lower()) + " "
+        low_q = re.sub(r"\s+", " ", low_q)
+        entities = []
+        for alias, (prefixes, rx) in self.STRATA_ALIASES.items():
+            if f" {alias} " not in low_q:
+                continue
+            ent = {"name": alias.title(), "economy": "GBR", "codes": {}, "labels": {}}
+            for c, code, label, low in index:
+                if code.startswith(prefixes) or rx.search(label):
+                    ent["codes"].setdefault(c, []).append(code)
+                    ent["labels"][code] = label
+            if ent["codes"]:
+                entities.append(ent)
+        if entities:
+            return entities
         economy_words = {w for name in getattr(self, "economy_names", {}).values()
                          for w in re.findall(r"[a-z]{5,}", str(name).lower())}
         words = {w for w in re.findall(r"[a-z]{5,}", (question or "").lower())
@@ -783,30 +843,134 @@ class Agent:
                  and w not in economy_words}
         hits = []
         for w in words:
-            # "non-intellectual / Astana" must not match "intellectual"
             matches = [(c, code, label) for c, code, label, low in index
                        if re.search(rf"(?<![a-z-]){re.escape(w)}", low)
                        and not low.startswith("undisclosed")]
-            if 0 < len(matches) <= 25:
-                hits.extend(matches)
-        seen, out = set(), []
-        for h in hits:
-            if h[:2] not in seen:
-                seen.add(h[:2])
-                out.append(h)
-        return out[:limit]
+            if not (0 < len(matches) <= 25):
+                continue
+            for c, code, label in matches:
+                lab = re.sub(r"[^a-z0-9 ]", " ", label.lower())
+                lab_words = [t for t in lab.split() if t]
+                phrase_ok = False
+                for i, t in enumerate(lab_words):
+                    if t.startswith(w):
+                        for j in (i - 1, i + 1):
+                            if 0 <= j < len(lab_words):
+                                pair = " ".join(lab_words[min(i, j):max(i, j) + 1])
+                                if f" {pair} " in low_q:
+                                    phrase_ok = True
+                if phrase_ok:
+                    hits.append((c, code, label))
+        if not hits:
+            return []
+        # one entity per economy prefix
+        by_econ: dict[str, dict] = {}
+        for c, code, label in dict.fromkeys(hits):
+            econ = "GBR" if code[:3] in ("QSC", "QUK") else code[:3]
+            ent = by_econ.setdefault(econ, {"name": label.split("/")[0].split(":")[-1].strip() or label,
+                                            "economy": econ, "codes": {}, "labels": {}})
+            if code not in ent["codes"].get(c, []):
+                ent["codes"].setdefault(c, []).append(code)
+                ent["labels"][code] = label
+        return list(by_econ.values())
+
+    def _strata_hits(self, question: str, limit: int = 12) -> list[tuple[str, str, str]]:
+        out = []
+        for ent in self._strata_entities(question):
+            for c, codes in sorted(ent["codes"].items()):
+                out += [(c, code, ent["labels"][code]) for code in codes]
+        return out[:limit * 3]
+
+    def _apply_strata(self, plan: dict, question: str) -> None:
+        """Deterministic stratum plans. One entity ("Nazarbayev Intellectual
+        schools"): the plan is filtered to its strata, per cycle, and never
+        grouped by STRATUM. Two aliases ("Scotland compared with England"):
+        a gap between the two sets of strata. The planner was asked to do
+        this and produced a table of every stratum once and a CASE in `by`
+        the next time; here it is one rule."""
+        if plan.get("action") == "clarify" or plan.get("template") == "raw_sql":
+            return
+        ents = self._strata_entities(question)
+        if not ents:
+            return
+        wheres = [str(plan.get("where") or "")] + [str(ov.get("where") or "") for ov in
+                                                   (plan.get("cycle_overrides") or {}).values()
+                                                   if isinstance(ov, dict)]
+        if any(re.search(r"STRATUM", w, re.I) for w in wheres) and                 not any(str(b).upper().startswith("CASE") for b in plan.get("by") or []):
+            return                                  # the planner already did it right
+        cycles = [str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]]
+        by = [b for b in (plan.get("by") or ["CNT"])
+              if isinstance(b, str) and b.upper() != "STRATUM" and not b.upper().startswith("CASE")]
+        if "CNT" not in by:
+            by = ["CNT"] + by
+        plan["by"] = by
+        economy = ents[0]["economy"]
+        base_where = str(plan.get("where") or "")
+        if f"'{economy}'" not in base_where:
+            base_where = f"CNT = '{economy}'"
+        overrides = plan.get("cycle_overrides") if isinstance(plan.get("cycle_overrides"), dict) else {}
+        kept = []
+        if len(ents) >= 2 and all(e["economy"] == economy for e in ents[:2]):
+            a, b = ents[0], ents[1]
+            measure = plan.get("measure") or ((plan.get("measures") or [None])[0]) or "PV{pv}SCIE"
+            plan.update({"template": "gap", "measure": measure, "measures": None, "minuend": 1,
+                         "subtrahend": 0, "group_label": f"{a['name']} minus {b['name']}",
+                         "where": base_where, "instrument": plan.get("instrument") or "stu_qqq"})
+            for c in cycles:
+                if a["codes"].get(c) and b["codes"].get(c):
+                    ca = ", ".join(f"'{x}'" for x in a["codes"][c])
+                    cb = ", ".join(f"'{x}'" for x in b["codes"][c])
+                    overrides.setdefault(c, {})["group_col"] =                         f"CASE WHEN STRATUM IN ({ca}) THEN 1 WHEN STRATUM IN ({cb}) THEN 0 END"
+                    kept.append(c)
+            plan["group_col"] = overrides[kept[0]]["group_col"] if kept else "STRATUM"
+        else:
+            ent = ents[0]
+            plan["where"] = base_where
+            for c in cycles:
+                codes = ent["codes"].get(c)
+                if codes:
+                    lst = ", ".join(f"'{x}'" for x in codes)
+                    overrides.setdefault(c, {})["where"] = f"{base_where} AND STRATUM IN ({lst})"
+                    kept.append(c)
+        if not kept:
+            return
+        if len(kept) < len(cycles):
+            plan["_strata_cycles_dropped"] = [c for c in cycles if c not in kept]
+        plan["cycles"] = kept
+        plan["cycle_overrides"] = overrides
+        self._fire("hook:strata_plan")
 
     @staticmethod
     def _strata_block(hits) -> str:
         if not hits:
             return ""
         lines = ["SAMPLING STRATA matching the question (a stratum is a region, school "
-                 "type or school network inside an economy; to analyze one, keep the "
-                 "economy in `where` and add STRATUM = '<code>' — codes are cycle-specific, "
-                 "so plan the cycle that has the code; instrument stu_qqq or stu_sch):"]
+                 "type or school network inside an economy). The app applies the stratum "
+                 "filter itself: plan the STATISTIC as if for the whole economy (by "
+                 "[\"CNT\"], where = the economy; never group by STRATUM and never put a "
+                 "CASE in `by`; for 'A compared with B' between two such entities plan a "
+                 "gap and the app fills the group_col). Strata for reference:"]
+        by_cycle: dict[str, list] = {}
         for cycle, code, label in hits:
-            lines.append(f"- PISA {cycle}: STRATUM = '{code}' = {label} (economy {code[:3]})")
+            by_cycle.setdefault(cycle, []).append((code, label))
+        for cycle in sorted(by_cycle):
+            items = by_cycle[cycle]
+            econ = "GBR" if items[0][0][:3] in ("QSC", "QUK") else items[0][0][:3]
+            if len(items) <= 4:
+                lines.append(f"- PISA {cycle} (economy {econ}): " + "; ".join(
+                    f"STRATUM = '{code}' = {label}" for code, label in items))
+            else:
+                lines.append(f"- PISA {cycle} (economy {econ}): STRATUM IN (" +
+                             ", ".join(f"'{code}'" for code, _ in items) + ") = " +
+                             f"{items[0][1]} … ({len(items)} strata)")
         return "\n".join(lines) + "\n"
+
+    WORLD_AVERAGE_WORDS = re.compile(
+        r"\b(world|worldwide|global|international)\b.{0,15}\b(average|mean)\b|"
+        r"\b(average|mean)\b.{0,25}\b(world|worldwide|globe|global|all (participating |the )?"
+        r"(countries|economies|participants|nations))\b|"
+        r"\ball[- ](participating |the )?(countries|economies|participants|nations)\b.{0,15}\b(average|mean)\b|"
+        r"promedio (mundial|global|de todos)|moyenne (mondiale|globale)", re.IGNORECASE)
 
     def _comparability_answer(self) -> str:
         return (
@@ -1009,6 +1173,22 @@ class Agent:
             return []
         mask = table[estimate_cols].isna().copy()
         notes = []
+        # cells the app blanked itself (reporting minimum) are not "missing"
+        suppressed = plan.get("_suppressed_rows") or {}
+        if suppressed:
+            for col in estimate_cols:
+                m = re.fullmatch(r"estimate_(\d{4})", col)
+                cyc = m.group(1) if m else (str(table["cycle"].iloc[0]) if "cycle" in table.columns else None)
+                for key in suppressed.get(cyc, []):
+                    if not isinstance(key, dict):
+                        continue
+                    cols = [c for c in key if c in table.columns]
+                    if not cols:
+                        continue
+                    hit = pd.Series(True, index=table.index)
+                    for c in cols:
+                        hit &= table[c].astype(str) == key[c]
+                    mask.loc[hit, col] = False
         if "CNT" in table.columns:
             cnt = table["CNT"].astype(str)
             for col in estimate_cols:
@@ -1018,10 +1198,19 @@ class Agent:
                     continue
                 absent_rows = mask[col] & ~cnt.isin(present) & ~cnt.str.endswith(" avg")
                 if absent_rows.any():
-                    codes = sorted(set(cnt[absent_rows]))
-                    notes.append(f"PISA {m.group(1)}: {self._names(codes)} did not take "
-                                 f"part in that cycle — those cells are blank because the "
-                                 f"economy was not assessed, not because a variable is missing.")
+                    cycle = m.group(1)
+                    for code in sorted(set(cnt[absent_rows])):
+                        kin = [k for k in regions.CODE_SUCCESSION.get(code, ()) if k in present]
+                        if kin:
+                            notes.append(
+                                f"PISA {cycle}: {self._names([code])} appears in that cycle as "
+                                f"{self._names(kin)} — a different coverage of the same country. "
+                                "The OECD does not compare the two as a trend, so no change is "
+                                "computed across them; the levels for each are shown.")
+                        else:
+                            notes.append(f"PISA {cycle}: {self._names([code])} did not take "
+                                         f"part in that cycle — those cells are blank because the "
+                                         f"economy was not assessed, not because a variable is missing.")
                     mask.loc[absent_rows, col] = False
         n_missing = int(mask.any(axis=1).sum())
         if n_missing:
@@ -1164,7 +1353,25 @@ class Agent:
         r"(not|n[’']t|never) (collected|administered|available|released|present|provided|"
         r"asked|included)|(is|was|were) (missing|unavailable|absent)", re.IGNORECASE)
 
+    MALE_NOTE = (
+        "PISA 2025 uses the derived MALE flag (1 = Male, 0 = Female/Other) for gender in "
+        "every economy — the standard convention, not a missing-data workaround: gender "
+        "was collected from sampling data everywhere, and ST004D01T is simply not "
+        "released in the 2025 public-use file for 14 economies. MALE = 0 pools students "
+        "who answered 'other' with female (the OECD's main gender gap leaves them out; "
+        "the two are not separable in the public file). 2018 and 2022 use ST004D01T "
+        "(1 = Female, 2 = Male).")
+
     def _verify_substitution_claims(self, plan: dict) -> None:
+        # "ST004D01T was not collected for X in 2025" is always the wrong
+        # wording: the variable is withheld from the public file, not
+        # uncollected — replace it whatever the coverage table says
+        note0 = str(plan.get("substitution_note") or "")
+        if "2025" in " ".join(str(c) for c in plan.get("cycles") or []) and "ST004D01T" in note0 \
+                and self.FALSE_CLAIM_WORDS.search(note0):
+            plan["substitution_note"] = self.MALE_NOTE
+            plan["_claim_corrected"] = ["ST004D01T"]
+            return
         """A substitution_note that says a variable was not collected for the
         named economies is checked against the coverage table; when the
         economies do have it, the false clause is replaced by the plain
@@ -1212,10 +1419,7 @@ class Agent:
             for k in [k for k in ov if k.endswith("_note")]:
                 ov.pop(k, None)
         if "ST004D01T" in false:
-            plan["substitution_note"] = (
-                "PISA 2025 uses the derived MALE flag (1 = Male, 0 = Female/Other) for "
-                "gender in every economy — the standard convention, not a missing-data "
-                "workaround; 2018 and 2022 use ST004D01T (1 = Female, 2 = Male).")
+            plan["substitution_note"] = self.MALE_NOTE
         else:
             plan["substitution_note"] = (
                 f"{', '.join(sorted(false))} is available for the economies in this "
@@ -1265,18 +1469,46 @@ class Agent:
     # PUF terms forbid anything that could identify a school's responses. A
     # small group is blanked, counted, and explained in the provenance.
     MIN_STUDENTS = 30
+    MIN_SCHOOLS = 5
+    MIN_COVERAGE = 0.85      # weighted share of the group with an observed value
 
     def _suppress_small_cells(self, res: pd.DataFrame, cycle: str, plan: dict) -> pd.DataFrame:
+        """The OECD reports no estimate based on fewer than 30 students or
+        fewer than 5 schools (Reader's Guide, symbol "c"). Such cells are
+        blanked, remembered (so later notes do not call them "not released")
+        and counted; groups where much of the weighted population has no
+        value on the variable are recorded for a coverage note."""
         if res is None or "n" not in res.columns:
             return res
-        small = res["n"].fillna(0).astype(int) < self.MIN_STUDENTS
-        small &= res["estimate"].notna() if "estimate" in res.columns else small
+        n = res["n"].fillna(0).astype(int)
+        few_students = n < self.MIN_STUDENTS
+        few_schools = pd.Series(False, index=res.index)
+        if "n_schools" in res.columns:
+            ns = res["n_schools"].fillna(-1).astype(int)
+            few_schools = (ns >= 0) & (ns < self.MIN_SCHOOLS)
+        has_est = res["estimate"].notna() if "estimate" in res.columns else pd.Series(True, index=res.index)
+        small = (few_students | few_schools) & has_est
+        # identity of a row = its grouping values ("contrast" is one label per
+        # table and gets renamed later, so it is not part of the identity)
+        keys = [c for c in res.columns if c not in ("estimate", "se", "n_pv", "n", "n_schools",
+                                                     "wcov", "contrast", "category")]
         if small.any():
             res = res.copy()
             res.loc[small, [c for c in ("estimate", "se") if c in res.columns]] = np.nan
-            plan.setdefault("_suppressed", {})[cycle] = int(small.sum())
+            plan.setdefault("_suppressed", {})[cycle] = {
+                "students": int((few_students & has_est).sum()),
+                "schools": int((few_schools & ~few_students & has_est).sum())}
+            plan.setdefault("_suppressed_rows", {}).setdefault(cycle, []).extend(
+                {c: str(v) for c, v in zip(keys, row)} for row in res.loc[small, keys].itertuples(index=False))
             self._fire("hook:small_cell_suppressed")
-        return res.drop(columns=["n"])
+        if "wcov" in res.columns:
+            low = res["wcov"].notna() & (res["wcov"] < self.MIN_COVERAGE) & has_est & ~small
+            if low.any():
+                for row, cov in zip(res.loc[low, keys].itertuples(index=False), res.loc[low, "wcov"]):
+                    plan.setdefault("_low_coverage", {}).setdefault(cycle, []).append(
+                        (", ".join(str(v) for v in row), round(100 * (1 - float(cov)))))
+                self._fire("hook:low_coverage")
+        return res.drop(columns=[c for c in ("n", "n_schools", "wcov") if c in res.columns])
 
     @staticmethod
     def _drop_null_groups(res: pd.DataFrame, by) -> tuple[pd.DataFrame, dict]:
@@ -1330,6 +1562,7 @@ class Agent:
 
     @classmethod
     def _measure_label(cls, expr: str) -> str:
+        expr = cls._unwrap_null_safe(str(expr or ""))
         if link_errors.is_mean_score(expr):
             return link_errors.DOMAIN_NAMES[link_errors.domain_of(expr)].capitalize() + " score"
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", expr):
@@ -1341,10 +1574,11 @@ class Agent:
         if m:
             var, op, val = m.group("var"), m.group("op").upper(), m.group("val").strip()
             if link_errors.domain_of(var):
-                dom = link_errors.DOMAIN_NAMES[link_errors.domain_of(var)]
-                level = cls.LEVEL_CUTOFFS.get(val.rstrip("0").rstrip(".") if "." in val else val)
+                domain = link_errors.domain_of(var)
+                dom = link_errors.DOMAIN_NAMES[domain]
+                level = link_errors.level_name(domain, val)
                 side = {"<": "below", "<=": "at or below", ">=": "at or above", ">": "above"}.get(op, "at")
-                return f"% {side} {level.split(' (')[0] if level else val} in {dom}"
+                return f"% {side} {level if level else val + ' points'} in {dom}"
             desc = catalog.describe(var)
             label = desc.iloc[-1].label[:50] if not desc.empty and desc.iloc[-1].label else var
             value_text = val
@@ -1429,8 +1663,10 @@ class Agent:
         if len(named) < 2:
             return []
         cycles = sorted({str(c) for c in plan.get("cycles") or [DEFAULT_CYCLE]})
-        where = str(plan.get("where") or "")
-        if not where and not plan.get("regions"):
+        where = " ".join([str(plan.get("where") or "")] + [
+            str(ov.get("where") or "") for ov in (plan.get("cycle_overrides") or {}).values()
+            if isinstance(ov, dict)])
+        if not where.strip() and not plan.get("regions"):
             return []                       # an all-economies plan covers everyone
         covered = set(re.findall(r"'([A-Z]{3})'", where))
         for c in cycles:
@@ -1503,6 +1739,20 @@ class Agent:
         r"repeat\w*|skip\w*|speak\w*|attend\w*|ai|chatbots?|immigra\w*|bull\w*|"
         r"belong\w*|satisf\w*)\b",
         re.IGNORECASE)
+
+    def _count_total_answer(self, question: str) -> str:
+        years = set(self.YEAR_RE.findall(question))
+        parts = []
+        for cycle in sorted(self.present):
+            if years and cycle not in years:
+                continue
+            n, schools, econ, wsum = self.con.sql(
+                f"SELECT count(*), count(DISTINCT CNTSCHID), count(DISTINCT CNT), sum(W_FSTUWT) "
+                f"FROM stu_qqq_{cycle}").fetchone()
+            parts.append(f"PISA {cycle}: {int(n):,} students sampled in {int(schools):,} schools "
+                         f"across {int(econ)} economies, representing an estimated "
+                         f"{int(round(wsum)):,} 15-year-olds (sum of final student weights).")
+        return " ".join(parts)
 
     def _count_answer(self, codes: list[str], question: str) -> str:
         years = set(self.YEAR_RE.findall(question))
@@ -1645,6 +1895,19 @@ class Agent:
             if present:
                 named &= present
             findings = []
+            unlinked = getattr(self, "no_school_link", {}).get(cycle, set())
+            if instrument == "stu_sch" and unlinked:
+                # students without a school identifier cannot be joined to
+                # their school questionnaire: nothing to estimate for them
+                affected = sorted(named & unlinked) if named else sorted(unlinked)
+                if affected:
+                    findings.append({
+                        "variable": "CNTSCHID", "label": "student-to-school link", "cycle": cycle,
+                        "n_with_data": len(present or ()) - len(unlinked), "n_economies": len(present or ()),
+                        "with_data": sorted((present or set()) - unlinked), "missing": sorted(unlinked),
+                        "named": sorted(named), "named_missing": affected,
+                        "blocked": bool(named) and len(affected) == len(named),
+                    })
             for var in self._plan_variables(cplan):
                 cov = self._coverage_for(var, instrument, cycle)
                 if not cov or not cov["partial"]:
@@ -1675,7 +1938,23 @@ class Agent:
             return self._names(codes)
         return f"{len(codes)} economies"
 
+    def _school_link_text(self, f: dict) -> str:
+        who = self._names(f["named_missing"])
+        return (f"PISA {f['cycle']}: the public-use student file carries no school "
+                f"identifier for {who}, so students there cannot be linked to their "
+                "school questionnaire and no school-variable estimate exists for them "
+                "(the school questionnaire itself was administered; student-level "
+                "results are unaffected). " +
+                ("That cycle is omitted." if f["blocked"] else "Those rows have no estimate."))
+
     def _coverage_note(self, f: dict) -> str:
+        if f["variable"] == "CNTSCHID":
+            return self._school_link_text(f)
+        if f["variable"] == "ST004D01T" and f["cycle"] == "2025" and f["named_missing"]:
+            return (f"PISA 2025: ST004D01T (gender) is not released in the public-use file "
+                    f"for {self._names(f['named_missing'])}; gender was collected from "
+                    "sampling data everywhere and the derived MALE flag (1 = Male, 0 = "
+                    "Female/Other) is complete for all 90 economies — use MALE.")
         head = (f"PISA {f['cycle']}: {f['label']} ({f['variable']}) was collected in "
                 f"{f['n_with_data']} of {f['n_economies']} economies")
         domain = link_errors.domain_of(f["variable"])
@@ -1712,6 +1991,10 @@ class Agent:
                 if not f["blocked"]:
                     continue
                 who = self._names(f["named_missing"])
+                if f["variable"] == "CNTSCHID":
+                    parts.append(self._school_link_text(f))
+                    last = None
+                    continue
                 domain = link_errors.domain_of(f["variable"])
                 if domain:
                     dom = link_errors.DOMAIN_NAMES[domain]
@@ -1828,6 +2111,22 @@ class Agent:
         self._check_fragment(where)
         for col in by:
             self._check_identifier(col)
+        # "cycle"/"year" are not columns: a planner that groups by them wants
+        # the cycles side by side, which the app does anyway
+        if any(c.lower() in ("cycle", "year", "pisa_cycle") for c in by):
+            by = tuple(c for c in by if c.lower() not in ("cycle", "year", "pisa_cycle"))
+            plan["by"] = list(by)
+            if len(cycles) == 1 and template != "raw_sql":
+                cycles = [c for c in CYCLES if c in self.coverage]
+                plan["cycles"] = cycles
+            self._fire("hook:cycle_by_dropped")
+        if template != "raw_sql":
+            probe = f"{instrument}_{cycles[-1]}"
+            cols = self._table_columns(probe)
+            bad = [c for c in by if cols and c not in cols]
+            if bad:
+                raise ValueError(f"{', '.join(bad)} is not a column of {probe}; group by an "
+                                 "existing variable (for example CNT, ST004D01T, IMMIG).")
         overrides = {str(k): v for k, v in (plan.get("cycle_overrides") or {}).items()
                      if isinstance(v, dict) and v}
         for ov in overrides.values():
@@ -1895,6 +2194,8 @@ class Agent:
         multi = len(measures_all) > 1
         benchmarks = self._benchmarks(plan)
         per_cycle: dict[str, pd.DataFrame] = {}
+        bench_basis: dict = {}          # cycle -> measure label -> avg label -> (basis, members)
+        cycle_context: dict = {}        # cycle -> (cplan, table, where)  for the share link error
         for cycle in cycles:
             tbl = f"{instrument}_{cycle}"
             cplan = {**plan, **overrides.get(cycle, {})}
@@ -1916,6 +2217,8 @@ class Agent:
                     continue
                 mplan = {**cplan, "measure": expr} if expr is not None else cplan
                 res = self._run_template(template, mplan, tbl, by, cwhere)
+                for who, why in (getattr(res, "attrs", {}) or {}).get("skipped", []):
+                    plan.setdefault("_regression_skipped", []).append((f"{who} (PISA {cycle})", why))
                 res = self._suppress_small_cells(res, cycle, plan)
                 res, dropped_groups = self._drop_null_groups(res, by)
                 for col, n in dropped_groups.items():
@@ -1923,9 +2226,11 @@ class Agent:
                 if benchmarks and "CNT" in by:
                     # "The OECD / EU average" means ALL members of the group — when
                     # the question is filtered to a few countries, the average must
-                    # NOT be taken over just the members inside the filter.
+                    # NOT be taken over just the members inside the filter. The
+                    # rows are built after every cycle has run (constant membership
+                    # across a trend), so only the basis is kept here.
                     for bench in benchmarks:
-                        resolved = self._average_members(bench, cycle)
+                        resolved = self._average_members(bench, cycle, mplan.get("measure"), plan)
                         if resolved is None:
                             plan.setdefault("_unknown_benchmarks", []).append(str(bench))
                             continue
@@ -1936,11 +2241,8 @@ class Agent:
                         basis = res if cwhere is None else \
                             self._suppress_small_cells(
                                 self._run_template(template, mplan, tbl, by, clause), cycle, plan)
-                        avg = self._group_average_rows(basis, members, label_b)
-                        if avg is not None:
-                            res = pd.concat([res, avg], ignore_index=True)
-                            plan.setdefault("_benchmark_members", {}).setdefault(
-                                cycle, {})[label_b] = sorted(members)
+                        bench_basis.setdefault(cycle, {}).setdefault(label, {})[label_b] = (basis, members)
+                cycle_context[cycle] = (cplan, tbl, cwhere)
                 if label is not None:
                     res.insert(1 if "CNT" in res.columns else 0, "measure", label)
                 parts.append(res)
@@ -1948,7 +2250,29 @@ class Agent:
                 parts.append(pd.DataFrame(columns=list(by) + ["measure", "estimate", "se", "n_pv"]))
             per_cycle[cycle] = parts[0] if len(parts) == 1 else \
                 pd.concat(parts, ignore_index=True)
-        if overrides and "contrast" in per_cycle[cycles[0]].columns:
+        # A cycle with no rows for this filter (an economy that had not yet
+        # joined PISA, a construct not administered) is reported, not run.
+        empty_cycles = [c for c in cycles if per_cycle[c].empty]
+        if empty_cycles:
+            plan["_empty_cycles"] = empty_cycles
+            per_cycle = {c: r for c, r in per_cycle.items() if not r.empty}
+            cycles = [c for c in cycles if c not in empty_cycles]
+            if not cycles:
+                raise ValueError(
+                    "no data match this question in any requested cycle — "
+                    f"filter {where or 'none'}; check the economy's participation "
+                    "(for example El Salvador joined PISA in 2022).")
+        self._append_benchmark_rows(per_cycle, bench_basis, cycles, multi, plan)
+
+        if template == "gap" and "contrast" in per_cycle[cycles[0]].columns \
+                and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(plan.get("group_col") or "")):
+            # "ST004D01T: 2 - 1" reads as code arithmetic; say who minus whom
+            first_tbl = f"{instrument}_{cycles[0]}"
+            a = self._category_label(str(plan["group_col"]), plan["minuend"], first_tbl)
+            b = self._category_label(str(plan["group_col"]), plan["subtrahend"], first_tbl)
+            for res in per_cycle.values():
+                res["contrast"] = f"{a} minus {b}"
+        elif overrides and "contrast" in per_cycle[cycles[0]].columns:
             # an overridden group variable relabels the contrast (e.g. "MALE:
             # 1 - 0" vs "ST004D01T: 2 - 1"); align on the first cycle's label
             # so the cycles merge — the override itself is stated in provenance
@@ -1967,34 +2291,24 @@ class Agent:
                           if k in per_cycle[cycles[0]].columns]
         if multi:
             extra_keys = extra_keys + ["measure"]
-        # A cycle with no rows for this filter (an economy that had not yet
-        # joined PISA, a construct not administered) is reported, not run.
-        empty_cycles = [c for c in cycles if per_cycle[c].empty]
-        if empty_cycles:
-            plan["_empty_cycles"] = empty_cycles
-            per_cycle = {c: r for c, r in per_cycle.items() if not r.empty}
-            cycles = [c for c in cycles if c not in empty_cycles]
-            if not cycles:
-                raise ValueError(
-                    "no data match this question in any requested cycle — "
-                    f"filter {where or 'none'}; check the economy's participation "
-                    "(for example El Salvador joined PISA in 2022).")
         if len(cycles) >= 2:
             plan["_trend_cycles"] = (cycles[0], cycles[-1])
         run_measures = measures_all if multi else [(None, plan.get("measure"))]
         if len(cycles) >= 2 and multi:
             # one trend per measure: each domain has its own link error
-            pieces, les = [], {}
+            pieces, les, modes = [], {}, {}
             for label, expr in measures_all:
                 sub = {c: df[df["measure"] == label] for c, df in per_cycle.items()}
-                les[label] = link_errors.link_error(cycles[0], cycles[-1], expr)
-                pieces.append(trend(sub, by=[c for c in by] + extra_keys,
-                                    link_error=les[label]))
+                le, modes[label] = self._link_error_for(template, expr, cycles, by, cycle_context)
+                les[label] = le if not isinstance(le, pd.DataFrame) else "per-economy share link error"
+                pieces.append(trend(sub, by=[c for c in by] + extra_keys, link_error=le))
             plan["_link_errors"] = les
+            plan["_link_error_modes"] = modes
             table = pd.concat(pieces, ignore_index=True)
         elif len(cycles) >= 2:
-            le = link_errors.link_error(cycles[0], cycles[-1], plan.get("measure"))
-            plan["_link_error"] = le
+            le, mode = self._link_error_for(template, plan.get("measure"), cycles, by, cycle_context)
+            plan["_link_error"] = le if not isinstance(le, pd.DataFrame) else "per-economy share link error"
+            plan["_link_error_modes"] = {None: mode}
             table = trend(per_cycle, by=[c for c in by] + extra_keys, link_error=le)
         else:
             table = per_cycle[cycles[0]].assign(cycle=cycles[0])
@@ -2022,7 +2336,13 @@ class Agent:
                 ranks = table.loc[economies, rank_col].rank(ascending=False, method="min")
                 table.insert(0, "rank", ranks.reindex(table.index).astype("Int64"))
         if plan.get("top_n"):
-            table = table.head(int(plan["top_n"]))
+            # a benchmark average asked for alongside a top-N stays in the
+            # table even when it sits below rank N
+            if "CNT" in table.columns:
+                is_avg = table["CNT"].astype(str).str.endswith(" avg")
+                table = pd.concat([table[~is_avg].head(int(plan["top_n"])), table[is_avg]])
+            else:
+                table = table.head(int(plan["top_n"]))
         table = table.reset_index(drop=True)
 
         prov = self._provenance(plan, tables)
@@ -2088,19 +2408,75 @@ class Agent:
                 seen.add(key); uniq.append(b)
         return uniq
 
-    def _average_members(self, bench, cycle: str) -> tuple[str, set[str]] | None:
+    # Members the OECD left out of a published average for one cycle and
+    # domain (Spain's 2018 reading results were withheld from the
+    # comparison tables; Annex A9).
+    AVERAGE_EXCLUSIONS = {("OECD avg", "2018", "READ"): {"ESP"}}
+    ALL_PARTICIPANTS = {"all participants", "all economies", "all countries", "world",
+                        "world average", "global", "global average", "international",
+                        "international average", "everyone"}
+
+    def _average_members(self, bench, cycle: str, measure: str | None = None,
+                         plan: dict | None = None) -> tuple[str, set[str]] | None:
         """(row label, member codes present in `cycle`) for a benchmark, or
         None when the name is not a known group."""
         present = self.present.get(cycle, set())
         if isinstance(bench, tuple):
             return "Group avg", set(bench) & present
-        if str(bench).strip().lower() == "oecd":
-            return "OECD avg", self._oecd_codes(cycle)
+        key = str(bench).strip().lower()
+        if key == "oecd":
+            members = self._oecd_codes(cycle)
+            domain = link_errors.domain_of(measure)
+            excluded = self.AVERAGE_EXCLUSIONS.get(("OECD avg", cycle, domain or ""), set()) & members
+            if excluded:
+                members = members - excluded
+                if plan is not None:
+                    plan.setdefault("_avg_exclusions", {}).setdefault(cycle, {})["OECD avg"] = sorted(excluded)
+            return "OECD avg", members
+        if key in self.ALL_PARTICIPANTS:
+            return "All-participant avg", set(present)
         canon = regions.canonical(str(bench))
         if canon is None:
             return None
         codes = set(regions.expand([canon], {cycle: present})[cycle]["codes"])
         return f"{self.AVG_SHORT.get(canon, canon)} avg", codes
+
+    def _append_benchmark_rows(self, per_cycle: dict, bench_basis: dict, cycles: list[str],
+                               multi: bool, plan: dict) -> None:
+        """Build the "<group> avg" rows. In a trend the membership is held
+        CONSTANT: only members with an estimate in every computed cycle enter
+        the average, so a change is never the arithmetic of a different set
+        of countries in each year (the OECD's convention; e.g. its 2018→2022
+        mathematics average change is computed on a common membership)."""
+        if not bench_basis:
+            return
+        labels_m = sorted({lab for d in bench_basis.values() for lab in d})
+        for mlabel in labels_m:
+            avg_labels = sorted({lb for c in cycles for lb in bench_basis.get(c, {}).get(mlabel, {})})
+            for label_b in avg_labels:
+                have = {c: bench_basis[c][mlabel][label_b] for c in cycles
+                        if label_b in bench_basis.get(c, {}).get(mlabel, {})}
+                if not have:
+                    continue
+                with_est = {}
+                for c, (basis, members) in have.items():
+                    ok = basis[basis["CNT"].isin(members) & basis["estimate"].notna()]
+                    with_est[c] = set(ok["CNT"].astype(str))
+                if len(have) >= 2:
+                    common = set.intersection(*with_est.values())
+                    dropped = sorted(set.union(*with_est.values()) - common)
+                    if dropped:
+                        plan.setdefault("_benchmark_dropped", {})[label_b] = dropped
+                else:
+                    common = next(iter(with_est.values()))
+                for c, (basis, members) in have.items():
+                    avg = self._group_average_rows(basis, common, label_b)
+                    if avg is None:
+                        continue
+                    if multi:
+                        avg.insert(1, "measure", mlabel)
+                    per_cycle[c] = pd.concat([per_cycle[c], avg], ignore_index=True)
+                    plan.setdefault("_benchmark_members", {}).setdefault(c, {})[label_b] = sorted(common)
 
     def _group_average_rows(self, res: pd.DataFrame, members: set[str],
                             label: str) -> pd.DataFrame | None:
@@ -2108,17 +2484,18 @@ class Agent:
         of member economies' estimates (each economy counts equally — not a
         pooled student-weighted mean, which would overweight populous
         countries). Economies are independent samples, so SE = sqrt(sum
-        SE_i^2) / N."""
-        sub = res[res["CNT"].isin(members)]
+        SE_i^2) / N, with N the members that have an estimate."""
+        sub = res[res["CNT"].isin(members) & res["estimate"].notna()]
         if sub.empty:
             return None
         id_cols = [c for c in res.columns
                    if c not in ("CNT", "estimate", "se", "n_pv")]
 
         def agg(group: pd.DataFrame) -> pd.Series:
+            n = int(group["estimate"].notna().sum())
             return pd.Series({
                 "estimate": group["estimate"].mean(),
-                "se": float(np.sqrt((group["se"] ** 2).sum()) / len(group)),
+                "se": float(np.sqrt((group["se"] ** 2).sum()) / n) if n else float("nan"),
                 "n_pv": int(group["n_pv"].iloc[0]),
             })
 
@@ -2130,6 +2507,53 @@ class Agent:
         avg["n_pv"] = avg["n_pv"].astype(int)
         avg.insert(0, "CNT", label)
         return avg
+
+    # Statistics that are levels on the score scale carry the OECD link error
+    # across cycles; differences between groups measured in the same cycle
+    # (gaps, quartile gaps, spreads, regression slopes) do not — the linking
+    # shifts both groups alike and cancels (PISA 2022 Results Vol. I, Annex A7).
+    LEVEL_TEMPLATES = ("weighted_mean", "percentiles", "quartile_means")
+
+    def _link_error_for(self, template: str, expr: str | None, cycles: list[str],
+                        by: tuple, cycle_context: dict):
+        """(link error, mode) for a change of `expr` from the first to the last
+        computed cycle: a float (mean score), a per-row DataFrame (a
+        proficiency-threshold share, derived from the score link error by
+        shifting every plausible value by ±LE, the OECD's slope approach),
+        or None with the reason ("cancels", "percentile-approx", "none")."""
+        first, last = cycles[0], cycles[-1]
+        if template not in self.LEVEL_TEMPLATES:
+            return None, "cancels"
+        le = link_errors.link_error(first, last, expr)
+        if le:
+            return le, ("percentile-approx" if template != "weighted_mean" else "mean")
+        domain = link_errors.domain_of(expr)
+        core = self._unwrap_null_safe(str(expr or ""))
+        if template == "weighted_mean" and domain and self.SHARE_CASE.match(core) \
+                and last in cycle_context:
+            score_le = link_errors.LINK_ERRORS.get((first, last, domain))
+            if not score_le:
+                return None, "none"
+            cplan, tbl, cwhere = cycle_context[last]
+            shifted = []
+            for sign in ("+", "-"):
+                m = re.sub(r"PV\{pv\}(MATH|READ|SCIE)",
+                           lambda mm: f"(PV{{pv}}{mm.group(1)} {sign} {score_le})", str(expr))
+                res = self._run_template("weighted_mean", {**cplan, "measure": m}, tbl, by, cwhere)
+                shifted.append(res.set_index(list(by))["estimate"] if by else res["estimate"])
+            diff = (shifted[0] - shifted[1]).abs() / 2.0
+            if by:
+                frame = diff.reset_index().rename(columns={"estimate": "link_error"})
+            else:
+                frame = pd.DataFrame({"link_error": [float(diff.iloc[0])]})
+            frame["link_error"] = frame["link_error"].fillna(0.0)
+            return frame, "share"
+        return None, "none"
+
+    @staticmethod
+    def _unwrap_null_safe(expr: str) -> str:
+        m = re.match(r"^\s*CASE WHEN \(.*?\) IS NULL THEN NULL ELSE \((.*)\) END\s*$", expr, re.S)
+        return m.group(1) if m else expr
 
     def _run_template(self, template: str, plan: dict, tbl: str,
                       by: tuple, where: str | None) -> pd.DataFrame:
@@ -2287,17 +2711,17 @@ class Agent:
         methods = {
             "weighted_mean": "Weighted mean (final student weight W_FSTUWT). "
                              "SE: Fay's BRR, k=0.5, 80 replicate weights.",
-            "weighted_proportion": "Weighted percentage of valid respondents "
-                                   "(W_FSTUWT). SE: Fay's BRR, k=0.5, 80 replicates.",
+            "weighted_proportion": "Weighted percentage of students with a valid (non-missing) "
+                                   "response (W_FSTUWT). SE: Fay's BRR, k=0.5, 80 replicates.",
             "gap": "Group difference computed replicate-wise (correct covariance). "
                    "Weighted by W_FSTUWT; SE: Fay's BRR, k=0.5, 80 replicates.",
             "quartile_means": "Weighted mean per weighted quarter of "
-                              f"{plan.get('quart_variable')} (quartiles computed with "
-                              "W_FSTUWT within each group, OECD convention; 1=bottom, "
+                              f"{plan.get('quart_variable')} (quartile cut points computed "
+                              "with W_FSTUWT within each economy, as the OECD does; 1=bottom, "
                               "4=top). SE: Fay's BRR, k=0.5, 80 replicates.",
             "quartile_gap": "Top minus bottom weighted quarter of "
-                            f"{plan.get('quart_variable')} (quartiles computed with "
-                            "W_FSTUWT within each group), differenced replicate-wise. "
+                            f"{plan.get('quart_variable')} (quartile cut points computed with "
+                            "W_FSTUWT within each economy), differenced replicate-wise. "
                             "SE: Fay's BRR, k=0.5, 80 replicates.",
             "correlation": "Weighted Pearson correlation (W_FSTUWT). "
                            "SE: Fay's BRR, k=0.5, 80 replicates.",
@@ -2312,8 +2736,9 @@ class Agent:
                         "respondents (W_FSTUWT), each cell with its own "
                         "Fay-BRR SE (k=0.5, 80 replicates).",
             "regression": "Weighted least-squares regression (W_FSTUWT), "
-                          "listwise deletion. SE: Fay's BRR, k=0.5, 80 "
-                          "replicates. Association, not causation.",
+                          "listwise deletion; plausible values only in the outcome; no R² "
+                          "reported. SE: Fay's BRR, k=0.5, 80 replicates per coefficient. "
+                          "Association, not causation.",
             "raw_sql": "Direct SQL — NO automatic weighting/PV/BRR treatment; "
                        "results are not population estimates unless the query weights them.",
         }
@@ -2323,7 +2748,8 @@ class Agent:
         method = methods.get(template, "")
         pv_fields = " ".join(str(plan.get(k) or "") for k in ("measure", "measures", "x", "y"))
         if "{pv}" in pv_fields:
-            method += " Point estimate averaged over 10 plausible values (Rubin's rules)."
+            method += (" Point estimate averaged over 10 plausible values; the SE adds the "
+                       "between-PV variance with the (1 + 1/M) factor (Rubin's rules).")
         notes = []
         members_by_cycle = plan.get("_benchmark_members") or {}
         if members_by_cycle:
@@ -2334,9 +2760,28 @@ class Agent:
                 for lab in labels)
             notes.append(f"The \"{'\", \"'.join(labels)}\" row(s) follow the official OECD-average "
                          "convention: the unweighted mean of the member economies' estimates "
-                         f"(SE = sqrt(sum of member SEs squared) / N), over all members present "
-                         f"in each cycle, not only those in the question's filter ({detail}).")
-        elif plan.get("include_oecd_average"):
+                         f"(SE = sqrt(sum of member SEs squared) / N, N = members with an "
+                         "estimate), over all members, not only those in the question's "
+                         f"filter ({detail}).")
+            for lab, dropped in (plan.get("_benchmark_dropped") or {}).items():
+                notes.append(f"To keep the {lab} comparable across cycles it is computed on the "
+                             f"members with an estimate in every cycle shown; excluded: "
+                             f"{self._names(dropped)} (not in every cycle, or no estimate). The "
+                             "OECD's published trend averages use a constant membership in the "
+                             "same way.")
+            for cycle_x, d in sorted((plan.get("_avg_exclusions") or {}).items()):
+                for lab, codes in d.items():
+                    notes.append(f"PISA {cycle_x}: {self._names(codes)} is left out of the {lab} "
+                                 "for this domain, as in the OECD's published tables (its reading "
+                                 "results were withheld from the 2018 comparison tables, Annex A9).")
+        for cycle_x, rows in sorted((plan.get("_low_coverage") or {}).items()):
+            shown = "; ".join(f"{k}: {pct}% of the weighted population has no value" for k, pct in rows[:6])
+            notes.append(f"PISA {cycle_x}: the variable is missing for a large part of the group "
+                         f"({shown}{'; …' if len(rows) > 6 else ''}); the estimate describes the "
+                         "students who have a value, not the whole population.")
+        for who, why in (plan.get("_regression_skipped") or [])[:6]:
+            notes.append(f"No regression estimate for {who}: {why}.")
+        if not members_by_cycle and plan.get("include_oecd_average"):
             notes.append('The "OECD avg" row follows the official convention: '
                          "the unweighted mean of OECD member countries' "
                          "estimates (SE = sqrt(sum of country SEs squared) / N).")
@@ -2362,12 +2807,22 @@ class Agent:
         for line in plan.get("_standardized") or []:
             notes.append(f"STANDARD VARIABLE: {line}")
         for cycle, k in sorted((plan.get("_suppressed") or {}).items()):
-            notes.append(f"PISA {cycle}: {k} estimate(s) suppressed because they rest on fewer "
-                         f"than {self.MIN_STUDENTS} students — the OECD's minimum for reporting, "
-                         "which also protects individual schools' responses; those cells are blank.")
-        all_wheres = " ".join([str(where or "")] + [str(ov.get("where") or "") for ov in
-                                                    (plan.get("cycle_overrides") or {}).values()
-                                                    if isinstance(ov, dict)])
+            if isinstance(k, dict):
+                bits = []
+                if k.get("students"):
+                    bits.append(f"{k['students']} on fewer than {self.MIN_STUDENTS} students")
+                if k.get("schools"):
+                    bits.append(f"{k['schools']} on fewer than {self.MIN_SCHOOLS} schools")
+                what = " and ".join(bits)
+            else:
+                what = f"{k} on fewer than {self.MIN_STUDENTS} students"
+            notes.append(f"PISA {cycle}: estimate(s) suppressed — {what} — the OECD's minimum "
+                         "for reporting (30 students and 5 schools), which also protects "
+                         "individual schools' responses; those cells are blank, not zero.")
+        all_wheres = " ".join([str(where or ""), str(plan.get("group_col") or "")] +
+                              [str(ov.get("where") or "") + " " + str(ov.get("group_col") or "")
+                               for ov in (plan.get("cycle_overrides") or {}).values()
+                               if isinstance(ov, dict)])
         if re.search(r"\bSTRATUM\s*(=|\bIN\b)", all_wheres, re.I):
             notes.append("The filter selects a SAMPLING STRATUM (a region, school type or school "
                          "network inside an economy, as coded by the national centre for that "
@@ -2386,33 +2841,45 @@ class Agent:
             first, last = plan.get("_trend_cycles") or (cycles[0], cycles[-1])
             method += (f" Cross-cycle change = {last} minus {first}: independent "
                        f"samples, SE = sqrt(SE{first[2:]}^2 + SE{last[2:]}^2).")
-            le = plan.get("_link_error")
-            domain = link_errors.domain_of(plan.get("measure"))
-            les = plan.get("_link_errors")
-            if les is not None:
-                with_le = [f"{lab} {v}" for lab, v in les.items() if v]
-                without = [lab for lab, v in les.items() if not v]
-                line = "Trend SEs include the OECD link error where one exists"
-                if with_le:
-                    line += f" ({', '.join(with_le)} score points, {last} vs {first}; {link_errors.SOURCE})"
-                if without:
-                    line += (f"; {', '.join(without)}: sampling-only SE (no published "
-                             "link error for indices or shares)")
-                notes.append(line + ".")
-            elif le:
-                method += f" Plus the OECD link error ({le} points) for {last} vs {first}."
-                notes.append(f"Trend SEs include the OECD link error for "
-                             f"{link_errors.DOMAIN_NAMES[domain]} {first}→{last} "
-                             f"({le} score points; {link_errors.SOURCE}), so "
-                             "significance of changes matches the OECD's reports.")
-            else:
-                notes.append("Trend SEs exclude the OECD link error (scale equating "
-                             "uncertainty), a published constant per cycle pair and "
-                             "domain that is not in the microdata; they are slightly "
-                             "understated, so a change whose estimate is only just "
-                             "beyond 1.96 SE here may be reported as not significant "
-                             "by the OECD. Ask “why is the link error excluded?” for "
-                             "details.")
+            modes = plan.get("_link_error_modes") or {}
+            les = plan.get("_link_errors") if plan.get("_link_errors") is not None \
+                else {None: plan.get("_link_error")}
+            by_mode: dict[str, list[str]] = {}
+            for lab, mode in modes.items():
+                by_mode.setdefault(mode, []).append(lab)
+            lab_of = lambda lab: (f"{lab}: " if lab else "")  # noqa: E731
+            if "mean" in by_mode or "percentile-approx" in by_mode:
+                def _dom(lab):
+                    expr = plan.get("measure") if lab is None else next(
+                        (e for l_, e in (self._measure_list(plan) or []) if l_ == lab), plan.get("measure"))
+                    d = link_errors.domain_of(expr)
+                    return link_errors.DOMAIN_NAMES.get(d, "this measure")
+                parts_le = [f"{lab_of(lab)}{_dom(lab)} {first}→{last} ({les.get(lab)} points)" for lab in
+                            by_mode.get("mean", []) + by_mode.get("percentile-approx", []) if les.get(lab)]
+                method += f" Plus the OECD link error for {last} vs {first}."
+                notes.append("Trend SEs include the OECD link error for " + "; ".join(parts_le) +
+                             f" ({link_errors.SOURCE}), so significance of changes matches the "
+                             "OECD's reports." +
+                             (" For percentiles and quartile means the mean-score link error is "
+                              "used as an approximation of the percentile-specific link errors "
+                              "the OECD publishes." if "percentile-approx" in by_mode else ""))
+            if "share" in by_mode:
+                notes.append("For the share of students at a proficiency threshold, the link "
+                             "error is derived per economy from the published score link error "
+                             "(every plausible value shifted by ± the link error; half the "
+                             "difference in the share), following the OECD's approach for "
+                             "cumulative-distribution statistics (PISA 2022 Results Vol. I, "
+                             "Annex A7), and included in the change SE.")
+            if "cancels" in by_mode:
+                notes.append("No link error is added to this change: for a difference between "
+                             "groups measured in the same cycle (a gap, a quartile gap, a "
+                             "percentile spread, a regression coefficient) the scale-linking "
+                             "uncertainty shifts both groups alike and cancels (PISA 2022 "
+                             "Results Vol. I, Annex A7); the change SE is the sampling SE.")
+            if "none" in by_mode:
+                notes.append("Sampling-only SE for " + ", ".join(lab or "this measure" for lab in by_mode["none"]) +
+                             ": no link error applies to a questionnaire index or a share of a "
+                             "response code (the linking concerns the achievement scales).")
         for cycle, ov in sorted((plan.get("cycle_overrides") or {}).items()):
             if isinstance(ov, dict) and ov:
                 fields = ", ".join(f"{k} = {v}" for k, v in ov.items() if not k.endswith("_note"))
@@ -2773,6 +3240,9 @@ class Agent:
             if named:
                 self._fire("intercept:count")
                 return self._count_answer(named, text)
+            if re.search(r"\b(in total|overall|altogether|all (countries|economies)|worldwide)\b", text, re.I):
+                self._fire("intercept:count_total")
+                return self._count_total_answer(text)
         if self.COVERAGE_RATE_WORDS.search(text):
             self._fire("intercept:coverage_rate")
             return self._coverage_rate_answer()
@@ -2909,11 +3379,33 @@ class Agent:
         plan = generate_json(
             f"{context}{question_block}\n\n{standard_block}{strata_block}VARIABLE CARDS:\n{self._cards(hits, named)}",
             system=PLAN_SYSTEM.format(instruments=", ".join(INSTRUMENTS),
-                                      regions=self.regions_block),
+                                      regions=self.regions_block,
+                                      levels=link_errors.levels_prompt()),
         )
         plan["_question"] = q_en
         plan["_language"] = language
         self._apply_standards(plan, q_en)
+        self._apply_strata(plan, q_en)
+        if self.WORLD_AVERAGE_WORDS.search(q_en + " " + question) and plan.get("action") != "clarify":
+            # "world average" is the average of every participant, never the OECD's
+            groups = plan.get("include_average_of") or []
+            groups = groups if isinstance(groups, list) else [groups]
+            changed = False
+            if not any(str(g).lower() in self.ALL_PARTICIPANTS for g in groups):
+                groups = groups + ["All participants"]
+                changed = True
+            # judge "did the user say OECD" on the user's own words: the router's
+            # English rendering sometimes glosses "world average" as the OECD's
+            own_words = question if self._looks_english(question) else q_en
+            if not re.search(r"\boecd|ocde\b", own_words, re.I):
+                # the user asked for the world, not the OECD: one benchmark
+                if plan.get("include_oecd_average") or any(str(g).lower() == "oecd" for g in groups):
+                    changed = True
+                plan["include_oecd_average"] = False
+                groups = [g for g in groups if str(g).lower() != "oecd"]
+            plan["include_average_of"] = groups
+            if changed:
+                self._fire("hook:world_average")
         self._verify_substitution_claims(plan)
         if plan.get("_claim_corrected"):
             self._fire("hook:verify_substitution_claims")
@@ -2982,6 +3474,18 @@ class Agent:
                                retrieved=hits, provenance=e.provenance,
                                notes=(e.provenance or {}).get("notes", []),
                                route="coverage")
+        except ValueError as e:
+            if "terms of use" in str(e):
+                self._fire("hook:raw_sql_refused")
+                return AgentResult(question, self._localize(
+                    "PISA Explorer returns aggregate statistics only. Student- and school-level "
+                    "records, identifiers and raw rows are never shown: the OECD's terms of use "
+                    "for the public-use files forbid redistributing the dataset, and the app "
+                    "protects individual schools' responses. Ask for a statistic (a mean, share, "
+                    "gap, correlation or ranking) and it will be computed with the official "
+                    "weights.", language), plan=plan, retrieved=hits, route="conversational")
+            return AgentResult(question, f"The analysis failed: {e}",
+                               plan=plan, retrieved=hits, error=str(e), route="error")
         except Exception as e:
             return AgentResult(question, f"The analysis failed: {e}",
                                plan=plan, retrieved=hits, error=str(e), route="error")

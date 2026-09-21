@@ -35,7 +35,7 @@ REGIONS: dict[str, list[str]] = {
         "ALB", "AUT", "BEL", "BGR", "BIH", "BLR", "CHE", "CZE", "DEU", "DNK",
         "ESP", "EST", "FIN", "FRA", "GBR", "GRC", "HRV", "HUN", "IRL", "ISL",
         "ITA", "KSV", "LTU", "LUX", "LVA", "MDA", "MKD", "MLT", "MNE", "NLD",
-        "NOR", "POL", "PRT", "QMR", "QRT", "QUA", "QUR", "ROU", "RUS", "SRB",
+        "NOR", "POL", "PRT", "QMC", "QMR", "QRT", "QUA", "QUR", "ROU", "RUS", "SRB",
         "SVK", "SVN", "SWE", "TUR", "UKR"],
     "European Union": [
         "AUT", "BEL", "BGR", "CZE", "DEU", "DNK", "ESP", "EST", "FIN", "FRA",
@@ -112,7 +112,8 @@ ECONOMY_ALIASES: dict[str, list[str]] = {
     "QUR": ["ukraine", "ukrainian regions"],
     "UKR": ["ukraine"],
     "QAZ": ["baku"],
-    "QMR": ["moscow"],
+    "QMR": ["moscow", "moscow region"],
+    "QMC": ["moscow", "moscow city"],       # both Moscow entries answer "Moscow"
     "QRT": ["tatarstan"],
     "RUS": ["russia", "russian federation"],
     "DOM": ["dominican republic"],
@@ -123,6 +124,15 @@ ECONOMY_ALIASES: dict[str, list[str]] = {
     "SAU": ["saudi arabia", "saudi"],
 }
 
+
+# One country, several codes: the OECD covered it differently in different
+# cycles (Baku only, then Azerbaijan; Ukraine, then sets of Ukrainian
+# regions). A blank cell for one code where a kin code has data is a change
+# of coverage, never "did not take part".
+CODE_SUCCESSION: dict[str, tuple] = {
+    "AZE": ("QAZ",), "QAZ": ("AZE",),
+    "UKR": ("QUR", "QUA"), "QUR": ("UKR", "QUA"), "QUA": ("UKR", "QUR"),
+}
 
 # Countries people ask about that have never taken part in PISA 2018, 2022 or
 # 2025 (or only as a sub-national region held under another code). Naming
@@ -154,6 +164,7 @@ def non_pisa_named(text: str) -> list[str]:
 NAME_FALLBACK: dict[str, str] = {
     "BIH": "Bosnia and Herzegovina", "BLR": "Belarus", "RUS": "Russian Federation",
     "UKR": "Ukraine", "QMR": "Moscow region (Russia)", "QRT": "Tatarstan (Russia)",
+    "QMC": "Moscow City (Russia)",
 }
 
 

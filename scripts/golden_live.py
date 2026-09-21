@@ -60,6 +60,11 @@ def judge(case: dict, result: dict) -> list[str]:
         problems.append(f"route {route!r} not in {case['route_any']}")
     if "template" in case and plan.get("template") != case["template"]:
         problems.append(f"template {plan.get('template')!r} != {case['template']!r}")
+    if "template_any" in case and plan.get("template") not in case["template_any"]:
+        problems.append(f"template {plan.get('template')!r} not in {case['template_any']}")
+    notes_early = " ".join(prov.get("notes") or [])
+    if case.get("notes_contain_any") and not any(f.lower() in notes_early.lower() for f in case["notes_contain_any"]):
+        problems.append(f"notes have none of {case['notes_contain_any']}")
     if case.get("variables_any") and not (variables & set(case["variables_any"])):
         problems.append(f"none of {case['variables_any']} used (used: {sorted(variables)[:8]})")
     for v in case.get("variables_all", []):
@@ -133,6 +138,7 @@ def main() -> int:
             passes += not problems
             runs.append({"problems": problems, "answer": result.get("answer"), "route": result.get("route"),
                          "template": (result.get("plan") or {}).get("template"),
+                         "plan": {k: v for k, v in (result.get("plan") or {}).items() if not k.startswith("_")},
                          "guards": result.get("guards"), "summary_mode": result.get("summary_mode"),
                          "prose_issues": result.get("prose_issues"), "seconds": round(time.time() - t0, 1)})
             flag = "ok  " if not problems else "FAIL"

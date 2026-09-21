@@ -26,6 +26,9 @@ COPY data/catalog/coverage.parquet data/catalog/coverage.parquet
 # Viet Nam's separately released 2018 plausible values (pipeline/load_vnm_2018.py);
 # build_db.py joins them into the stu_qqq_2018 view when the file is present.
 COPY data/parquet/pisa2018/vnm_pv.parquet data/parquet/pisa2018/vnm_pv.parquet
+# Moscow City (QMC), separate 2018 files (pipeline/load_qmc_2018.py), appended to the 2018 views.
+COPY data/parquet/pisa2018/qmc_stu_qqq.parquet data/parquet/pisa2018/qmc_stu_qqq.parquet
+COPY data/parquet/pisa2018/qmc_sch_qqq.parquet data/parquet/pisa2018/qmc_sch_qqq.parquet
 
 # Re-register views in case pipeline/build_db.py changed (data itself is
 # untouched; this takes ~1 s).

@@ -13,6 +13,7 @@ error_contains / columns_absent are kept as written by hand.
 """
 
 import argparse
+import copy
 import json
 import math
 import sys
@@ -29,7 +30,7 @@ def record(agent, case: dict) -> dict:
     from explorer.agent import CoverageError
     expect = dict(case.get("expect") or {})
     try:
-        table, _prov = agent.execute(dict(case["plan"]))
+        table, _prov = agent.execute(copy.deepcopy(case["plan"]))   # never mutate the case
     except CoverageError as e:
         expect.pop("cells", None); expect.pop("rows", None)
         expect.setdefault("error_contains", [str(e)[:80]])

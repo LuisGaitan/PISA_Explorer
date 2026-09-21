@@ -17,7 +17,7 @@ import os
 import subprocess
 from pathlib import Path
 
-METHOD_VERSION = "4"
+METHOD_VERSION = "5"
 # 1  weighted mean / proportion / gap / quartiles / correlation / percentiles /
 #    crosstab / regression: W_FSTUWT, 10 PVs (Rubin), Fay-BRR k=0.5 x 80.
 # 2  cross-cycle change SEs include the OECD link errors for mean scores
@@ -29,6 +29,14 @@ METHOD_VERSION = "4"
 #    reporting minimum); shares written as CASE ... ELSE 0 keep NULL as NULL
 #    and 1/0 fractions are rescaled to percentages; Viet Nam's separately
 #    released 2018 plausible values are joined into stu_qqq_2018.
+# 5  link error only for levels of the score scale (none for gaps, quartile
+#    gaps, spreads, regression coefficients — it cancels); proficiency-share
+#    changes get a share-specific link error (PV ± LE); benchmark averages in
+#    a trend use a constant membership and a NaN-aware N; Spain is left out
+#    of the 2018 reading OECD average; weighted_proportion's default
+#    denominator is non-missing responses; reporting minimum is 30 students
+#    AND 5 schools; ESCS quarters are cut within each economy; Moscow City
+#    (QMC) appended to 2018.
 
 
 def _git_short_hash() -> str | None:

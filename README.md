@@ -289,8 +289,9 @@ top-ranked variables ever reach a prompt. 2018 value labels are recovered by com
 - Standard errors: Fay's BRR (k = 0.5) over `W_FSTURWT1`–`W_FSTURWT80`,
   combined with between-PV imputation variance (Rubin's rules).
 - Group gaps are differenced replicate-wise (correct covariance handling);
-  cross-cycle trends add variances (independent samples; OECD link error not
-  yet included — flagged in `analysis.trend`).
+  cross-cycle trends add variances (independent samples) plus the OECD link
+  error for mean scores, a share-specific link error for proficiency shares,
+  and no link error for group differences, where it cancels (Annex A7).
 - **Validated:** country means AND standard errors reproduce the published
   PISA 2018/2022 figures (e.g. USA 2022 math 465 SE 4.0, FIN 484 SE 1.9,
   KOR 527 SE 3.9). For 2025, `pipeline/check_2025_published.py` reproduces

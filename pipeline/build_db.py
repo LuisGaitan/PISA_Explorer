@@ -35,6 +35,15 @@ def main() -> int:
             continue
         parquet = str(source.parquet_path).replace("'", "''")
         vnm = source.parquet_path.parent / "vnm_pv.parquet"
+        # Moscow City (QMC), released by the OECD as separate 2018 files
+        # (pipeline/load_qmc_2018.py): appended to the 2018 student and
+        # school views, so 2018 has 81 economies when the files are present.
+        qmc = source.parquet_path.parent / f"qmc_{source.instrument}.parquet"
+        union = ""
+        if source.cycle == "2018" and source.instrument in ("stu_qqq", "sch_qqq") and qmc.exists():
+            qmc_path = str(qmc).replace("'", "''")
+            union = f" UNION ALL BY NAME SELECT * FROM read_parquet('{qmc_path}')"
+            log.info(f"{source.name}: Moscow City (QMC) appended")
         if source.name == "stu_qqq_2018" and vnm.exists():
             # Viet Nam's 2018 plausible values were released separately
             # (pipeline/load_vnm_2018.py); fill them into the main file's
@@ -46,13 +55,13 @@ def main() -> int:
                 f"CREATE OR REPLACE VIEW {source.name} AS "
                 f"SELECT s.* REPLACE ({replace}) FROM read_parquet('{parquet}') s "
                 f"LEFT JOIN read_parquet('{vnm_path}') v "
-                f"ON s.CNT = v.CNT AND s.CNTSTUID = v.CNTSTUID"
+                f"ON s.CNT = v.CNT AND s.CNTSTUID = v.CNTSTUID" + union
             )
             log.info(f"{source.name}: Viet Nam 2018 plausible values joined in")
         else:
             con.execute(
                 f"CREATE OR REPLACE VIEW {source.name} AS "
-                f"SELECT * FROM read_parquet('{parquet}')"
+                f"SELECT * FROM read_parquet('{parquet}')" + union
             )
         built.append(source.name)
 

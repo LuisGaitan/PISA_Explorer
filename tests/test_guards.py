@@ -203,11 +203,18 @@ def test_small_cells_are_suppressed_and_regression_names_collinear_terms():
     from explorer.estimator import ALL_WEIGHTS
     agent = Agent.__new__(Agent)
     agent._fired = []
-    res = pd.DataFrame({"CNT": ["A", "B"], "estimate": [400.0, 410.0], "se": [2.0, 9.0], "n_pv": 10, "n": [500, 12]})
+    res = pd.DataFrame({"CNT": ["A", "B", "C"], "estimate": [400.0, 410.0, 420.0], "se": [2.0, 9.0, 3.0],
+                        "n_pv": 10, "n": [500, 12, 65], "n_schools": [40, 3, 2], "wcov": [1.0, 1.0, 0.6]})
     plan = {}
     out = agent._suppress_small_cells(res, "2025", plan)
     assert "n" not in out.columns and np.isnan(out.loc[1, "estimate"]) and np.isnan(out.loc[1, "se"])
-    assert plan["_suppressed"] == {"2025": 1} and out.loc[0, "estimate"] == 400.0
+    assert np.isnan(out.loc[2, "estimate"])                      # 65 students but only 2 schools
+    assert plan["_suppressed"] == {"2025": {"students": 1, "schools": 1}} and out.loc[0, "estimate"] == 400.0
+    assert plan["_suppressed_rows"]["2025"] == [{"CNT": "B"}, {"CNT": "C"}]
+    low = pd.DataFrame({"CNT": ["D"], "estimate": [390.0], "se": [2.0], "n_pv": 10, "n": [900], "n_schools": [50], "wcov": [0.57]})
+    plan = {}
+    agent._suppress_small_cells(low, "2025", plan)
+    assert plan["_low_coverage"] == {"2025": [("D", 43)]}
 
     class FakeCon:
         def __init__(self, df): self.df = df

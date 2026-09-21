@@ -15,3 +15,5 @@ data/parquet/*
 !data/parquet/pisa2018/
 data/parquet/pisa2018/*
 !data/parquet/pisa2018/vnm_pv.parquet
+!data/parquet/pisa2018/qmc_stu_qqq.parquet
+!data/parquet/pisa2018/qmc_sch_qqq.parquet

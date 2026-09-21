@@ -13,234 +13,1428 @@
     {
       "name": "kosovo_science_rank_2025",
       "verified": "Kosovo 2025 science 357.0 (SE 1.3), rank 83 of 90 — production answer checked 2026-09-15",
-      "plan": {"template": "weighted_mean", "measure": "PV{pv}SCIE", "cycles": ["2025"], "by": ["CNT"],
-               "sort_by": "estimate", "sort_desc": true, "_question": "where is kosovo ranked in science in 2025"},
-      "expect": {"rows": 90, "cells": [
-        {"match": {"CNT": "KSV"}, "estimate": 357.01, "se": 1.31, "rank": 83},
-        {"match": {"CNT": "QCI"}, "estimate": 597.04, "rank": 1},
-        {"match": {"CNT": "SGP"}, "estimate": 559.85, "rank": 2}
-      ]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}SCIE",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "sort_by": "estimate",
+        "sort_desc": true,
+        "_question": "where is kosovo ranked in science in 2025"
+      },
+      "expect": {
+        "rows": 90,
+        "cells": [
+          {
+            "match": {
+              "CNT": "KSV"
+            },
+            "estimate": 357.01,
+            "se": 1.3,
+            "rank": 83.0
+          },
+          {
+            "match": {
+              "CNT": "QCI"
+            },
+            "estimate": 597.04,
+            "rank": 1.0
+          },
+          {
+            "match": {
+              "CNT": "SGP"
+            },
+            "estimate": 559.85,
+            "rank": 2.0
+          }
+        ]
+      }
     },
     {
       "name": "rwanda_profile_2025",
       "verified": "Rwanda 2025: science 317.3, math 311.6, reading 300.9 (production 2026-09-15)",
-      "plan": {"template": "weighted_mean", "measures": ["PV{pv}SCIE", "PV{pv}MATH", "PV{pv}READ"],
-               "cycles": ["2025"], "by": ["CNT"], "where": "CNT = 'RWA'"},
-      "expect": {"rows": 3, "cells": [
-        {"match": {"measure": "Science score"}, "estimate": 317.29, "se": 3.50},
-        {"match": {"measure": "Mathematics score"}, "estimate": 311.65, "se": 3.03},
-        {"match": {"measure": "Reading score"}, "estimate": 300.94, "se": 2.02}
-      ]}
+      "plan": {
+        "template": "weighted_mean",
+        "measures": [
+          "PV{pv}SCIE",
+          "PV{pv}MATH",
+          "PV{pv}READ"
+        ],
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'RWA'"
+      },
+      "expect": {
+        "rows": 3,
+        "cells": [
+          {
+            "match": {
+              "measure": "Science score"
+            },
+            "estimate": 317.29,
+            "se": 3.5
+          },
+          {
+            "match": {
+              "measure": "Mathematics score"
+            },
+            "estimate": 311.65,
+            "se": 3.03
+          },
+          {
+            "match": {
+              "measure": "Reading score"
+            },
+            "estimate": 300.94,
+            "se": 2.01
+          }
+        ]
+      }
     },
     {
       "name": "us_math_gender_gap_trend",
-      "verified": "US math gender gap (male minus female) 2018 8.61, 2022 13.27, 2025 23.82; change SE includes the 2.551 link error",
-      "plan": {"template": "gap", "measure": "PV{pv}MATH", "group_col": "ST004D01T", "minuend": 2, "subtrahend": 1,
-               "cycles": ["2018", "2022", "2025"], "by": ["CNT"], "where": "CNT = 'USA'",
-               "cycle_overrides": {"2025": {"group_col": "MALE", "minuend": 1, "subtrahend": 0}}},
-      "expect": {"rows": 1, "cells": [
-        {"match": {"CNT": "USA"}, "estimate_2018": 8.61, "estimate_2022": 13.27, "estimate_2025": 23.82,
-         "change": 15.21, "se_change": 5.53}
-      ], "notes_contain": ["link error for mathematics 2018→2025 (2.551", "per-cycle variable override: group_col = MALE"]}
+      "verified": "US math gender gap (male minus female) 2018 8.61, 2022 13.27, 2025 23.82; NO link error on a gap change (it cancels, Annex A7): se_change 4.90",
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}MATH",
+        "group_col": "ST004D01T",
+        "minuend": 2,
+        "subtrahend": 1,
+        "cycles": [
+          "2018",
+          "2022",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'USA'",
+        "cycle_overrides": {
+          "2025": {
+            "group_col": "MALE",
+            "minuend": 1,
+            "subtrahend": 0
+          }
+        }
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "USA"
+            },
+            "estimate_2018": 8.61,
+            "estimate_2022": 13.27,
+            "estimate_2025": 23.82,
+            "change": 15.21,
+            "se_change": 4.9
+          }
+        ],
+        "notes_contain": [
+          "cancels",
+          "per-cycle variable override: group_col = MALE"
+        ],
+        "notes_forbid": [
+          "Trend SEs include the OECD link error"
+        ]
+      }
     },
     {
       "name": "us_math_gender_gap_trend_flipped_override_is_realigned",
       "verified": "same numbers when the planner points the 2025 override the wrong way (sign-flip guard)",
-      "plan": {"template": "gap", "measure": "PV{pv}MATH", "group_col": "ST004D01T", "minuend": 2, "subtrahend": 1,
-               "cycles": ["2018", "2025"], "by": ["CNT"], "where": "CNT = 'USA'",
-               "cycle_overrides": {"2025": {"group_col": "MALE", "minuend": 0, "subtrahend": 1}}},
-      "expect": {"rows": 1, "cells": [
-        {"match": {"CNT": "USA"}, "estimate_2025": 23.82, "change": 15.21}
-      ], "notes_contain": ["re-aligned it to the main plan"]}
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}MATH",
+        "group_col": "ST004D01T",
+        "minuend": 2,
+        "subtrahend": 1,
+        "cycles": [
+          "2018",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'USA'",
+        "cycle_overrides": {
+          "2025": {
+            "group_col": "MALE",
+            "minuend": 0,
+            "subtrahend": 1
+          }
+        }
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "USA"
+            },
+            "estimate_2025": 23.82,
+            "change": 15.21
+          }
+        ],
+        "notes_contain": [
+          "re-aligned it to the main plan"
+        ]
+      }
     },
     {
       "name": "mex_private_public_science_trend",
       "verified": "Mexico private minus public science 2018/2022/2025 = 28.5 / 43.3 / 28.2 (SE ~8) — verified 2026-09-15",
-      "plan": {"template": "gap", "measure": "PV{pv}SCIE", "group_col": "SC013Q01TA", "minuend": 2, "subtrahend": 1,
-               "cycles": ["2018", "2022", "2025"], "by": ["CNT"], "where": "CNT = 'MEX'", "instrument": "stu_sch"},
-      "expect": {"rows": 1, "cells": [
-        {"match": {"CNT": "MEX"}, "estimate_2018": 28.51, "estimate_2022": 43.30, "estimate_2025": 28.15, "se_2025": 8.01}
-      ]}
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}SCIE",
+        "group_col": "SC013Q01TA",
+        "minuend": 2,
+        "subtrahend": 1,
+        "cycles": [
+          "2018",
+          "2022",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'MEX'",
+        "instrument": "stu_sch"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "MEX"
+            },
+            "estimate_2018": 28.51,
+            "estimate_2022": 43.3,
+            "estimate_2025": 28.15,
+            "se_2025": 8.01
+          }
+        ]
+      }
     },
     {
       "name": "chl_city_rural_science_2025",
       "verified": "Chile city minus rural science 2025 = 29.8 (SE 12.6)",
-      "plan": {"template": "gap", "measure": "PV{pv}SCIE",
-               "group_col": "CASE WHEN SC001Q01TA >= 4 THEN 1 WHEN SC001Q01TA IN (1, 2) THEN 0 END",
-               "group_label": "city minus rural", "minuend": 1, "subtrahend": 0, "cycles": ["2025"], "by": ["CNT"],
-               "where": "CNT = 'CHL'", "instrument": "stu_sch"},
-      "expect": {"rows": 1, "cells": [{"match": {"CNT": "CHL"}, "estimate": 29.83, "se": 12.62}]}
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}SCIE",
+        "group_col": "CASE WHEN SC001Q01TA >= 4 THEN 1 WHEN SC001Q01TA IN (1, 2) THEN 0 END",
+        "group_label": "city minus rural",
+        "minuend": 1,
+        "subtrahend": 0,
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'CHL'",
+        "instrument": "stu_sch"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "CHL"
+            },
+            "estimate": 29.83,
+            "se": 12.62
+          }
+        ]
+      }
     },
     {
       "name": "brazil_science_2022_2025",
       "verified": "Brazil science +5.54, SE 2.73 sampling-only -> 4.15 with the 3.116 link error: NOT significant, as in the OECD report",
-      "plan": {"template": "weighted_mean", "measure": "PV{pv}SCIE", "cycles": ["2022", "2025"], "by": ["CNT"], "where": "CNT = 'BRA'"},
-      "expect": {"rows": 1, "cells": [
-        {"match": {"CNT": "BRA"}, "estimate_2022": 403.00, "estimate_2025": 408.54, "change": 5.54, "se_change": 4.15}
-      ], "notes_contain": ["link error for science 2022→2025 (3.116"]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}SCIE",
+        "cycles": [
+          "2022",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'BRA'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "BRA"
+            },
+            "estimate_2022": 403.0,
+            "estimate_2025": 408.54,
+            "change": 5.54,
+            "se_change": 4.15
+          }
+        ],
+        "notes_contain": [
+          "link error for science 2022→2025 (3.116"
+        ]
+      }
     },
     {
       "name": "france_vs_eu_reading_2025",
       "verified": "EU avg reading 2025 = 454.11 (SE 0.52, 26 members); France 456.3",
-      "plan": {"template": "weighted_mean", "measure": "PV{pv}READ", "cycles": ["2025"], "by": ["CNT"],
-               "where": "CNT = 'FRA'", "include_average_of": ["European Union"]},
-      "expect": {"rows": 2, "cells": [
-        {"match": {"CNT": "FRA"}, "estimate": 456.34, "se": 3.24},
-        {"match": {"CNT": "EU avg"}, "estimate": 454.11, "se": 0.52}
-      ], "notes_contain": ["EU avg", "PISA 2025 = 26 economies"]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}READ",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'FRA'",
+        "include_average_of": [
+          "European Union"
+        ]
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "FRA"
+            },
+            "estimate": 456.33,
+            "se": 3.24
+          },
+          {
+            "match": {
+              "CNT": "EU avg"
+            },
+            "estimate": 454.11,
+            "se": 0.52
+          }
+        ],
+        "notes_contain": [
+          "EU avg",
+          "PISA 2025 = 26 economies"
+        ]
+      }
     },
     {
       "name": "argentina_profile_trend",
       "verified": "Argentina 2018->2025: math 379.5->366.8, reading 401.5->388.7; ESCS and BELONG levels shown, change BLANK (indices standardized within cycle)",
-      "plan": {"template": "weighted_mean", "measures": ["PV{pv}MATH", "PV{pv}READ", "ESCS", "BELONG"],
-               "cycles": ["2018", "2025"], "by": ["CNT"], "where": "CNT = 'ARG'"},
-      "expect": {"rows": 4, "cells": [
-        {"match": {"measure": "Mathematics score"}, "estimate_2018": 379.45, "estimate_2025": 366.81, "change": -12.64, "se_change": 4.61},
-        {"match": {"measure": "Reading score"}, "estimate_2018": 401.50, "estimate_2025": 388.70, "change": -12.80},
-        {"match": {"measure": "Economic, Social and Cultural Status Index (ESCS)"}, "estimate_2018": -0.95, "estimate_2025": -0.63, "change": null},
-        {"match": {"measure": "Sense of belonging (WLE) (BELONG)"}, "estimate_2018": -0.11, "estimate_2025": -0.04, "change": null}
-      ], "notes_contain": ["standardized within each PISA cycle"]}
+      "plan": {
+        "template": "weighted_mean",
+        "measures": [
+          "PV{pv}MATH",
+          "PV{pv}READ",
+          "ESCS",
+          "BELONG"
+        ],
+        "cycles": [
+          "2018",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'ARG'"
+      },
+      "expect": {
+        "rows": 4,
+        "cells": [
+          {
+            "match": {
+              "measure": "Mathematics score"
+            },
+            "estimate_2018": 379.45,
+            "estimate_2025": 366.81,
+            "change": -12.64,
+            "se_change": 4.61
+          },
+          {
+            "match": {
+              "measure": "Reading score"
+            },
+            "estimate_2018": 401.5,
+            "estimate_2025": 388.7,
+            "change": -12.8
+          },
+          {
+            "match": {
+              "measure": "Economic, Social and Cultural Status Index (ESCS)"
+            },
+            "estimate_2018": -0.95,
+            "estimate_2025": -0.63,
+            "change": null
+          },
+          {
+            "match": {
+              "measure": "Sense of belonging (WLE) (BELONG)"
+            },
+            "estimate_2018": -0.11,
+            "estimate_2025": -0.04,
+            "change": null
+          }
+        ],
+        "notes_contain": [
+          "standardized within each PISA cycle"
+        ]
+      }
     },
     {
       "name": "japan_ai_chatbot_item_code_3_or_more_2025",
       "verified": "regression value only (share of Japanese students answering code 3+ on ST438Q01DA)",
-      "plan": {"template": "weighted_mean",
-               "measure": "CASE WHEN ST438Q01DA >= 3 THEN 100.0 WHEN ST438Q01DA IN (1,2) THEN 0.0 END",
-               "cycles": ["2025"], "by": ["CNT"], "where": "CNT = 'JPN'"},
-      "expect": {"rows": 1, "cells": [{"match": {"CNT": "JPN"}, "estimate": 26.13, "se": 0.83}]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "CASE WHEN ST438Q01DA >= 3 THEN 100.0 WHEN ST438Q01DA IN (1,2) THEN 0.0 END",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'JPN'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "JPN"
+            },
+            "estimate": 26.13,
+            "se": 0.83
+          }
+        ]
+      }
     },
     {
       "name": "uzb_girls_share_2025",
       "verified": "Uzbekistan 2025: girls 49.06% (SE 0.49); the category column names the group",
-      "plan": {"template": "weighted_proportion", "variable": "MALE", "value": 0, "valid_values": [0, 1],
-               "cycles": ["2025"], "by": ["CNT"], "where": "CNT = 'UZB'"},
-      "expect": {"rows": 1, "cells": [{"match": {"CNT": "UZB"}, "estimate": 49.06, "se": 0.49}],
-                 "text_contains": {"category": "MALE = 0"}}
+      "plan": {
+        "template": "weighted_proportion",
+        "variable": "MALE",
+        "value": 0,
+        "valid_values": [
+          0,
+          1
+        ],
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'UZB'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "UZB"
+            },
+            "estimate": 49.06,
+            "se": 0.49
+          }
+        ],
+        "text_contains": {
+          "category": "MALE = 0"
+        }
+      }
     },
     {
       "name": "brazil_repeat_2022",
       "verified": "regression value (2022 share of grade repeaters, valid responses only)",
-      "plan": {"template": "weighted_proportion", "variable": "REPEAT", "value": 1, "valid_values": [0, 1],
-               "cycles": ["2022"], "by": ["CNT"], "where": "CNT = 'BRA'"},
-      "expect": {"rows": 1, "cells": [{"match": {"CNT": "BRA"}, "estimate": 22.10, "se": 0.69}]}
+      "plan": {
+        "template": "weighted_proportion",
+        "variable": "REPEAT",
+        "value": 1,
+        "valid_values": [
+          0,
+          1
+        ],
+        "cycles": [
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'BRA'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "BRA"
+            },
+            "estimate": 22.1,
+            "se": 0.69
+          }
+        ]
+      }
     },
     {
       "name": "brazil_below_l2_math_trend",
-      "verified": "share below Level 2 in math (cutoff 420.07); no link error for threshold shares",
-      "plan": {"template": "weighted_mean", "measure": "CASE WHEN PV{pv}MATH < 420.07 THEN 100.0 ELSE 0.0 END",
-               "cycles": ["2018", "2025"], "by": ["CNT"], "where": "CNT = 'BRA'"},
-      "expect": {"rows": 1, "cells": [{"match": {"CNT": "BRA"}, "estimate_2018": 68.09, "estimate_2025": 71.66, "change": 3.57, "se_change": 1.29}],
-                 "notes_contain": ["Trend SEs exclude the OECD link error"]}
+      "verified": "share below Level 2 in math (cutoff 420.07); the change SE includes a share-specific link error derived from the score link error (OECD slope approach)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "CASE WHEN PV{pv}MATH < 420.07 THEN 100.0 ELSE 0.0 END",
+        "cycles": [
+          "2018",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'BRA'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "BRA"
+            },
+            "estimate_2018": 68.09,
+            "estimate_2025": 71.66,
+            "change": 3.57
+          }
+        ],
+        "notes_contain": [
+          "share of students at a proficiency threshold"
+        ]
+      }
     },
     {
       "name": "korea_reading_gender_gap_2025",
       "verified": "Korea reading, male minus female, 2025",
-      "plan": {"template": "gap", "measure": "PV{pv}READ", "group_col": "MALE", "minuend": 1, "subtrahend": 0,
-               "cycles": ["2025"], "by": ["CNT"], "where": "CNT = 'KOR'"},
-      "expect": {"rows": 1, "cells": [{"match": {"CNT": "KOR"}, "estimate": -28.10, "se": 4.95}]}
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}READ",
+        "group_col": "MALE",
+        "minuend": 1,
+        "subtrahend": 0,
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'KOR'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "KOR"
+            },
+            "estimate": -28.1,
+            "se": 4.95
+          }
+        ]
+      }
     },
     {
       "name": "latam_escs_gap_science_2025",
       "verified": "region expansion (13 of 15 present in 2025), ESCS missing for CRI and SLV, rank from the top",
-      "plan": {"template": "quartile_gap", "measure": "PV{pv}SCIE", "quart_variable": "ESCS", "cycles": ["2025"],
-               "by": ["CNT"], "regions": ["Latin America and the Caribbean"], "sort_by": "estimate", "sort_desc": true},
-      "expect": {"rows": 11, "cells": [
-        {"match": {"CNT": "BRA"}, "estimate": 95.73, "se": 3.71, "rank": 1},
-        {"match": {"CNT": "COL"}, "estimate": 93.27, "rank": 2}
-      ], "notes_contain": ["PISA 2025 = 13 economies", "NOT collected for Costa Rica (CRI), El Salvador (SLV)"]}
+      "plan": {
+        "template": "quartile_gap",
+        "measure": "PV{pv}SCIE",
+        "quart_variable": "ESCS",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "regions": [
+          "Latin America and the Caribbean"
+        ],
+        "sort_by": "estimate",
+        "sort_desc": true
+      },
+      "expect": {
+        "rows": 11,
+        "cells": [
+          {
+            "match": {
+              "CNT": "BRA"
+            },
+            "estimate": 95.73,
+            "se": 3.71,
+            "rank": 1.0
+          },
+          {
+            "match": {
+              "CNT": "COL"
+            },
+            "estimate": 93.27,
+            "rank": 2.0
+          }
+        ],
+        "notes_contain": [
+          "PISA 2025 = 13 economies",
+          "NOT collected for Costa Rica (CRI), El Salvador (SLV)"
+        ]
+      }
     },
     {
       "name": "us_belong_math_corr_2022",
       "verified": "weighted correlation with BRR SE",
-      "plan": {"template": "correlation", "x": "BELONG", "y": "PV{pv}MATH", "cycles": ["2022"], "by": ["CNT"], "where": "CNT = 'USA'"},
-      "expect": {"rows": 1, "cells": [{"match": {"CNT": "USA"}, "estimate": 0.06, "se": 0.02}]}
+      "plan": {
+        "template": "correlation",
+        "x": "BELONG",
+        "y": "PV{pv}MATH",
+        "cycles": [
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'USA'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "USA"
+            },
+            "estimate": 0.06,
+            "se": 0.02
+          }
+        ]
+      }
     },
     {
       "name": "chile_regress_science_2025",
       "verified": "WLS with named terms",
-      "plan": {"template": "regression", "measure": "PV{pv}SCIE", "predictors": ["ESCS", "CASE WHEN MALE = 1 THEN 1 ELSE 0 END"],
-               "predictor_names": ["ESCS", "male (1) vs female (0)"], "cycles": ["2025"], "by": ["CNT"], "where": "CNT = 'CHL'"},
-      "expect": {"rows": 3, "cells": [
-        {"match": {"term": "(intercept)"}, "estimate": 455.23, "se": 2.42},
-        {"match": {"term": "ESCS"}, "estimate": 29.07, "se": 1.78},
-        {"match": {"term": "male (1) vs female (0)"}, "estimate": 9.73, "se": 2.50}
-      ]}
+      "plan": {
+        "template": "regression",
+        "measure": "PV{pv}SCIE",
+        "predictors": [
+          "ESCS",
+          "CASE WHEN MALE = 1 THEN 1 ELSE 0 END"
+        ],
+        "predictor_names": [
+          "ESCS",
+          "male (1) vs female (0)"
+        ],
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'CHL'"
+      },
+      "expect": {
+        "rows": 3,
+        "cells": [
+          {
+            "match": {
+              "term": "(intercept)"
+            },
+            "estimate": 455.23,
+            "se": 2.42
+          },
+          {
+            "match": {
+              "term": "ESCS"
+            },
+            "estimate": 29.07,
+            "se": 1.77
+          },
+          {
+            "match": {
+              "term": "male (1) vs female (0)"
+            },
+            "estimate": 9.73,
+            "se": 2.5
+          }
+        ]
+      }
     },
     {
       "name": "fin_percentiles_math_2022",
       "verified": "regression values only — the percentile rule itself is NOT yet checked against a published OECD percentile table",
-      "plan": {"template": "percentiles", "measure": "PV{pv}MATH", "ps": [10, 50, 90], "cycles": ["2022"], "by": ["CNT"], "where": "CNT = 'FIN'"},
-      "expect": {"rows": 3, "cells": [
-        {"match": {"percentile": 10}, "estimate": 365.69, "se": 2.55},
-        {"match": {"percentile": 50}, "estimate": 485.94, "se": 2.29},
-        {"match": {"percentile": 90}, "estimate": 599.60, "se": 2.72}
-      ]}
+      "plan": {
+        "template": "percentiles",
+        "measure": "PV{pv}MATH",
+        "ps": [
+          10,
+          50,
+          90
+        ],
+        "cycles": [
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'FIN'"
+      },
+      "expect": {
+        "rows": 3,
+        "cells": [
+          {
+            "match": {
+              "percentile": 10
+            },
+            "estimate": 365.69,
+            "se": 2.55
+          },
+          {
+            "match": {
+              "percentile": 50
+            },
+            "estimate": 485.94,
+            "se": 2.29
+          },
+          {
+            "match": {
+              "percentile": 90
+            },
+            "estimate": 599.6,
+            "se": 2.72
+          }
+        ]
+      }
     },
     {
       "name": "uzb_math_2025_withheld",
       "verified": "Uzbekistan took part in 2025 but its math/reading PVs were not released: blank row, 'did not release' wording",
-      "plan": {"template": "weighted_mean", "measure": "PV{pv}MATH", "cycles": ["2025"], "by": ["CNT"], "where": "CNT IN ('UZB','KAZ')"},
-      "expect": {"rows": 2, "cells": [
-        {"match": {"CNT": "KAZ"}, "estimate": 413.72},
-        {"match": {"CNT": "UZB"}, "estimate": null}
-      ], "notes_contain": ["did not release its mathematics results"],
-         "notes_forbid": ["not collected", "did not administer", "did not take part"]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('UZB','KAZ')"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "KAZ"
+            },
+            "estimate": 413.71
+          },
+          {
+            "match": {
+              "CNT": "UZB"
+            },
+            "estimate": null
+          }
+        ],
+        "notes_contain": [
+          "did not release its mathematics results"
+        ],
+        "notes_forbid": [
+          "not collected",
+          "did not administer",
+          "did not take part"
+        ]
+      }
     },
     {
       "name": "slv_math_trend_joined_2022",
       "verified": "El Salvador joined in 2022: the 2018 cycle is dropped with a note, change = 2025 minus 2022",
-      "plan": {"template": "weighted_mean", "measure": "PV{pv}MATH", "cycles": ["2018", "2022", "2025"], "by": ["CNT"], "where": "CNT = 'SLV'"},
-      "expect": {"rows": 1, "cells": [{"match": {"CNT": "SLV"}, "estimate_2022": 343.47, "estimate_2025": 346.25, "change": 2.78, "se_change": 2.96}],
-                 "notes_contain": ["first took part in PISA 2022", "link error for mathematics 2022→2025 (1.22"],
-                 "columns_absent": ["estimate_2018"]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2018",
+          "2022",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'SLV'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "SLV"
+            },
+            "estimate_2022": 343.47,
+            "estimate_2025": 346.25,
+            "change": 2.78,
+            "se_change": 2.96
+          }
+        ],
+        "notes_contain": [
+          "first took part in PISA 2022",
+          "link error for mathematics 2022→2025 (1.22"
+        ],
+        "columns_absent": [
+          "estimate_2018"
+        ]
+      }
     },
     {
       "name": "usa_expwb_coverage_block",
       "verified": "the US never administered the 2022 well-being questionnaire: the answer is a coverage statement, never an empty table",
-      "plan": {"template": "weighted_mean", "measure": "EXPWB", "cycles": ["2022"], "by": ["CNT"], "where": "CNT = 'USA'"},
-      "expect": {"error_contains": ["collected in only 15 of 80 economies", "United States (USA) did not administer"]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "EXPWB",
+        "cycles": [
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'USA'"
+      },
+      "expect": {
+        "error_contains": [
+          "collected in only 15 of 80 economies",
+          "United States (USA) did not administer"
+        ]
+      }
     },
     {
       "name": "qci_vs_sgp_math_2025",
       "verified": "QCI math 612, Singapore 563 (PISA 2025 Results Vol. I); the QCI note fires when the question says Shanghai",
-      "plan": {"template": "weighted_mean", "measure": "PV{pv}MATH", "cycles": ["2025"], "by": ["CNT"], "where": "CNT IN ('QCI','SGP')",
-               "_question": "How does Shanghai compare to Singapore in math in 2025?"},
-      "expect": {"rows": 2, "cells": [
-        {"match": {"CNT": "QCI"}, "estimate": 612.43, "se": 2.55},
-        {"match": {"CNT": "SGP"}, "estimate": 562.90, "se": 1.57}
-      ], "notes_contain": ["QCI is B-S-J-Z (China)"]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('QCI','SGP')",
+        "_question": "How does Shanghai compare to Singapore in math in 2025?"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "QCI"
+            },
+            "estimate": 612.43,
+            "se": 2.55
+          },
+          {
+            "match": {
+              "CNT": "SGP"
+            },
+            "estimate": 562.9,
+            "se": 1.57
+          }
+        ],
+        "notes_contain": [
+          "QCI is B-S-J-Z (China)"
+        ]
+      }
     },
     {
       "name": "oecd_avg_science_2025",
       "verified": "OECD avg row = unweighted mean over ALL members even when the filter names two countries",
-      "plan": {"template": "weighted_mean", "measure": "PV{pv}SCIE", "cycles": ["2025"], "by": ["CNT"], "where": "CNT IN ('DEU','FRA')", "include_oecd_average": true},
-      "expect": {"rows": 3, "cells": [
-        {"match": {"CNT": "DEU"}, "estimate": 485.52},
-        {"match": {"CNT": "FRA"}, "estimate": 483.42},
-        {"match": {"CNT": "OECD avg"}, "estimate": 481.91, "se": 0.44}
-      ]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}SCIE",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('DEU','FRA')",
+        "include_oecd_average": true
+      },
+      "expect": {
+        "rows": 3,
+        "cells": [
+          {
+            "match": {
+              "CNT": "DEU"
+            },
+            "estimate": 485.52
+          },
+          {
+            "match": {
+              "CNT": "FRA"
+            },
+            "estimate": 483.42
+          },
+          {
+            "match": {
+              "CNT": "OECD avg"
+            },
+            "estimate": 481.91,
+            "se": 0.44
+          }
+        ]
+      }
     },
     {
       "name": "vnm_2018_separately_released",
       "verified": "Viet Nam 2018 PVs joined from the OECD's separate release (pipeline/load_vnm_2018.py); the comparability caution is stated",
-      "plan": {"template": "weighted_mean", "measure": "PV{pv}READ", "cycles": ["2018", "2022"], "by": ["CNT"], "where": "CNT = 'VNM'"},
-      "expect": {"rows": 1, "cells": [{"match": {"CNT": "VNM"}, "estimate_2022": 461.89, "se_2022": 3.94}],
-                 "notes_contain": ["largely comparable"], "notes_forbid": ["did not administer", "did not release", "paper-based tests"]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}READ",
+        "cycles": [
+          "2018",
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'VNM'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "VNM"
+            },
+            "estimate_2022": 461.89,
+            "se_2022": 3.94
+          }
+        ],
+        "notes_contain": [
+          "largely comparable"
+        ],
+        "notes_forbid": [
+          "did not administer",
+          "did not release",
+          "paper-based tests"
+        ]
+      }
     },
     {
       "name": "vnm_2025_mode_change_caution",
       "verified": "PISA 2025 Technical Report, Data Adjudication: Viet Nam, Guatemala, Paraguay moved from paper to computer in 2025; trend uncertainty exceeds the link error. Viet Nam reading 2022 461.9 -> 2025 391.5 (values as in the PUF; SEs match Annex 14)",
-      "plan": {"template": "weighted_mean", "measure": "PV{pv}READ", "cycles": ["2022", "2025"], "by": ["CNT"], "where": "CNT IN ('VNM', 'GTM', 'CHL')"},
-      "expect": {"rows": 3, "cells": [{"match": {"CNT": "VNM"}, "estimate_2022": 461.89, "estimate_2025": 391.54}],
-                 "notes_contain": ["paper-based tests in every earlier cycle", "Guatemala (GTM), Viet Nam (VNM)"]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}READ",
+        "cycles": [
+          "2022",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('VNM', 'GTM', 'CHL')"
+      },
+      "expect": {
+        "rows": 3,
+        "cells": [
+          {
+            "match": {
+              "CNT": "VNM"
+            },
+            "estimate_2022": 461.89,
+            "estimate_2025": 391.54
+          }
+        ],
+        "notes_contain": [
+          "paper-based tests in every earlier cycle",
+          "Guatemala (GTM), Viet Nam (VNM)"
+        ]
+      }
     },
     {
       "name": "small_cells_are_suppressed",
       "verified": "OECD reporting minimum: a stratum of 6 students (TUR01) gets no estimate; the Intellectual-schools stratum (KAZ21, 2,870 students) keeps its value",
-      "plan": {"template": "weighted_mean", "measure": "PV{pv}MATH", "cycles": ["2025"], "by": ["CNT", "STRATUM"], "where": "STRATUM IN ('KAZ21', 'TUR01')"},
-      "expect": {"rows": 2, "cells": [{"match": {"STRATUM": "TUR01"}, "estimate": null, "se": null},
-                                      {"match": {"STRATUM": "KAZ21"}, "estimate": 581.01}],
-                 "notes_contain": ["SAMPLING STRATUM", "fewer than 30 students"]}
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT",
+          "STRATUM"
+        ],
+        "where": "STRATUM IN ('KAZ21', 'TUR01')"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "STRATUM": "TUR01"
+            },
+            "estimate": null,
+            "se": null
+          },
+          {
+            "match": {
+              "STRATUM": "KAZ21"
+            },
+            "estimate": 581.01
+          }
+        ],
+        "notes_contain": [
+          "SAMPLING STRATUM",
+          "fewer than 30 students"
+        ]
+      }
+    },
+    {
+      "name": "oecd_avg_math_trend_constant_membership",
+      "verified": "OECD average math 2018->2022 on the 36 members with estimates in both cycles = -14.65 (OECD publishes about -15; a per-cycle membership gave -16.9)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2018",
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('DEU','FRA')",
+        "include_oecd_average": true
+      },
+      "expect": {
+        "rows": 3,
+        "cells": [
+          {
+            "match": {
+              "CNT": "OECD avg"
+            },
+            "estimate_2018": 489.45,
+            "estimate_2022": 474.8,
+            "change": -14.65,
+            "se_change": 2.31
+          }
+        ],
+        "notes_contain": [
+          "excluded: Costa Rica (CRI), Luxembourg (LUX)"
+        ]
+      }
+    },
+    {
+      "name": "brazil_below_l2_science_share_link_error",
+      "verified": "Brazil science below Level 2 2022->2025: -2.94 pp; share link error 1.25 pp -> SE 1.77, NOT significant (sampling-only SE 1.25 called it significant)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "CASE WHEN PV{pv}SCIE < 409.54 THEN 100.0 ELSE 0.0 END",
+        "cycles": [
+          "2022",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'BRA'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "BRA"
+            },
+            "estimate_2022": 55.39,
+            "estimate_2025": 52.45,
+            "change": -2.94,
+            "se_change": 1.77
+          }
+        ],
+        "notes_contain": [
+          "share of students at a proficiency threshold"
+        ]
+      }
+    },
+    {
+      "name": "brazil_repeat_2022_without_valid_values",
+      "verified": "weighted_proportion with no valid_values uses non-missing responses as the denominator: 22.10 (not 20.70)",
+      "plan": {
+        "template": "weighted_proportion",
+        "variable": "REPEAT",
+        "value": 1,
+        "cycles": [
+          "2022"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'BRA'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "BRA"
+            },
+            "estimate": 22.1,
+            "se": 0.69
+          }
+        ]
+      }
+    },
+    {
+      "name": "school_link_missing_2025",
+      "verified": "SLV and MLT have no school identifier in the 2025 student file: stated, never silently dropped",
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}SCIE",
+        "group_col": "SC013Q01TA",
+        "minuend": 2,
+        "subtrahend": 1,
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('SLV','MLT','GTM')",
+        "instrument": "stu_sch"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "GTM"
+            },
+            "estimate": 36.1,
+            "se": 4.3
+          }
+        ],
+        "notes_contain": [
+          "no school identifier for Malta (MLT), El Salvador (SLV)"
+        ]
+      }
+    },
+    {
+      "name": "school_link_missing_blocks_slv_alone",
+      "verified": "El Salvador alone on stu_sch: a coverage statement, never a participation error",
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}SCIE",
+        "group_col": "SC013Q01TA",
+        "minuend": 2,
+        "subtrahend": 1,
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'SLV'",
+        "instrument": "stu_sch"
+      },
+      "expect": {
+        "error_contains": [
+          "no school identifier"
+        ]
+      }
+    },
+    {
+      "name": "serbia_private_two_schools_suppressed",
+      "verified": "Serbia private schools 2025 = 65 students in 2 schools: suppressed under the 5-school floor",
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}SCIE",
+        "group_col": "SC013Q01TA",
+        "minuend": 2,
+        "subtrahend": 1,
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'SRB'",
+        "instrument": "stu_sch"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "SRB"
+            },
+            "estimate": null,
+            "se": null
+          }
+        ],
+        "notes_contain": [
+          "fewer than 5 schools"
+        ],
+        "notes_forbid": [
+          "did not release",
+          "not administered"
+        ]
+      }
+    },
+    {
+      "name": "top10_math_keeps_oecd_avg",
+      "verified": "a benchmark row asked for with a top-N survives the cut: 11 rows; OECD avg 2025 math = 463.02 over all 38 members (economies without school identifiers are not suppressed)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "sort_by": "estimate",
+        "sort_desc": true,
+        "top_n": 10,
+        "include_oecd_average": true
+      },
+      "expect": {
+        "rows": 11,
+        "cells": [
+          {
+            "match": {
+              "CNT": "OECD avg"
+            },
+            "estimate": 463.02
+          },
+          {
+            "match": {
+              "CNT": "MAC"
+            },
+            "rank": 3
+          }
+        ],
+        "notes_forbid": [
+          "fewer than 5 schools"
+        ]
+      }
+    },
+    {
+      "name": "azerbaijan_code_succession",
+      "verified": "Baku (QAZ) 2018 and Azerbaijan (AZE) 2025: levels shown, no trend, never 'did not take part'",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}SCIE",
+        "cycles": [
+          "2018",
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('QAZ','AZE')"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "QAZ"
+            },
+            "estimate_2018": 397.65,
+            "change": null
+          },
+          {
+            "match": {
+              "CNT": "AZE"
+            },
+            "estimate_2025": 408.56,
+            "change": null
+          }
+        ],
+        "notes_contain": [
+          "a different coverage of the same country"
+        ],
+        "notes_forbid": [
+          "did not take part"
+        ]
+      }
+    },
+    {
+      "name": "moscow_city_2018",
+      "verified": "Moscow City (QMC, separate OECD release) appended to 2018: math 534.1, reading 534.2, science 528.0; Moscow region (QMR) and Tatarstan (QRT) unchanged",
+      "plan": {
+        "template": "weighted_mean",
+        "measures": [
+          "PV{pv}MATH",
+          "PV{pv}READ",
+          "PV{pv}SCIE"
+        ],
+        "cycles": [
+          "2018"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT IN ('QMC','QMR','QRT','RUS')"
+      },
+      "expect": {
+        "rows": 12,
+        "cells": [
+          {
+            "match": {
+              "CNT": "QMC",
+              "measure": "Mathematics score"
+            },
+            "estimate": 534.14,
+            "se": 2.74
+          },
+          {
+            "match": {
+              "CNT": "QMR",
+              "measure": "Mathematics score"
+            },
+            "estimate": 494.91
+          },
+          {
+            "match": {
+              "CNT": "RUS",
+              "measure": "Reading score"
+            },
+            "estimate": 478.5
+          }
+        ]
+      }
+    },
+    {
+      "name": "level6_share_singapore",
+      "verified": "full proficiency ladder: the Level 6 mathematics bound 669.30 is known and labelled",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "CASE WHEN PV{pv}MATH >= 669.30 THEN 100.0 ELSE 0.0 END",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'SGP'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "SGP"
+            },
+            "estimate": 16.4,
+            "se": 0.57
+          }
+        ]
+      }
+    },
+    {
+      "name": "spain_excluded_from_2018_reading_oecd_avg",
+      "verified": "OECD avg reading 2018 without Spain = 487.13 (OECD published 487, Annex A9)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}READ",
+        "cycles": [
+          "2018"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'FRA'",
+        "include_oecd_average": true
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "CNT": "OECD avg"
+            },
+            "estimate": 487.13,
+            "se": 0.41
+          }
+        ],
+        "notes_contain": [
+          "Spain (ESP) is left out of the OECD avg"
+        ]
+      }
+    },
+    {
+      "name": "escs_quarters_defined_within_economy",
+      "verified": "quartile cut points per economy, then broken down by gender: Chile 2022 girls 69.62 / boys 67.88 (within-gender quarters gave 69.21 / 68.56)",
+      "plan": {
+        "template": "quartile_gap",
+        "measure": "PV{pv}MATH",
+        "quart_variable": "ESCS",
+        "cycles": [
+          "2022"
+        ],
+        "by": [
+          "CNT",
+          "ST004D01T"
+        ],
+        "where": "CNT = 'CHL'"
+      },
+      "expect": {
+        "rows": 2,
+        "cells": [
+          {
+            "match": {
+              "ST004D01T": "1.0"
+            },
+            "estimate": 69.62
+          },
+          {
+            "match": {
+              "ST004D01T": "2.0"
+            },
+            "estimate": 67.88
+          }
+        ]
+      }
+    },
+    {
+      "name": "usa_escs_low_coverage_2025_is_stated",
+      "verified": "43% of the US 2025 weighted population has no ESCS: the estimate is flagged",
+      "plan": {
+        "template": "quartile_gap",
+        "measure": "PV{pv}MATH",
+        "quart_variable": "ESCS",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'USA'"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "USA"
+            },
+            "estimate": 93.0
+          }
+        ],
+        "notes_contain": [
+          "of the weighted population has no value"
+        ]
+      }
     }
   ]
 }

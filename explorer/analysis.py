@@ -12,10 +12,12 @@ import pandas as pd
 
 from .estimator import (
     ALL_WEIGHTS,
+    GROUP_STATS,
     _pv_list,
     combine,
     contrast,
     fetch_frame,
+    group_stats,
     replicate_estimates,
     replicates_from_frame,
 )
@@ -40,7 +42,10 @@ def weighted_proportion(con, table, variable, value, by=(), where=None,
         expr = (f"CASE WHEN {variable} = {value} THEN 100.0 "
                 f"WHEN {variable} IN ({codes}) THEN 0.0 END")
     else:
-        expr = f"CASE WHEN {variable} = {value} THEN 100.0 ELSE 0.0 END"
+        # missing codes are NULL in this database: the denominator is the
+        # non-missing responses, as in the OECD's recode + [aw] convention
+        expr = (f"CASE WHEN {variable} = {value} THEN 100.0 "
+                f"WHEN {variable} IS NOT NULL THEN 0.0 END")
     reps = replicate_estimates(con, table, expr, by=tuple(by), where=where)
     return combine(reps, by=tuple(by))
 
@@ -100,13 +105,33 @@ def _assign_weighted_quarters(df: pd.DataFrame, by=()) -> pd.DataFrame:
 
 def _quartile_replicates(con, table, measure, quart_variable, by=(), where=None):
     exprs = _pv_list(measure)
-    clause = f"({quart_variable}) IS NOT NULL"
-    where = f"({where}) AND {clause}" if where else clause
     df = fetch_frame(con, table, exprs, by=tuple(by), where=where,
                      extra={"qv": quart_variable})
-    df = _assign_weighted_quarters(df, by=tuple(by))
+    # Weighted coverage of the quartile variable per group BEFORE dropping
+    # students without it (USA 2025: 43% of the weighted population has no
+    # ESCS) — the quarters describe only the students who have a value.
+    has_qv = df["qv"].notna().to_numpy()
+    if by:
+        w_all = df.groupby(list(by), dropna=False, observed=True)["W_FSTUWT"].sum()
+        w_obs = df[has_qv].groupby(list(by), dropna=False, observed=True)["W_FSTUWT"].sum()
+        coverage = (w_obs / w_all).fillna(0.0)
+    else:
+        total = float(df["W_FSTUWT"].sum())
+        coverage = float(df.loc[has_qv, "W_FSTUWT"].sum() / total) if total else 1.0
+    df = df[has_qv].reset_index(drop=True)
+    # Quarters are defined within each ECONOMY (the OECD's escs_q is cut per
+    # country), then results are broken down by any further grouping — a
+    # "bottom quarter" must mean the same ESCS range for boys and girls.
+    df = _assign_weighted_quarters(df, by=("CNT",) if "CNT" in by else ())
     cols = [f"m_{i}" for i in range(1, len(exprs) + 1)]
-    return replicates_from_frame(df, cols, by=(*by, "quarter"))
+    reps = replicates_from_frame(df, cols, by=(*by, "quarter"))
+    if not reps.empty:
+        if by:
+            keys = pd.MultiIndex.from_frame(reps[list(by)]) if len(by) > 1 else reps[by[0]]
+            reps["wcov"] = coverage.reindex(keys).to_numpy()
+        else:
+            reps["wcov"] = coverage
+    return reps
 
 
 def quartile_means(con, table, measure, quart_variable, by=(),
@@ -152,12 +177,13 @@ def correlation(con, table, x, y, by=(), where=None) -> pd.DataFrame:
             key = (key,)
         weights = g[ALL_WEIGHTS].to_numpy(dtype=float)
         rs = np.empty((n_pv, n_w))
-        n_obs = 0
+        stats = None
         for i in range(1, n_pv + 1):
             xv = g[f"x_{i}"].to_numpy(dtype=float)
             yv = g[f"y_{i}"].to_numpy(dtype=float)
             mask = ~(np.isnan(xv) | np.isnan(yv))
-            n_obs = max(n_obs, int(mask.sum()))
+            if stats is None:
+                stats = group_stats(g, mask)
             wm, xm, ym = weights[mask], xv[mask], yv[mask]
             # A group with no complete pairs (construct not administered)
             # yields NaN by design — suppress the expected 0/0 warnings.
@@ -171,13 +197,13 @@ def correlation(con, table, x, y, by=(), where=None) -> pd.DataFrame:
         frame = pd.DataFrame({
             "pv": np.repeat(np.arange(1, n_pv + 1), n_w),
             "rep": np.tile(np.arange(n_w), n_pv),
-            "value": rs.ravel(), "n": n_obs,
+            "value": rs.ravel(), **stats,
         })
         for col, val in zip(by, key):
             frame[col] = val
         frames.append(frame)
     if not frames:
-        return combine(pd.DataFrame(columns=list(by) + ['pv', 'rep', 'value', 'n']), by=())
+        return combine(pd.DataFrame(columns=list(by) + ['pv', 'rep', 'value'] + GROUP_STATS), by=())
     reps = pd.concat(frames, ignore_index=True)
     return combine(reps, by=tuple(by))
 
@@ -197,9 +223,12 @@ def _percentile_replicates(con, table, measure, by=(), where=None,
         if not isinstance(key, tuple):
             key = (key,)
         weights = g[ALL_WEIGHTS].to_numpy(dtype=float)
+        stats = None
         for pv_i, col in enumerate(cols, start=1):
             v = g[col].to_numpy(dtype=float)
             mask = ~np.isnan(v)
+            if stats is None:
+                stats = group_stats(g, mask)
             vm, wm = v[mask], weights[mask]
             order = np.argsort(vm, kind="stable")
             vs, cum = vm[order], np.cumsum(wm[order], axis=0)   # (n,), (n, 81)
@@ -208,13 +237,13 @@ def _percentile_replicates(con, table, measure, by=(), where=None,
                 idx = np.clip((cum < totals * (p / 100)).sum(axis=0), 0, len(vs) - 1)
                 frame = pd.DataFrame({
                     "percentile": p, "pv": pv_i,
-                    "rep": np.arange(n_w), "value": vs[idx], "n": int(mask.sum()),
+                    "rep": np.arange(n_w), "value": vs[idx], **stats,
                 })
                 for c, val in zip(by, key):
                     frame[c] = val
                 frames.append(frame)
     if not frames:
-        return pd.DataFrame(columns=list(by) + ['percentile', 'pv', 'rep', 'value', 'n'])
+        return pd.DataFrame(columns=list(by) + ['percentile', 'pv', 'rep', 'value'] + GROUP_STATS)
     return pd.concat(frames, ignore_index=True)
 
 
@@ -268,7 +297,7 @@ def crosstab(con, table, row_var, col_var, by=(), where=None,
         res["col"] = c
         parts.append(res)
     out = pd.concat(parts, ignore_index=True).rename(columns={row_var: "row"})
-    return out[list(by) + ["row", "col", "estimate", "se", "n_pv"] + (["n"] if "n" in out.columns else [])]
+    return out[list(by) + ["row", "col", "estimate", "se", "n_pv"] + [c for c in GROUP_STATS if c in out.columns]]
 
 
 MAX_REGRESSION_PREDICTORS = 6
@@ -297,6 +326,7 @@ def regression(con, table, y, xs, by=(), where=None,
     n_w = len(ALL_WEIGHTS)
     groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
     frames = []
+    skipped: list[tuple[str, str]] = []
     for key, g in groups:
         if not isinstance(key, tuple):
             key = (key,)
@@ -304,26 +334,32 @@ def regression(con, table, y, xs, by=(), where=None,
         x_mat = np.column_stack(
             [np.ones(len(g))] + [g[f"x_{j}"].to_numpy(dtype=float)
                                  for j in range(1, len(xs) + 1)])
+        stats = None
         for pv_i in range(1, len(ys_list) + 1):
             yv = g[f"y_{pv_i}"].to_numpy(dtype=float)
             mask = ~np.isnan(yv) & ~np.isnan(x_mat).any(axis=1)
+            if stats is None:
+                stats = group_stats(g, mask)
             x_use, y_use, w_use = x_mat[mask], yv[mask], weights[mask]
             if mask.sum() <= len(terms):
-                raise ValueError("too few complete observations for regression")
-            # A predictor that is constant in this group (a dummy for a
-            # category nobody is in, a variable with one value) or a linear
-            # combination of the others makes the normal equations singular.
-            # Name the offender instead of crashing with "Singular matrix".
-            rank = np.linalg.matrix_rank(x_use)
-            if rank < x_use.shape[1]:
-                spread = x_use[:, 1:].std(axis=0)
-                flat = [terms[j + 1] for j, s in enumerate(spread) if s == 0]
-                why = (f"{', '.join(flat)} has a single value in this group"
-                       if flat else "two or more predictors are linearly dependent "
-                                    "(e.g. dummies for every category of one variable)")
-                raise ValueError(
-                    f"the regression cannot be estimated for {key if by else 'this group'}: "
-                    f"{why}. Drop that predictor or leave one category out.")
+                problem = "fewer complete observations than predictors"
+            else:
+                # A predictor that is constant in this group (a dummy for a
+                # category nobody is in, a variable with one value) or a linear
+                # combination of the others makes the normal equations
+                # singular. Name the offender instead of "Singular matrix".
+                problem = None
+                if np.linalg.matrix_rank(x_use) < x_use.shape[1]:
+                    spread = x_use[:, 1:].std(axis=0)
+                    flat = [terms[j + 1] for j, s in enumerate(spread) if s == 0]
+                    problem = (f"{', '.join(flat)} has a single value" if flat else
+                               "two or more predictors are linearly dependent (e.g. dummies "
+                               "for every category of one variable)")
+            if problem:
+                # one economy that cannot be estimated must not abort the
+                # other 80: skip it and report why
+                skipped.append((", ".join(str(k) for k in key) if by else "this group", problem))
+                break
             # 81 weighted normal-equation solves in one einsum each
             xtwx = np.einsum("nw,ni,nj->wij", w_use, x_use, x_use, optimize=True)
             xtwy = np.einsum("nw,ni,n->wi", w_use, x_use, y_use, optimize=True)
@@ -331,15 +367,21 @@ def regression(con, table, y, xs, by=(), where=None,
             for t_i, term in enumerate(terms):
                 frame = pd.DataFrame({
                     "term": term, "pv": pv_i,
-                    "rep": np.arange(n_w), "value": betas[:, t_i], "n": int(mask.sum()),
+                    "rep": np.arange(n_w), "value": betas[:, t_i], **stats,
                 })
                 for c, val in zip(by, key):
                     frame[c] = val
                 frames.append(frame)
     if not frames:
-        return combine(pd.DataFrame(columns=list(by) + ['term', 'pv', 'rep', 'value', 'n']), by=())
+        if skipped:
+            raise ValueError("the regression cannot be estimated: " +
+                             "; ".join(f"{who}: {why}" for who, why in skipped[:3]) +
+                             ". Drop that predictor or leave one category out.")
+        return combine(pd.DataFrame(columns=list(by) + ['term', 'pv', 'rep', 'value'] + GROUP_STATS), by=())
     reps = pd.concat(frames, ignore_index=True)
-    return combine(reps, by=(*by, "term"))
+    out = combine(reps, by=(*by, "term"))
+    out.attrs["skipped"] = skipped
+    return out
 
 
 def trend(results, result_2022: pd.DataFrame | None = None,
@@ -355,11 +397,13 @@ def trend(results, result_2022: pd.DataFrame | None = None,
     (e.g. an economy that first joined in 2025) keep their row with NULLs
     for that cycle, so the table says what is missing instead of hiding it.
 
-    Cycles are independent samples, so var(change) = var_first + var_last.
-    NOTE: this excludes the OECD link error (the extra uncertainty from
-    scale equating across cycles); comparisons against published trend SEs
-    will be slightly smaller. Add the link-error term when absolute trend
-    inference matters.
+    Cycles are independent samples, so var(change) = var_first + var_last,
+    plus the square of `link_error` when one is given: a float for every
+    row (the OECD's published link error for a mean score), or a DataFrame
+    with the key columns and a `link_error` column for row-specific values
+    (a proficiency-share link error derived per economy). The caller decides
+    when a link error applies: it does for levels of the score scale, it
+    cancels for differences between groups measured in the same cycle.
     """
     if isinstance(results, pd.DataFrame):
         results = {"2018": results, "2022": result_2022}
@@ -371,7 +415,7 @@ def trend(results, result_2022: pd.DataFrame | None = None,
     for cycle in cycles:
         part = results[cycle].rename(
             columns={"estimate": f"estimate_{cycle}", "se": f"se_{cycle}"})
-        part = part[[c for c in part.columns if c not in ("n_pv", "n")]]
+        part = part[[c for c in part.columns if c not in ("n_pv",) + tuple(GROUP_STATS)]]
         if merged is None:
             merged = part
         elif keys:
@@ -383,9 +427,16 @@ def trend(results, result_2022: pd.DataFrame | None = None,
     merged["change"] = merged[f"estimate_{last}"] - merged[f"estimate_{first}"]
     # Independent samples: var_first + var_last (+ the OECD link error for
     # the cycle pair and domain when it is known — see explorer/link_errors.py)
+    if isinstance(link_error, pd.DataFrame):
+        le_keys = [c for c in link_error.columns if c != "link_error"]
+        merged = merged.merge(link_error, on=le_keys, how="left") if le_keys else \
+            merged.assign(link_error=float(link_error["link_error"].iloc[0]))
+        le_sq = merged.pop("link_error").fillna(0.0) ** 2
+    else:
+        le_sq = float(link_error or 0.0) ** 2
     merged["se_change"] = np.sqrt(merged[f"se_{first}"] ** 2
                                   + merged[f"se_{last}"] ** 2
-                                  + float(link_error or 0.0) ** 2)
+                                  + le_sq)
     cols = keys + [c for cycle in cycles
                    for c in (f"estimate_{cycle}", f"se_{cycle}")] \
         + ["change", "se_change"]

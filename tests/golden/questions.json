@@ -1,87 +1,559 @@
 {
-  "_about": [
-    "Golden regression set, tier 2: QUESTION -> ANSWER, through the language model.",
-    "Run: python scripts/golden_live.py [--repeats 2] [--only name]  (needs GEMINI_API_KEY",
-    "and the local DuckDB; ~10-60 s per question). Each case states the route and",
-    "template the app must choose, variables the plan must use, numbers the answer",
-    "must contain (matched at the precision written), and phrases it must never",
-    "contain. Because the model is nondeterministic the script reports a pass rate",
-    "per case; a case that fails once is worth reading, one that fails twice is a bug."
-  ],
-  "cases": [
-    {"name": "kosovo_rank", "question": "where is kosovo ranked in science in 2025?",
-     "route": "data", "template": "weighted_mean", "variables_any": ["PV1SCIE"],
-     "answer_numbers": ["357", "83"], "answer_forbid": ["full table", "cannot determine"]},
-    {"name": "rwanda", "question": "How did rwanda do?",
-     "route": "data", "answer_numbers": ["317"], "answer_forbid": ["did not participate", "not in the PISA"]},
-    {"name": "india", "question": "Did India participate in 2025 PISA?",
-     "route": "conversational", "answer_contains": ["not in the PISA 2018, 2022 or 2025"]},
-    {"name": "us_gender_trend", "question": "How did the math gender gap change in the US between 2018 and 2025?",
-     "route": "data", "template": "gap", "variables_any": ["ST004D01T", "MALE"],
-     "answer_numbers": ["8.6", "23.8"], "answer_forbid": ["not collected", "was not administered"]},
-    {"name": "brazil_signif", "question": "Did Brazil's science score improve significantly between 2022 and 2025?",
-     "route": "data", "template": "weighted_mean", "answer_numbers": ["5.5", "4.1"],
-     "answer_contains_any": ["not statistically significant", "not significant"],
-     "answer_forbid": ["is statistically significant", "significant improvement"]},
-    {"name": "uzb_why", "question": "Why can't I see mathematics and reading results for Uzbekistan?",
-     "route": "conversational", "answer_contains": ["not released", "science"],
-     "answer_forbid": ["did not administer", "not collected"]},
-    {"name": "shanghai", "question": "How does Shanghai compare to Singapore in math in 2025?",
-     "route": "data", "answer_numbers": ["612", "563"], "answer_contains": ["B-S-J-Z"]},
-    {"name": "mexico_public_private", "question": "what is the difference in performance between mexico's public and private schools?",
-     "route": "data", "template": "gap", "variables_all": ["SC013Q01TA"], "variables_forbid": ["PRIVATESCH"]},
-    {"name": "chile_rural", "question": "Compare science scores of students in rural and city schools in Chile in 2025",
-     "route": "data", "template": "gap", "variables_all": ["SC001Q01TA"], "answer_numbers": ["29.8"]},
-    {"name": "france_eu", "question": "compare reading scores for France with the EU average in 2025",
-     "route": "data", "answer_numbers": ["456", "454"]},
-    {"name": "argentina_profile", "question": "give all this for argentina? Mathematics achievement, Reading achievement, Socioeconomic status (ESCS), sense of belonging — 2018 and 2025",
-     "route": "data", "template": "weighted_mean", "variables_all": ["ESCS", "BELONG"],
-     "answer_numbers": ["379", "367"], "answer_forbid": ["ESCS rose significantly", "belonging increased significantly"]},
-    {"name": "japan_ai", "question": "How many students in Japan use AI chatbots for schoolwork?",
-     "route": "data", "variables_any": ["ST438Q01DA", "AIUSESCH", "ST438Q02DA"],
-     "answer_forbid": ["no AI data", "does not hold", "did not assess"]},
-    {"name": "coverage_rate", "question": "how did coverage of 15-year-olds change in Latin American countries between 2022 and 2025?",
-     "route": "conversational", "answer_contains": ["Coverage Index 3"]},
-    {"name": "link_error", "question": "Why is OECD link error excluded?",
-     "route": "conversational", "answer_contains": ["link error"]},
-    {"name": "el_salvador", "question": "El Salvador math status a time series",
-     "route": "data", "answer_numbers": ["343", "346"], "answer_forbid": ["No objects", "failed"]},
-    {"name": "latam_why", "question": "What is the trend in math for Latin American countries and what factors were behind it?",
-     "route": "data", "answer_forbid": ["due to", "caused by", "driven by"], "notes_contain": ["cross-section"]},
-    {"name": "korea_gender", "question": "Is the reading gender gap in Korea statistically significant in 2025?",
-     "route": "data", "template": "gap", "answer_numbers": ["28"], "answer_contains_any": ["statistically significant"]},
-    {"name": "uzb_count_girls", "question": "How many students were tested in Uzbekistan in 2025 and what percentage were girls?",
-     "route": "data", "answer_numbers": ["8,652", "49.1"], "answer_forbid": ["50.9% were girls", "boys: 49"]},
-    {"name": "well_being_explore", "question": "find me data related to well-being from 2025 data",
-     "route": "explore", "answer_forbid": ["Binder Error"]},
-    {"name": "us_wellbeing_2022", "question": "What is the experienced well-being of students in the United States in 2022?",
-     "route_any": ["coverage", "data", "clarify"], "answer_forbid": ["has no well-being"], "answer_contains_any": ["did not administer", "not collected", "optional", "SWBP", "2018"]},
-    {"name": "spanish", "question": "¿Cuál fue el puntaje promedio de ciencias de Chile en 2025?",
-     "route": "data", "answer_numbers": ["442"], "answer_forbid": ["proyect"]},
-    {"name": "chile_why_decline", "question": "What is behind the strong decline in math and reading performance in Chile?",
-     "route": "data", "template": "weighted_mean", "variables_any": ["PV1MATH", "PV1READ"],
-     "answer_forbid": ["intercept", "due to", "caused by"], "notes_contain": ["cross-section"]},
-    {"name": "escs_gap_shrank", "question": "which countries shrank the gap the most between disadvantaged and advantaged students?",
-     "route": "data", "template": "quartile_gap", "variables_all": ["ESCS"]},
-    {"name": "engineering_gender_gap", "question": "what's happening with the gender gap in technical fields like engineering?",
-     "route_any": ["data", "clarify", "explore"], "answer_forbid": ["CASE WHEN", "ELSE 0"]},
-    {"name": "comparable_es", "question": "Es comparable los resultados PISA de El Salvador 2025 con suecia o alemania 2022",
-     "route": "conversational", "answer_forbid": ["Yes, PISA results"], "answer_contains_any": ["enlace", "error de vinculaci", "vincul", "link error"]},
-    {"name": "items_about_info", "question": "I believe 2025 had some questions about how students evaluate information",
-     "route": "explore"},
-    {"name": "nis_stratum", "question": "what is the position of Nazarbayev Intellectual schools in math, reading and science",
-     "route": "data", "answer_forbid": ["do not contain", "cannot provide"], "notes_contain": ["SAMPLING STRATUM"]},
-    {"name": "india_2018", "question": "How many students in India repeated a grade only once in 2018?",
-     "route": "conversational", "answer_contains": ["not in the PISA 2018, 2022 or 2025"], "answer_forbid": ["failed"]},
-    {"name": "mexico_repeat_once", "question": "How many students in Mexico repeated a grade only once in 2018?",
-     "route": "data", "answer_contains": ["%"], "answer_forbid": ["CASE WHEN", "0.07", "0.13", "proportion of 0."]},
-    {"name": "indonesia_results", "question": "What were the results of the students in Indonesia?",
-     "route": "data", "variables_all": ["PV1MATH", "PV1READ", "PV1SCIE"]},
-    {"name": "indonesia_vs_top5", "question": "compare Indonesia and top 5 countries in belief in science",
-     "route": "data", "answer_forbid": ["single step", "first provide"]},
-    {"name": "vietnam_trend", "question": "How did Vietnam's reading score change from 2018 to 2025?",
-     "route": "data", "answer_forbid": ["did not release", "not released"], "notes_contain": ["largely comparable", "paper-based tests"]},
-    {"name": "pisa_2012", "question": "What was the OECD average math score in PISA 2012?",
-     "route": "conversational", "answer_contains_any": ["2018", "not loaded", "only"], "answer_forbid": ["494"]}
-  ]
+ "_about": [
+  "Golden regression set, tier 2: QUESTION -> ANSWER, through the language model.",
+  "Run: python scripts/golden_live.py [--repeats 2] [--only name]  (needs GEMINI_API_KEY",
+  "and the local DuckDB; ~10-60 s per question). Each case states the route and",
+  "template the app must choose, variables the plan must use, numbers the answer",
+  "must contain (matched at the precision written), and phrases it must never",
+  "contain. Because the model is nondeterministic the script reports a pass rate",
+  "per case; a case that fails once is worth reading, one that fails twice is a bug."
+ ],
+ "cases": [
+  {
+   "name": "kosovo_rank",
+   "question": "where is kosovo ranked in science in 2025?",
+   "route": "data",
+   "template": "weighted_mean",
+   "variables_any": [
+    "PV1SCIE"
+   ],
+   "answer_numbers": [
+    "357",
+    "83"
+   ],
+   "answer_forbid": [
+    "full table",
+    "cannot determine"
+   ]
+  },
+  {
+   "name": "rwanda",
+   "question": "How did rwanda do?",
+   "route": "data",
+   "answer_numbers": [
+    "317"
+   ],
+   "answer_forbid": [
+    "did not participate",
+    "not in the PISA"
+   ]
+  },
+  {
+   "name": "india",
+   "question": "Did India participate in 2025 PISA?",
+   "route": "conversational",
+   "answer_contains": [
+    "not in the PISA 2018, 2022 or 2025"
+   ]
+  },
+  {
+   "name": "us_gender_trend",
+   "question": "How did the math gender gap change in the US between 2018 and 2025?",
+   "route": "data",
+   "template": "gap",
+   "variables_any": [
+    "ST004D01T",
+    "MALE"
+   ],
+   "answer_numbers": [
+    "8.6",
+    "23.8"
+   ],
+   "answer_forbid": [
+    "not collected",
+    "was not administered"
+   ]
+  },
+  {
+   "name": "brazil_signif",
+   "question": "Did Brazil's science score improve significantly between 2022 and 2025?",
+   "route": "data",
+   "template": "weighted_mean",
+   "answer_numbers": [
+    "5.5",
+    "4.1"
+   ],
+   "answer_contains_any": [
+    "not statistically significant",
+    "not significant"
+   ],
+   "answer_forbid": [
+    "is statistically significant",
+    "significant improvement"
+   ]
+  },
+  {
+   "name": "uzb_why",
+   "question": "Why can't I see mathematics and reading results for Uzbekistan?",
+   "route": "conversational",
+   "answer_contains": [
+    "not released",
+    "science"
+   ],
+   "answer_forbid": [
+    "did not administer",
+    "not collected"
+   ]
+  },
+  {
+   "name": "shanghai",
+   "question": "How does Shanghai compare to Singapore in math in 2025?",
+   "route": "data",
+   "answer_numbers": [
+    "612",
+    "563"
+   ],
+   "answer_contains": [
+    "B-S-J-Z"
+   ]
+  },
+  {
+   "name": "mexico_public_private",
+   "question": "what is the difference in performance between mexico's public and private schools?",
+   "route": "data",
+   "template": "gap",
+   "variables_all": [
+    "SC013Q01TA"
+   ],
+   "variables_forbid": [
+    "PRIVATESCH"
+   ]
+  },
+  {
+   "name": "chile_rural",
+   "question": "Compare science scores of students in rural and city schools in Chile in 2025",
+   "route": "data",
+   "template": "gap",
+   "variables_all": [
+    "SC001Q01TA"
+   ],
+   "answer_numbers": [
+    "29.8"
+   ]
+  },
+  {
+   "name": "france_eu",
+   "question": "compare reading scores for France with the EU average in 2025",
+   "route": "data",
+   "answer_numbers": [
+    "456",
+    "454"
+   ]
+  },
+  {
+   "name": "argentina_profile",
+   "question": "give all this for argentina? Mathematics achievement, Reading achievement, Socioeconomic status (ESCS), sense of belonging — 2018 and 2025",
+   "route": "data",
+   "template": "weighted_mean",
+   "variables_all": [
+    "ESCS",
+    "BELONG"
+   ],
+   "answer_numbers": [
+    "379",
+    "367"
+   ],
+   "answer_forbid": [
+    "ESCS rose significantly",
+    "belonging increased significantly"
+   ]
+  },
+  {
+   "name": "japan_ai",
+   "question": "How many students in Japan use AI chatbots for schoolwork?",
+   "route": "data",
+   "variables_any": [
+    "ST438Q01DA",
+    "AIUSESCH",
+    "ST438Q02DA"
+   ],
+   "answer_forbid": [
+    "no AI data",
+    "does not hold",
+    "did not assess"
+   ]
+  },
+  {
+   "name": "coverage_rate",
+   "question": "how did coverage of 15-year-olds change in Latin American countries between 2022 and 2025?",
+   "route": "conversational",
+   "answer_contains": [
+    "Coverage Index 3"
+   ]
+  },
+  {
+   "name": "link_error",
+   "question": "Why is OECD link error excluded?",
+   "route": "conversational",
+   "answer_contains": [
+    "link error"
+   ]
+  },
+  {
+   "name": "el_salvador",
+   "question": "El Salvador math status a time series",
+   "route": "data",
+   "answer_numbers": [
+    "343",
+    "346"
+   ],
+   "answer_forbid": [
+    "No objects",
+    "failed"
+   ]
+  },
+  {
+   "name": "latam_why",
+   "question": "What is the trend in math for Latin American countries and what factors were behind it?",
+   "route": "data",
+   "answer_forbid": [
+    "due to",
+    "caused by",
+    "driven by"
+   ],
+   "notes_contain": [
+    "cross-section"
+   ]
+  },
+  {
+   "name": "korea_gender",
+   "question": "Is the reading gender gap in Korea statistically significant in 2025?",
+   "route": "data",
+   "template": "gap",
+   "answer_numbers": [
+    "28"
+   ],
+   "answer_contains_any": [
+    "statistically significant"
+   ]
+  },
+  {
+   "name": "uzb_count_girls",
+   "question": "How many students were tested in Uzbekistan in 2025 and what percentage were girls?",
+   "route": "data",
+   "answer_numbers": [
+    "8,652",
+    "49.1"
+   ],
+   "answer_forbid": [
+    "50.9% were girls",
+    "boys: 49"
+   ]
+  },
+  {
+   "name": "well_being_explore",
+   "question": "find me data related to well-being from 2025 data",
+   "route": "explore",
+   "answer_forbid": [
+    "Binder Error"
+   ]
+  },
+  {
+   "name": "us_wellbeing_2022",
+   "question": "What is the experienced well-being of students in the United States in 2022?",
+   "route_any": [
+    "coverage",
+    "data",
+    "clarify"
+   ],
+   "answer_forbid": [
+    "has no well-being"
+   ],
+   "answer_contains_any": [
+    "did not administer",
+    "not collected",
+    "optional",
+    "SWBP",
+    "2018"
+   ]
+  },
+  {
+   "name": "spanish",
+   "question": "¿Cuál fue el puntaje promedio de ciencias de Chile en 2025?",
+   "route": "data",
+   "answer_numbers": [
+    "442"
+   ],
+   "answer_forbid": [
+    "proyect"
+   ]
+  },
+  {
+   "name": "chile_why_decline",
+   "question": "What is behind the strong decline in math and reading performance in Chile?",
+   "route": "data",
+   "template": "weighted_mean",
+   "variables_any": [
+    "PV1MATH",
+    "PV1READ"
+   ],
+   "answer_forbid": [
+    "intercept",
+    "due to",
+    "caused by"
+   ],
+   "notes_contain": [
+    "cross-section"
+   ]
+  },
+  {
+   "name": "escs_gap_shrank",
+   "question": "which countries shrank the gap the most between disadvantaged and advantaged students?",
+   "route": "data",
+   "template": "quartile_gap",
+   "variables_all": [
+    "ESCS"
+   ]
+  },
+  {
+   "name": "engineering_gender_gap",
+   "question": "what's happening with the gender gap in technical fields like engineering?",
+   "route_any": [
+    "data",
+    "clarify",
+    "explore"
+   ],
+   "answer_forbid": [
+    "CASE WHEN",
+    "ELSE 0"
+   ]
+  },
+  {
+   "name": "comparable_es",
+   "question": "Es comparable los resultados PISA de El Salvador 2025 con suecia o alemania 2022",
+   "route": "conversational",
+   "answer_forbid": [
+    "Yes, PISA results"
+   ],
+   "answer_contains_any": [
+    "enlace",
+    "error de vinculaci",
+    "vincul",
+    "link error"
+   ]
+  },
+  {
+   "name": "items_about_info",
+   "question": "I believe 2025 had some questions about how students evaluate information",
+   "route": "explore"
+  },
+  {
+   "name": "nis_stratum",
+   "question": "what is the position of Nazarbayev Intellectual schools in math, reading and science",
+   "route": "data",
+   "answer_forbid": [
+    "do not contain",
+    "cannot provide"
+   ],
+   "notes_contain": [
+    "SAMPLING STRATUM"
+   ]
+  },
+  {
+   "name": "india_2018",
+   "question": "How many students in India repeated a grade only once in 2018?",
+   "route": "conversational",
+   "answer_contains": [
+    "not in the PISA 2018, 2022 or 2025"
+   ],
+   "answer_forbid": [
+    "failed"
+   ]
+  },
+  {
+   "name": "mexico_repeat_once",
+   "question": "How many students in Mexico repeated a grade only once in 2018?",
+   "route": "data",
+   "answer_contains": [
+    "%"
+   ],
+   "answer_forbid": [
+    "CASE WHEN",
+    "0.07",
+    "0.13",
+    "proportion of 0."
+   ]
+  },
+  {
+   "name": "indonesia_results",
+   "question": "What were the results of the students in Indonesia?",
+   "route": "data",
+   "variables_all": [
+    "PV1MATH",
+    "PV1READ",
+    "PV1SCIE"
+   ]
+  },
+  {
+   "name": "indonesia_vs_top5",
+   "question": "compare Indonesia and top 5 countries in belief in science",
+   "route": "data",
+   "answer_forbid": [
+    "single step",
+    "first provide"
+   ]
+  },
+  {
+   "name": "vietnam_trend",
+   "question": "How did Vietnam's reading score change from 2018 to 2025?",
+   "route": "data",
+   "answer_forbid": [
+    "did not release",
+    "not released"
+   ],
+   "notes_contain": [
+    "largely comparable",
+    "paper-based tests"
+   ]
+  },
+  {
+   "name": "pisa_2012",
+   "question": "What was the OECD average math score in PISA 2012?",
+   "route": "conversational",
+   "answer_contains_any": [
+    "2018",
+    "not loaded",
+    "only"
+   ],
+   "answer_forbid": [
+    "494"
+   ]
+  },
+  {
+   "name": "world_average",
+   "question": "Compare Brazil's math score to the world average in 2025",
+   "route": "data",
+   "answer_contains_any": [
+    "All-participant",
+    "all participants",
+    "all 90",
+    "todos"
+   ],
+   "answer_forbid": [
+    "the OECD average of"
+   ]
+  },
+  {
+   "name": "korea_p90_p10",
+   "question": "P90-P10 gap and the median in math in Korea 2025",
+   "route": "data",
+   "template_any": [
+    "percentile_spread",
+    "percentiles"
+   ],
+   "answer_forbid": [
+    "(SE 7.6)"
+   ]
+  },
+  {
+   "name": "policy_question",
+   "question": "Which policy works best to raise reading scores: reducing class size or hiring more teachers?",
+   "route_any": [
+    "data",
+    "conversational",
+    "clarify"
+   ],
+   "answer_forbid": [
+    "failed",
+    "Singular"
+   ],
+   "answer_contains_any": [
+    "cannot",
+    "association",
+    "causal",
+    "not establish"
+   ]
+  },
+  {
+   "name": "scotland",
+   "question": "Scotland's math score in 2025 compared with England",
+   "route": "data",
+   "notes_contain": [
+    "SAMPLING STRATUM"
+   ],
+   "answer_forbid": [
+    "not separate"
+   ]
+  },
+  {
+   "name": "moscow_vs_tatarstan",
+   "question": "Compare Moscow and Tatarstan science scores in 2018",
+   "route": "data",
+   "answer_numbers": [
+    "528",
+    "463.6"
+   ],
+   "answer_forbid": [
+    "not available"
+   ]
+  },
+  {
+   "name": "azerbaijan_trend",
+   "question": "Azerbaijan's science score change from 2018 to 2025 - did it improve significantly?",
+   "route": "data",
+   "answer_forbid": [
+    "did not take part",
+    "did not participate"
+   ]
+  },
+  {
+   "name": "ukraine_trend",
+   "question": "How did Ukraine's reading score change from 2018 to 2025?",
+   "route": "data",
+   "answer_forbid": [
+    "did not take part",
+    "did not participate"
+   ]
+  },
+  {
+   "name": "french_gender_gap",
+   "question": "Quel est l'écart entre filles et garçons en lecture en France en 2022 ? Est-il statistiquement significatif ?",
+   "route": "data",
+   "template": "gap",
+   "answer_contains_any": [
+    "filles",
+    "garçons",
+    "femmes",
+    "hommes",
+    "Female",
+    "Male"
+   ],
+   "answer_forbid": [
+    "ST004D01T: ",
+    "2 - 1"
+   ]
+  },
+  {
+   "name": "total_2025",
+   "question": "how many students were tested in total in 2025",
+   "route": "conversational",
+   "answer_numbers": [
+    "755,721"
+   ]
+  },
+  {
+   "name": "line_graph_philippines",
+   "question": "can you do a line graph for Philippines",
+   "route_any": [
+    "data",
+    "conversational"
+   ],
+   "answer_forbid": [
+    "Binder",
+    "failed"
+   ]
+  },
+  {
+   "name": "reading_factors_regression",
+   "question": "What factors were most strongly associated with better reading performance?",
+   "route_any": [
+    "data",
+    "clarify"
+   ],
+   "answer_forbid": [
+    "failed",
+    "too few"
+   ]
+  }
+ ]
 }

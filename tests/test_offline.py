@@ -186,7 +186,7 @@ def test_estimator_handles_empty_input_without_crashing():
     from explorer.estimator import ALL_WEIGHTS, combine, replicates_from_frame
     empty = pd.DataFrame(columns=["CNT", "m_1"] + ALL_WEIGHTS)
     reps = replicates_from_frame(empty, ["m_1"], by=("CNT",))
-    assert reps.empty and list(reps.columns) == ["CNT", "pv", "rep", "value", "n"]
+    assert reps.empty and list(reps.columns)[:4] == ["CNT", "pv", "rep", "value"]
     out = combine(reps, by=("CNT",))
     assert out.empty and list(out.columns)[:4] == ["CNT", "estimate", "se", "n_pv"]
 
@@ -656,11 +656,13 @@ def test_false_not_collected_claims_are_corrected_from_coverage(monkeypatch):
             "substitution_note": "For 2025 the MALE flag is used as ST004D01T was not collected for the US in 2025."}
     agent._verify_substitution_claims(plan)
     assert "ST004D01T" in plan["_claim_corrected"] and "standard convention" in plan["substitution_note"]
-    # Canada really lacks ST004D01T in 2025: the note stands
+    # Canada really lacks ST004D01T in the 2025 public file — but it was
+    # withheld, not "not collected": the wording is replaced either way
     plan2 = {"template": "gap", "where": "CNT = 'CAN'", "cycles": ["2025"],
              "substitution_note": "MALE is used as ST004D01T was not collected for Canada in 2025."}
     agent._verify_substitution_claims(plan2)
-    assert "_claim_corrected" not in plan2 and "not collected" in plan2["substitution_note"]
+    assert plan2["_claim_corrected"] == ["ST004D01T"] and "not released" in plan2["substitution_note"]
+    assert "not collected" not in plan2["substitution_note"]
 
 
 

@@ -172,7 +172,8 @@ def fact_sentences(table: pd.DataFrame, plan: dict, provenance: dict,
             if single_cycle:
                 sentence += f", PISA {single_cycle}"
             sentence += f": {pos}{val}"
-            if contrastive and not pd.isna(r.get("estimate")):
+            is_intercept = str(r.get("term", "")).startswith("(intercept)")
+            if contrastive and not pd.isna(r.get("estimate")) and not is_intercept:
                 verdict = _sig(r.get("estimate"), r.get("se"))
                 if verdict:
                     sentence += f", {verdict}"
@@ -181,46 +182,51 @@ def fact_sentences(table: pd.DataFrame, plan: dict, provenance: dict,
     # pairwise differences between the economies the question names, and
     # between each of them and any benchmark-average row — the only way a
     # "significantly higher than" claim can be checked
-    if (not multi_cycle and not contrastive and "CNT" in t.columns
-            and "estimate" in t.columns and "measure" not in t.columns):
-        all_codes = [str(c) for c in t["CNT"]]
-        avgs = [c for c in all_codes if c.endswith(" avg")]
-        codes = [c for c in focus_codes if c in set(all_codes)]
-        if len(t) - len(avgs) <= 4 and not codes:
-            codes = [c for c in all_codes if not c.endswith(" avg")]
-        codes = codes[:4]
-        sub = t.set_index(t["CNT"].astype(str))
+    if not multi_cycle and not contrastive and "CNT" in t.columns and "estimate" in t.columns:
         members = plan.get("_benchmark_members") or {}
         cycle_key = single_cycle or (next(iter(members)) if members else "")
         member_sets = members.get(cycle_key, {}) if isinstance(members, dict) else {}
+        # per measure when several are stacked ("math, reading and science")
+        groups = t.groupby("measure", sort=False) if "measure" in t.columns else [(None, t)]
+        for mlabel, tm in groups:
+            all_codes = [str(c) for c in tm["CNT"]]
+            avgs = [c for c in all_codes if c.endswith(" avg")]
+            codes = [c for c in focus_codes if c in set(all_codes)]
+            ranked_top = [c for c in all_codes if not c.endswith(" avg")][:3] if ranked else []
+            if len(tm) - len(avgs) <= 4 and not codes:
+                codes = [c for c in all_codes if not c.endswith(" avg")]
+            codes = list(dict.fromkeys(codes[:4] + (ranked_top if avgs else [])))
+            sub = tm.set_index(tm["CNT"].astype(str))
+            tag = f" ({mlabel})" if mlabel else ""
 
-        def pair(a, b):
-            ea, eb = sub.loc[a, "estimate"], sub.loc[b, "estimate"]
-            sa, sb = sub.loc[a, "se"], sub.loc[b, "se"]
-            if any(pd.isna(x) for x in (ea, eb, sa, sb)):
-                return
-            diff = float(ea) - float(eb)
-            if b.endswith(" avg"):
-                n = len(member_sets.get(b, []) or [])
-                if n and a in set(member_sets.get(b, [])):
-                    # a member's own estimate is inside the average:
-                    # var(a - avg) = SE_a^2 (1 - 2/N) + SE_avg^2
-                    se = float(np.sqrt(float(sa) ** 2 * (1 - 2 / n) + float(sb) ** 2))
-                    how = f"the economy's share of the {n}-member average accounted for"
+            def pair(a, b):
+                ea, eb = sub.loc[a, "estimate"], sub.loc[b, "estimate"]
+                sa, sb = sub.loc[a, "se"], sub.loc[b, "se"]
+                if any(pd.isna(x) for x in (ea, eb, sa, sb)):
+                    return
+                diff = float(ea) - float(eb)
+                if b.endswith(" avg"):
+                    n = len(member_sets.get(b, []) or [])
+                    if n and a in set(member_sets.get(b, [])):
+                        # a member's own estimate is inside the average:
+                        # var(a - avg) = SE_a^2 (1 - 2/N) + SE_avg^2
+                        se = float(np.sqrt(float(sa) ** 2 * (1 - 2 / n) + float(sb) ** 2))
+                        how = f"the economy's share of the {n}-member average accounted for"
+                    else:
+                        se = float(np.sqrt(float(sa) ** 2 + float(sb) ** 2))
+                        how = "independent samples"
                 else:
                     se = float(np.sqrt(float(sa) ** 2 + float(sb) ** 2))
                     how = "independent samples"
-            else:
-                se = float(np.sqrt(float(sa) ** 2 + float(sb) ** 2))
-                how = "independent samples"
-            out.append(f"{_name(a, names)} minus {_name(b, names)}: {fmt(diff)} "
-                       f"(SE {fmt(se)}, {how}), {_sig(diff, se)}.")
+                out.append(f"{_name(a, names)} minus {_name(b, names)}{tag}: {fmt(diff)} "
+                           f"(SE {fmt(se)}, {how}), {_sig(diff, se)}.")
 
-        for i, a in enumerate(codes):
-            for b in codes[i + 1:]:
-                pair(a, b)
-            for b in avgs:
-                pair(a, b)
+            for i, a in enumerate(codes):
+                for b in codes[i + 1:]:
+                    if a in focus_codes or b in focus_codes or len(tm) - len(avgs) <= 4:
+                        pair(a, b)
+                for b in avgs:
+                    pair(a, b)
     return out
 
 
@@ -296,7 +302,10 @@ def check_prose(text: str, table: pd.DataFrame | None, provenance: dict | None,
     sample_text = " ".join(str(s.get("students") or "") + " " + str(s.get("weighted_students") or "")
                            for s in (prov.get("sample") or []))
 
-    # 1. numbers
+    # 1. numbers — non-English drafts write thousands as "6 770" or "6.770"
+    if language.lower() not in ("english", "en"):
+        text = re.sub(r"(?<!\d)(\d{1,3})[   ](\d{3})(?!\d)", r"\1\2", text or "")
+        text = re.sub(r"(?<![\d.,])(\d{1,3})\.(\d{3})(?![\d.])", r"\1\2", text)
     pool = _table_numbers(table)
     pool += [n for _, n, _ in _numbers_in(notes_text + " " + sample_text + " " + question)]
     pool += [n for _, n, _ in _numbers_in(" ".join(str(v) for k, v in plan.items()

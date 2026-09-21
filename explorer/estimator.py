@@ -28,6 +28,29 @@ N_PV = 10
 FULL_WEIGHT = "W_FSTUWT"
 REPLICATE_WEIGHTS = [f"W_FSTURWT{i}" for i in range(1, N_REPLICATES + 1)]
 ALL_WEIGHTS = [FULL_WEIGHT] + REPLICATE_WEIGHTS  # index 0 = full sample
+SCHOOL_ID = "CNTSCHID"
+# Per-group descriptors that travel with every replicate frame and survive
+# combine(): n = students with an observed value, n_schools = distinct
+# schools among them, wcov = share of the group's weighted population with an
+# observed value (1.0 when nothing is missing).
+GROUP_STATS = ["n", "n_schools", "wcov"]
+
+
+def group_stats(g: pd.DataFrame, mask: np.ndarray) -> dict:
+    """n, n_schools and weighted coverage of the observed rows of a group."""
+    w = g[FULL_WEIGHT].to_numpy(dtype=float)
+    total = float(w.sum())
+    out = {"n": int(mask.sum()),
+           "wcov": float(w[mask].sum() / total) if total > 0 else 1.0}
+    out["n_schools"] = -1              # unknown: the school floor is skipped
+    if SCHOOL_ID in g.columns and mask.any():
+        ids = g[SCHOOL_ID].to_numpy()[mask]
+        known = ids[~pd.isna(ids)]
+        # a file with no school identifier at all for this group (five 2025
+        # economies) says nothing about how many schools were sampled
+        if known.size:
+            out["n_schools"] = int(pd.unique(known).size)
+    return out
 
 
 def _pv_list(measure: str) -> list[str]:
@@ -72,10 +95,16 @@ def fetch_frame(
         + [f"({e}) AS {name}" for name, e in (extra or {}).items()]
         + ALL_WEIGHTS
     )
-    sql = f"SELECT {', '.join(select)} FROM {table}"
-    if where:
-        sql += f" WHERE {where}"
-    return con.sql(sql).df()
+    tail = f" FROM {table}" + (f" WHERE {where}" if where else "")
+    # The school identifier rides along (never returned to users) so the
+    # OECD's 5-school reporting floor can be applied; tables without it
+    # (some cognitive/timing files) simply skip that floor.
+    if SCHOOL_ID not in by:
+        try:
+            return con.sql(f"SELECT {', '.join(select + [SCHOOL_ID])}{tail}").df()
+        except Exception:  # noqa: BLE001 — no school id in this table
+            pass
+    return con.sql(f"SELECT {', '.join(select)}{tail}").df()
 
 
 def replicates_from_frame(
@@ -86,17 +115,18 @@ def replicates_from_frame(
     n_pv, n_w = len(measure_cols), len(ALL_WEIGHTS)
     groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
 
-    key_rows, blocks, counts = [], [], []
+    key_rows, blocks, stats = [], [], []
     for key, g in groups:
         if not isinstance(key, tuple):
             key = (key,)
         weights = g[ALL_WEIGHTS].to_numpy(dtype=float)      # (n, 81)
         estimates = np.empty((n_pv, n_w))
-        n_obs = 0
+        first_mask = None
         for i, col in enumerate(measure_cols):
             m = g[col].to_numpy(dtype=float)                # (n,)
             mask = ~np.isnan(m)
-            n_obs = max(n_obs, int(mask.sum()))
+            if first_mask is None:
+                first_mask = mask
             wm = weights[mask]
             # A group with no observed values yields NaN by design (e.g. a
             # question not administered there) — suppress the 0/0 warnings.
@@ -104,20 +134,20 @@ def replicates_from_frame(
                 estimates[i] = (wm.T @ m[mask]) / wm.sum(axis=0)
         key_rows.append(key)
         blocks.append(estimates)
-        counts.append(n_obs)
+        stats.append(group_stats(g, first_mask))
 
     pv_idx = np.repeat(np.arange(1, n_pv + 1), n_w)
     rep_idx = np.tile(np.arange(n_w), n_pv)
     frames = []
-    for key, est, n_obs in zip(key_rows, blocks, counts):
-        frame = pd.DataFrame({"pv": pv_idx, "rep": rep_idx, "value": est.ravel(), "n": n_obs})
+    for key, est, st in zip(key_rows, blocks, stats):
+        frame = pd.DataFrame({"pv": pv_idx, "rep": rep_idx, "value": est.ravel(), **st})
         for col, val in zip(by, key):
             frame[col] = val
         frames.append(frame)
     if not frames:      # no rows matched (e.g. an economy absent from this cycle)
-        return pd.DataFrame(columns=list(by) + ["pv", "rep", "value", "n"])
+        return pd.DataFrame(columns=list(by) + ["pv", "rep", "value"] + GROUP_STATS)
     out = pd.concat(frames, ignore_index=True)
-    return out[list(by) + ["pv", "rep", "value", "n"]]
+    return out[list(by) + ["pv", "rep", "value"] + GROUP_STATS]
 
 
 def combine(replicates: pd.DataFrame, by: tuple[str, ...] = ()) -> pd.DataFrame:
@@ -126,9 +156,10 @@ def combine(replicates: pd.DataFrame, by: tuple[str, ...] = ()) -> pd.DataFrame:
     observed value) when the replicate frame carries it — the basis of the
     OECD's minimum-size reporting rule."""
     group_cols = list(by) if by else []
-    has_n = "n" in replicates.columns
+    stat_cols = [c for c in GROUP_STATS if c in replicates.columns]
+    has_n = bool(stat_cols)
     if replicates.empty:
-        return pd.DataFrame(columns=group_cols + ["estimate", "se", "n_pv"] + (["n"] if has_n else []))
+        return pd.DataFrame(columns=group_cols + ["estimate", "se", "n_pv"] + stat_cols)
 
     def _one(group: pd.DataFrame) -> pd.Series:
         main = group[group.rep == 0].set_index("pv").value  # T_v per PV
@@ -149,8 +180,8 @@ def combine(replicates: pd.DataFrame, by: tuple[str, ...] = ()) -> pd.DataFrame:
         # never "blank (SE 0.0)"
         se = float(np.sqrt(total_var)) if not np.isnan(estimate) else float("nan")
         out = {"estimate": estimate, "se": se, "n_pv": m}
-        if has_n:
-            out["n"] = int(group["n"].min())
+        for c in stat_cols:                    # the smaller side bounds a rule
+            out[c] = float(group[c].min())
         return pd.Series(out)
 
     if group_cols:
@@ -162,8 +193,9 @@ def combine(replicates: pd.DataFrame, by: tuple[str, ...] = ()) -> pd.DataFrame:
     else:
         out = _one(replicates).to_frame().T
     out["n_pv"] = out["n_pv"].astype(int)
-    if has_n:
-        out["n"] = out["n"].astype(int)
+    for c in ("n", "n_schools"):
+        if c in out.columns:
+            out[c] = out[c].astype(int)
     return out
 
 
@@ -180,10 +212,13 @@ def contrast(
     a = replicates[replicates[group_col] == minuend]
     b = replicates[replicates[group_col] == subtrahend]
     keys = list(by) + ["pv", "rep"]
-    merged = a.merge(b, on=keys, suffixes=("_a", "_b"))
+    # outer: a group that is absent (no private schools sampled) gives a
+    # blank difference for that row instead of dropping the row silently
+    merged = a.merge(b, on=keys, suffixes=("_a", "_b"), how="outer")
     merged["value"] = merged.value_a - merged.value_b
     cols = keys + ["value"]
-    if "n_a" in merged.columns:
-        merged["n"] = merged[["n_a", "n_b"]].min(axis=1)   # the smaller group bounds the rule
-        cols.append("n")
+    for c in GROUP_STATS:
+        if f"{c}_a" in merged.columns:
+            merged[c] = merged[[f"{c}_a", f"{c}_b"]].min(axis=1)   # the smaller group bounds the rule
+            cols.append(c)
     return combine(merged[cols], by=by)

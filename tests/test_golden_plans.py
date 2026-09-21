@@ -8,6 +8,7 @@ local DuckDB; skipped in CI. Re-record after an intentional method change
 with scripts/golden_record.py --update.
 """
 
+import copy
 import json
 import math
 import os
@@ -49,7 +50,9 @@ def run_case(agent, case: dict, tolerance: float) -> list[str]:
     expect = case["expect"]
     problems = []
     try:
-        table, prov = agent.execute(dict(case["plan"]))
+        # deep copy: execute() edits nested plan fields (overrides), and the
+        # case must stay as written
+        table, prov = agent.execute(copy.deepcopy(case["plan"]))
     except CoverageError as e:
         if "error_contains" not in expect:
             return [f"unexpected CoverageError: {e}"]

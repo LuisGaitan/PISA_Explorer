@@ -36,6 +36,38 @@ SOURCE = ("OECD link errors as published in PISA 2025 Results (Volume I) and "
           "PISA 2022 Results (Volume I); values reproduced in the NCES PISA 2025 "
           "Technical Notes, Table 4, and PISA 2022 Technical Notes, Table 3")
 
+# Proficiency-level lower bounds (score points), as in the OECD's public
+# Stata code (PISA 2025 STU_CommonFiles.do): mathematics 1c/1b/1a/2/3/4/5/6,
+# reading 1c/1b/1a/2/3/4/5/6, science 1b/1a/2/3/4/5/6 (no 1c).
+LEVELS: dict[str, list[tuple[str, float]]] = {
+    "MATH": [("1c", 233.17), ("1b", 295.47), ("1a", 357.77), ("2", 420.07), ("3", 482.38),
+             ("4", 544.68), ("5", 606.99), ("6", 669.30)],
+    "READ": [("1c", 189.33), ("1b", 262.04), ("1a", 334.75), ("2", 407.47), ("3", 480.18),
+             ("4", 552.89), ("5", 625.61), ("6", 698.32)],
+    "SCIE": [("1b", 260.54), ("1a", 334.94), ("2", 409.54), ("3", 484.14), ("4", 558.73),
+             ("5", 633.33), ("6", 707.93)],
+}
+
+
+def level_name(domain: str, cutoff: str) -> str | None:
+    """'Level 2' for a lower bound written as in a plan ('420.07')."""
+    try:
+        value = float(cutoff)
+    except ValueError:
+        return None
+    for name, bound in LEVELS.get(domain, []):
+        if abs(bound - value) < 0.005:
+            return f"Level {name}"
+    return None
+
+
+def levels_prompt() -> str:
+    lines = []
+    for dom, names in (("MATH", "mathematics"), ("READ", "reading"), ("SCIE", "science")):
+        lines.append(f"  {names}: " + ", ".join(f"Level {n} >= {b}" for n, b in LEVELS[dom]))
+    return "\n".join(lines)
+
+
 DOMAIN_RE = re.compile(r"\bPV(?:\{pv\}|\d{1,2})(MATH|READ|SCIE)\b")
 DOMAIN_NAMES = {"MATH": "mathematics", "READ": "reading", "SCIE": "science"}
 
