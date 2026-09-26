@@ -34,6 +34,9 @@ pipeline/
                    weighted populations, SEs of mean scores) for all 90 economies
 explorer/
   catalog.py       keyword retrieval over the 29k-variable catalog (search/describe/comparability)
+  topics.py        verified topic -> variables-per-cycle map behind "what variables do I use for X"
+                   (plausible values, weights, ESCS, the social and emotional scales ...); every code
+                   is checked against the catalog by the tests
   estimator.py     PV x Fay-BRR replicate engine (the survey-methodology core)
   analysis.py      templates: weighted_mean, weighted_proportion, gap, trend (any 2-3 cycles),
                    quartile_means, quartile_gap (weighted within-group quartiles),
@@ -271,6 +274,23 @@ per-cycle replacement of plan fields that is always stated in the provenance.
 The standing example is gender: `ST004D01T` (1 = female, 2 = male) in 2018
 and 2022, but in 2025 fourteen economies release only the derived `MALE` flag
 (1 = male, 0 = female/other), so 2025 gender analyses use `MALE`.
+
+## Privacy and data handling
+
+The app answers "how do you track my data?" itself, from this description
+(`Agent._privacy_answer`), never from the model. What is recorded
+(`explorer/events.py`, `explorer/app.py`): every question, the answer, the
+institution name typed at the gate, a random session id (cookie), timing,
+the chart type, screen size, browser type, and any thumbs-up/down with its
+comment — kept in the app's own event log to find and fix bad answers. No
+name, email, account or IP address is asked for or stored by the app.
+What is sent to the language model: the question text, the earlier turns of
+the conversation, the codebook labels retrieved for it and the computed
+aggregate results (economy means, shares, standard errors) go to Google's
+Gemini API so the model can interpret the question and phrase the answer.
+The PISA databases never leave the server; no student- or school-level
+record is sent to any model or shown to anyone, and the institution name is
+not sent to the model.
 
 ## Deployment
 

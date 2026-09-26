@@ -48,6 +48,12 @@ def _prepare(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["_name_lower"] = df.variable.str.lower()
     df["_label_lower"] = df.label.str.lower()
+    # the codebook says "Plausible Value 1 in Reading", a student says "reading
+    # score": the words students use are added to the searchable label
+    pv = df.variable.str.match(r"^PV\d+")
+    df.loc[pv, "_label_lower"] = df.loc[pv, "_label_lower"] + " score plausible value pv"
+    wt = df.variable.str.match(r"^W_FST")
+    df.loc[wt, "_label_lower"] = df.loc[wt, "_label_lower"] + " weight"
     df["_label_compact"] = df._label_lower.str.replace(r"[^a-z0-9]", "", regex=True)
     return df
 

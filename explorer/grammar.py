@@ -717,6 +717,17 @@ by side; the app decides per index whether the change is comparable.
 A stratum, region, city or school network inside an economy (Scotland,
 Dubai, Nazarbayev Intellectual Schools, DKI Jakarta): plan the WHOLE economy
 (economies [code]); the app adds the labelled stratum row itself.
+A FORECAST or projection ("expected score in 2035", "the next ten years")
+=> the observed trend across every loaded cycle (statistic "mean", cycles
+2018, 2022, 2025) with limitation_note that PISA cannot forecast — never
+clarify. A year with no PISA cycle (2019, 2020, 2021, 2023, 2024) => the
+nearest loaded cycles, named in limitation_note. An age other than 15 =>
+the 15-year-old sample, said in limitation_note — PISA assesses
+15-year-olds only. An AMBIGUOUS breakdown ("where are the weakest
+students", "which students do worst") => choose ONE reading (ESCS quarters
+by default: quartile_means) and say in limitation_note which reading was
+taken and what else can be asked for (gender, school type, region or
+stratum, immigrant background) — never a silent choice.
 """
 
 

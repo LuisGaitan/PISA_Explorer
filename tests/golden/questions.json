@@ -409,14 +409,18 @@
     {
       "name": "pisa_2012",
       "question": "What was the OECD average math score in PISA 2012?",
-      "route": "conversational",
       "answer_contains_any": [
         "2018",
         "not loaded",
-        "only"
+        "only",
+        "not available"
       ],
       "answer_forbid": [
         "494"
+      ],
+      "route_any": [
+        "conversational",
+        "data"
       ]
     },
     {
@@ -693,6 +697,142 @@
       "answer_forbid": [
         "failed",
         "not in stu_qqq"
+      ]
+    },
+    {
+      "name": "privacy_tracking",
+      "question": "How do you track my data?",
+      "route": "conversational",
+      "answer_contains": [
+        "Gemini",
+        "institution",
+        "never leave the server"
+      ],
+      "answer_forbid": [
+        "does not track",
+        "runs entirely in your browser",
+        "runs locally",
+        "no information about your questions"
+      ]
+    },
+    {
+      "name": "attribution_oecd",
+      "question": "Does this tool give credits to OECD?",
+      "route": "conversational",
+      "answer_contains": [
+        "Organisation for Economic Co-operation and Development (OECD), Paris",
+        "not an OECD product"
+      ]
+    },
+    {
+      "name": "which_model",
+      "question": "which AI model do you use?",
+      "route": "conversational",
+      "answer_contains": [
+        "Gemini",
+        "never sees a student record"
+      ]
+    },
+    {
+      "name": "variables_math_sel_2022",
+      "question": "What variables do I use for math scores and social emotional learning in 2022",
+      "route": "explore",
+      "answer_contains": [
+        "PV1MATH",
+        "PERSEVAGR",
+        "GROSAGR",
+        "Rubin"
+      ],
+      "answer_forbid": [
+        "MATHEXC",
+        "MATHEASE"
+      ]
+    },
+    {
+      "name": "variable_reading_score_2025",
+      "question": "What variable holds the reading score in 2025?",
+      "route": "explore",
+      "answer_contains": [
+        "PV1READ"
+      ],
+      "answer_forbid": [
+        "PV4SEDE",
+        "PV6MATH"
+      ]
+    },
+    {
+      "name": "variables_weights",
+      "question": "which variables should I use for student weights and replicate weights",
+      "route": "explore",
+      "answer_contains": [
+        "W_FSTUWT",
+        "W_FSTURWT1",
+        "SENWT"
+      ]
+    },
+    {
+      "name": "bare_pisa_2018",
+      "question": "pisa 2018",
+      "route": "conversational",
+      "answer_contains": [
+        "617,772",
+        "major domain: reading",
+        "stu_qqq_2018"
+      ],
+      "answer_forbid": [
+        "PISADIFF",
+        "GCTRAIN"
+      ]
+    },
+    {
+      "name": "forecast_mexico_reading",
+      "question": "given the available data, show me the expected reading performance score for Mexico for the next 10 years",
+      "route": "data",
+      "template": "weighted_mean",
+      "variables_any": [
+        "PV1READ"
+      ],
+      "answer_forbid": [
+        "cannot predict",
+        "I cannot"
+      ],
+      "notes_contain": [
+        "forecast"
+      ]
+    },
+    {
+      "name": "france_2019_16_year_olds",
+      "question": "give me reading scores for 16 year olds in France in 2019",
+      "route": "data",
+      "variables_any": [
+        "PV1READ"
+      ],
+      "answer_numbers": [
+        "492.6",
+        "473.9"
+      ],
+      "answer_forbid": [
+        "Would you like",
+        "not available"
+      ],
+      "notes_contain": [
+        "no PISA 2019",
+        "15-year-olds"
+      ]
+    },
+    {
+      "name": "graph_2025_default",
+      "question": "give me a graph of Pisa data from 2025",
+      "route": "data",
+      "template": "weighted_mean",
+      "variables_any": [
+        "PV1SCIE"
+      ],
+      "answer_forbid": [
+        "Charts render automatically whenever"
+      ],
+      "answer_numbers": [
+        "597.0"
       ]
     }
   ]

@@ -50,6 +50,7 @@ PLANNER_MODE = os.environ.get("PISA_PLANNER", "grammar").strip().lower()
 from .db import connect
 from .llm import generate, generate_json
 from . import link_errors
+from . import topics
 
 MAX_CARDS = 40
 MAX_RESULT_ROWS = 500
@@ -380,6 +381,18 @@ available only in another cycle (GROSAGR 2022) — never clarify.
 weighted_mean with measures ["PV{{pv}}MATH", "PV{{pv}}READ", "PV{{pv}}SCIE"]
 (all three domains, science listed last as the 2025 major domain), not
 science alone.
+A FORECAST or projection ("expected score in 2035", "the next ten years",
+"where will X be") => the observed trend across every loaded cycle
+(weighted_mean, cycles 2018, 2022 and 2025) with limitation_note saying that
+PISA cannot forecast — never clarify. A year with no PISA cycle (2019, 2020,
+2021, 2023, 2024 …) => the nearest loaded cycles, named in limitation_note.
+An age other than 15 ("16-year-olds") => the 15-year-old sample, said in
+limitation_note — PISA assesses 15-year-olds only. An AMBIGUOUS breakdown
+("where are the weakest students", "which students do worst", "who is
+behind") => choose ONE reading (socio-economic quartiles by default) and say
+in limitation_note which reading was taken and what else can be asked for
+(gender, school type, region or sampling stratum, immigrant background) —
+never a silent choice.
 A SHARE of students defined by a condition ("repeated a grade only once",
 "below Level 2", "answered yes") => template weighted_mean with a measure
 of the form CASE WHEN <condition> THEN 100.0 WHEN <valid but not the
@@ -748,6 +761,22 @@ class Agent:
             "10 plausible values, 80 Fay-BRR replicate weights). Answer "
             "questions about the tool's author, purpose or affiliation only "
             "from this line.\n"
+            "- DATA HANDLING (answer privacy questions ONLY from this, never from "
+            "assumptions): the app RECORDS every question, its answer, the "
+            "institution name typed at the gate, a random session id, timing, the "
+            "chart type, screen size, browser type and any thumbs-up/down with its "
+            "comment — kept in the app's own event log for one purpose, finding and "
+            "fixing bad answers; no name, email, account or IP address is asked for "
+            "or stored by the app; nothing is sold or shared. The question text, the "
+            "earlier turns of the conversation, the codebook labels retrieved and the "
+            "computed AGGREGATE results (economy means, shares, standard errors) are "
+            "SENT to Google's Gemini API to interpret the question and phrase the "
+            "answer; the PISA databases never leave the server and no student- or "
+            "school-level record is sent to any model. NEVER say the app runs in the "
+            "browser, does not store questions, or sends nothing to a server.\n"
+            f"- MODEL: Google Gemini ({llm.ROLE_MODELS.get('planner')}) plans the analysis "
+            "and phrases the result; every number is computed by the app's own code "
+            "from the databases with the official method, never by the model.\n"
             "When a direct_answer concerns what data exist or when they were "
             "released, use these facts verbatim; if unsure, say the app covers "
             "PISA 2018, 2022 and 2025 and suggest asking a data question.\n\n"
@@ -3937,6 +3966,8 @@ class Agent:
                 r"\b(not|cannot|can'?t|no|unable|only|left out|beyond|does not|instead of|"
                 r"without|excluded|omitted|neither)\b", plan["limitation_note"], re.I) else "NOTE")
             notes.append(f"{prefix}: {plan['limitation_note']}")
+        for app_note in plan.get("_app_notes") or []:
+            notes.insert(0, f"NOTE: {app_note}")
         if plan.get("_grammar_notes"):
             notes.append("A stratum filter in the plan was replaced by the app's own stratum "
                          "handling (a named region, city or school network is shown as a "
@@ -4006,15 +4037,40 @@ class Agent:
     EXPLORE_MIN_SCORE = 3.5     # a whole-word label match on a synonym term (8 x 0.5)
                                 # passes; entity-only and substring noise does not
 
+    @staticmethod
+    def _family_of(var: str) -> str | None:
+        """PV6MATH -> 'PV1-10MATH'; W_FSTURWT23 -> 'W_FSTURWT1-80'; else None."""
+        m = re.fullmatch(r"PV(?:10|[1-9])([A-Z_]+)", var)
+        if m:
+            return f"PV1-10{m.group(1)}"
+        if re.fullmatch(r"W_FSTURWT(?:[1-9]|[1-7][0-9]|80)", var):
+            return "W_FSTURWT1-80"
+        return None
+
     def _explore(self, question: str, terms: list[str]) -> AgentResult:
-        """Answer 'what data is there about X' from the catalog itself: one
-        row per matching variable with its label, the tables (cycles and
-        instruments) it exists in, and its response codes. Deterministic —
-        no plan, no statistic, no LLM summary that could invent variables."""
+        """Answer 'what variables do I use for X' in two layers: first the
+        verified topic map (explorer/topics.py — the plausible values,
+        weights, ESCS, the social and emotional scales … per cycle, with the
+        rule for using them), then keyword hits from the catalog as
+        'related'. Deterministic — no plan, no statistic, no LLM summary that
+        could invent variables. Families (PV1…PV10, the 80 replicate
+        weights) are one row each."""
+        years = sorted(set(self.YEAR_RE.findall(question)))
+        loaded = tuple(c for c in CYCLES if c in (getattr(self, 'coverage', None) or {})) or CYCLES
+        cycles = tuple(years) if years else loaded
+        matched = topics.matching(question)
+        if matched:
+            self._fire("explore:topics")
+
+        def label_of(code, cycle):
+            d = catalog.describe(code, cycle=cycle)
+            return None if d.empty else str(d.iloc[0].label)
+
+        std_rows = topics.rows(matched, cycles, label_of)
+        std_keys = {r["_code"] for r in std_rows}
         hits = self._retrieve(terms, per_term=12)
         if not hits.empty:      # weak, scattered token matches are not "data on X"
             hits = hits[hits.score >= self.EXPLORE_MIN_SCORE]
-        years = sorted(set(self.YEAR_RE.findall(question)))
         if years and not hits.empty:
             hits = hits[hits.cycle.isin(years)]
         # "What data is there on X" means questionnaire content (items and
@@ -4023,8 +4079,13 @@ class Agent:
         if not hits.empty and not self.ITEM_WORDS.search(question):
             questionnaire = hits.table_name.str.split("_").str[1].eq("qqq")
             hits = hits[questionnaire] if questionnaire.any() else hits
-        rows = []
+        rows, seen = [], set()
         for var, group in hits.groupby("variable", sort=False):
+            family = self._family_of(var)
+            key = family or var
+            if key in std_keys or key in seen:
+                continue
+            seen.add(key)
             group = group.sort_values("table_name")
             latest = group.sort_values("cycle").iloc[-1]
             desc = catalog.describe(var, cycle=latest.cycle)
@@ -4035,48 +4096,86 @@ class Agent:
                 shown = [f"{k}={v}" for k, v in list(labels.items())[:4]]
                 values = ("; ".join(shown) + (" …" if len(labels) > 4 else "")
                           if labels else "continuous index / numeric")
-            rows.append({"variable": var, "label": latest.label,
-                         "tables": ", ".join(group.table_name),
-                         "cycles": ", ".join(sorted(set(group.cycle))),
-                         "values": values, "score": float(group.score.iloc[0])})
-        table = (pd.DataFrame(rows).sort_values(["score", "variable"],
-                                                ascending=[False, True])
-                 .head(self.MAX_EXPLORE_ROWS).drop(columns="score")
-                 .reset_index(drop=True)) if rows else pd.DataFrame(
-            columns=["variable", "label", "tables", "cycles", "values"])
-        scope = f"PISA {', '.join(years)}" if years else "PISA 2018, 2022 and 2025"
+            label = str(latest.label)
+            if family:
+                n = len(topics.expand(family))
+                label = re.sub(r"Plausible Value \d+", f"Plausible values 1-{n}", label)
+                label = re.sub(r"WEIGHTS? \d+$", f"weights 1-{n}", label, flags=re.I)
+                values = f"{n} variables"
+            rows.append({"variable": topics.display(family) if family else var, "label": label,
+                         "topic": "", "cycles": ", ".join(sorted(set(group.cycle))),
+                         "tables": ", ".join(group.table_name), "values": values,
+                         "role": "related", "score": float(group.score.iloc[0])})
+        related = (pd.DataFrame(rows).sort_values(["score", "variable"], ascending=[False, True])
+                   .drop(columns="score")) if rows else pd.DataFrame()
+        columns = ["variable", "label", "topic", "cycles", "tables", "values", "role"]
+        standard = pd.DataFrame([{"variable": r["variable"], "label": r["label"],
+                                  "topic": r["construct"], "cycles": r["cycles"],
+                                  "tables": r["tables"], "values": r["values"], "role": "standard"}
+                                 for r in std_rows]) if std_rows else pd.DataFrame()
+        room = max(self.MAX_EXPLORE_ROWS - len(standard), 10)
+        parts = [f for f in (standard, related.head(room) if not related.empty else related) if not f.empty]
+        table = (pd.concat(parts, ignore_index=True)[columns] if parts
+                 else pd.DataFrame(columns=columns))
+        scope = f"PISA {', '.join(cycles)}" if years else "PISA 2018, 2022 and 2025"
         topic = ", ".join(t for t in terms if not self.YEAR_RE.fullmatch(t)) or "that topic"
-        if table.empty:
-            answer = (f"No catalog variables matched “{topic}” in {scope}. The "
+        example_cycle = cycles[-1]
+        if matched:
+            lines = topics.answer_lines(matched, cycles)
+            first = std_rows[0] if std_rows else None
+            if first and first["_code"].startswith("PV1-10"):
+                example = f"mean {first['construct'].replace(' score', '')} score by country in {example_cycle}"
+            elif first:
+                example = f"mean {topics.expand(first['_code'])[0]} by country in {example_cycle}"
+            else:
+                example = f"mean science score by country in {example_cycle}"
+            answer = (f"Variables to use for {scope} — " + " ".join(lines)
+                      + (f" The table adds {len(related)} related catalog variables "
+                         f"(role \u201crelated\u201d) with their codebook labels, tables and response codes."
+                         if not related.empty else
+                         " The table lists each with its codebook label and the tables it is in.")
+                      + f" To analyze one, ask for a statistic — for example \u201c{example}\u201d.")
+        elif table.empty:
+            answer = (f"No catalog variables matched \u201c{topic}\u201d in {scope}. The "
                       "public-use files hold questionnaire responses, derived "
                       "indices and test results — not the published report tables "
                       "(coverage or exclusion rates, OECD averages, trend tables). "
                       "Try other words for the construct (PISA labels use the "
-                      "OECD's wording, e.g. “sense of belonging”, “bullying”, "
-                      "“life satisfaction”).")
+                      "OECD's wording, e.g. \u201csense of belonging\u201d, \u201cbullying\u201d, "
+                      "\u201clife satisfaction\u201d).")
         else:
             top = "; ".join(f"{r.variable} ({r.label[:60]}{'…' if len(r.label) > 60 else ''})"
                             for r in table.head(5).itertuples())
-            answer = (f"{len(table)} catalog variables relate to “{topic}” in {scope}; "
+            first_var = table.variable.iloc[0].split(" ")[0]
+            answer = (f"{len(table)} catalog variables relate to \u201c{topic}\u201d in {scope}; "
                       f"the closest matches: {top}. The table lists each one with "
                       "its codebook label, the tables it exists in, and its response "
                       "codes. To analyze one, ask for a statistic — for example "
-                      f"“mean {table.variable.iloc[0]} by country in "
-                      f"{years[-1] if years else '2025'}” or “what share of students "
-                      "in Brazil chose each answer?”.")
+                      f"\u201cmean {first_var} by country in {example_cycle}\u201d or "
+                      "\u201cwhat share of students in Brazil chose each answer?\u201d.")
         plan = {"template": "explore", "cycles": years or None,
-                "search_terms": terms,
-                "explanation": f"Catalog search for variables about {topic}"}
+                "search_terms": terms, "topics": [t.construct for t in matched],
+                "explanation": (f"Verified variable map for {', '.join(t.construct for t in matched)}"
+                                + (f"; catalog search for {topic}" if not related.empty else "")
+                                if matched else f"Catalog search for variables about {topic}")}
+        variables = [{"variable": topics.expand(r["_code"])[0], "table": r["tables"].split(", ")[-1],
+                      "label": r["label"]} for r in std_rows[:15]]
+        variables += [{"variable": r.variable.split(" ")[0], "table": r.tables.split(", ")[-1],
+                       "label": r.label} for r in related.head(15 - len(variables)).itertuples()] \
+            if not related.empty and len(variables) < 15 else []
         provenance = {
             "source": SOURCE_LINE,
             "tables": sorted({t for r in table.itertuples()
                               for t in r.tables.split(", ")}) if not table.empty else [],
-            "variables": [{"variable": r.variable, "table": r.tables.split(", ")[-1],
-                           "label": r.label} for r in table.head(15).itertuples()],
+            "variables": variables,
             "filter": f"search terms: {', '.join(terms)}"
                       + (f"; cycles: {', '.join(years)}" if years else ""),
-            "method": "Keyword search over the OECD codebooks (variable names and "
-                      "labels). No statistic was computed.",
+            "method": ("Verified topic map (explorer/topics.py: every listed variable is "
+                       "checked against the codebooks per cycle) followed by keyword search "
+                       "over the OECD codebooks (variable names and labels). No statistic "
+                       "was computed." if matched else
+                       "Keyword search over the OECD codebooks (variable names and "
+                       "labels). No statistic was computed."),
             "sample": [], "sql": None, "notes": [], "build": stamp(),
         }
         return AgentResult(question, answer, plan=plan, table=table,
@@ -4221,6 +4320,66 @@ class Agent:
     # the router LLM cannot be trusted to describe the app's own abilities
     # (it reverts to "I am a text-based AI"), so the app answers this itself.
     VIZ_WORDS = re.compile(r"\b(visuali[sz]|chart|graph|plot|diagram|draw)", re.IGNORECASE)
+    VIZ_DEFAULT_NOTE = ("No comparison was specified, so this chart ranks every economy in the "
+                        "cycle's major domain. Charts render for any comparison: across "
+                        "economies, groups (gender, immigrant background, school type …) or "
+                        "cycles (2018, 2022, 2025) — ask for the one you want.")
+    VARIABLE_ASK_WORDS = re.compile(
+        r"\b(which|what) (variables?|columns?|fields?|indices|indexes|index|codes?|measures?|scales?) "
+        r"(do|should|can|could|would|to|for|is|are|hold|holds|contain|contains|measure|measures|"
+        r"capture|represent|exist|in|of|on|about)\b|\bvariables? (do|should|can|could|would) (i|we|one) use\b|"
+        r"\bvariables? to use\b|\bvariable (holds|contains|for|name|names|code|codes)\b|"
+        r"\bwhat (is|are) the (variables?|columns?|codes?)\b|\bvariable names?\b|"
+        r"\bwhich (variables?|columns?|indices)\b|\bname of the variables?\b|"
+        r"\b(qué|cuáles|cuál) variables?\b", re.IGNORECASE)
+    FORECAST_WORDS = re.compile(
+        r"\b(forecast\w*|predict(s|ed|ion|ions|ing)?\b|projections?|projected|project(ed)? (to|for|into|forward)|extrapolat\w*|"
+        r"trajectory|expected .{0,40}\b(next|future|coming|20[3-9]\d|202[7-9])|next (\d+|two|three|five|ten) "
+        r"years|in (the )?(near |distant )?future|by 20(2[7-9]|[3-9]\d)|will (\w+ ){0,3}(be|score|perform|reach|"
+        r"look|have)\b|(where|what) (will|would) .{0,30}\b(be|score)\b)", re.IGNORECASE)
+    OFF_YEAR_RE = re.compile(r"\b(200[0-9]|201[0-9]|202[0-9]|203[0-9])\b")
+    AGE_WORDS = re.compile(r"\b(1[0-46-9]|[2-9]\d)[- ]?year[- ]?olds?\b|\b(aged?|age of) (1[0-46-9]|[2-9]\d)\b",
+                           re.IGNORECASE)
+    FORECAST_NOTE = ("PISA is a repeated cross-sectional survey with no forecasting model, and the "
+                     "OECD publishes no projections of PISA scores: shown is the observed trend "
+                     "across the cycles loaded here, not a forecast.")
+
+    def _nearest_answer(self, q_en: str) -> tuple[list[str], list[str]]:
+        """Notes (for the answer) and hints (for the planner) when the
+        question asks for something PISA does not have but the nearest real
+        thing exists: a forecast (the observed trend), a year with no cycle
+        (the nearest cycles), an age other than 15 (the 15-year-old sample)."""
+        notes, hints = [], []
+        years = sorted(set(self.OFF_YEAR_RE.findall(q_en)))
+        off = [y for y in years if y not in CYCLES]
+        if self.FORECAST_WORDS.search(q_en) or any(int(y) > 2025 for y in off):
+            notes.append(self.FORECAST_NOTE)
+            hints.append("(PISA cannot forecast: plan the observed trend across every loaded cycle "
+                         "2018, 2022 and 2025 for the measure asked, for the economies named, "
+                         "action=analyze)")
+            off = [y for y in off if int(y) <= 2025]
+        for y in off:
+            yi = int(y)
+            if yi < 2018:
+                near = ["2018"]
+                why = (f"PISA {y} exists but is not loaded here (this app holds 2018, 2022 and 2025)"
+                       if yi in (2000, 2003, 2006, 2009, 2012, 2015) else
+                       f"there was no PISA {y} assessment (PISA runs every three to four years)")
+            elif yi < 2022:
+                near = ["2018", "2022"]
+                why = f"there was no PISA {y} assessment (PISA runs every three to four years)"
+            else:
+                near = ["2022", "2025"]
+                why = f"there was no PISA {y} assessment (PISA runs every three to four years)"
+            notes.append(f"{why[0].upper()}{why[1:]}: the values shown are for {' and '.join(near)}.")
+            hints.append(f"(no PISA {y} data exist: use cycles {' and '.join(near)} instead, action=analyze)")
+        if self.AGE_WORDS.search(q_en):
+            notes.append("PISA samples 15-year-olds (born in a fixed 12-month window) in every "
+                         "economy; no other age group is assessed, so the values shown are for "
+                         "15-year-olds.")
+            hints.append("(PISA has 15-year-olds only: plan the statistic for the full 15-year-old "
+                         "sample, action=analyze)")
+        return notes, hints
     VIZ_ANSWER = (
         "Charts render automatically whenever a result compares things: country "
         "or group comparisons draw bar charts with 95%-confidence whiskers, "
@@ -4268,7 +4427,197 @@ class Agent:
         r".{0,60}\b(oecd|average|mean of)\b|\b(oecd|average)\b.{0,40}\b(se|standard error)\b.{0,60}"
         r"\b(difference|formula|computed|calculated)\b", re.IGNORECASE)
 
+    # "How do you track my data?" — answered from what the code does, never by
+    # the model (it once claimed the app runs in the browser and stores nothing)
+    PRIVACY_WORDS = re.compile(
+        r"\b(track(s|ing|ed)?|stor(e|es|ed|ing)|sav(e|es|ed|ing)|record(s|ed|ing)?|log(s|ged|ging)?|"
+        r"collect(s|ed|ing)?|keep(s|ing)?|shar(e|es|ed|ing)|sell(s|ing)?|see|sees|read|reads|use|uses|using|"
+        r"handle|handles|process|processes|do with)\b.{0,40}\b(my|our|user|users'?|visitor|personal) "
+        r"(data|questions?|information|input|conversations?|chats?|queries|history|institution|name|email)\b|"
+        r"\b(privacy|gdpr|cookies?|personal (data|information)|anonymous|anonymity|confidential(ity)?|"
+        r"data (protection|retention|policy))\b|"
+        r"\bwhat (do|does|happens?) (you|the app|this tool|pisa explorer) (do|happen) (with|to) (my|our|the) "
+        r"(questions?|data|input|conversation)|"
+        r"\b(sent|send|go|goes|shared?|transmitted|uploaded|passed) to (gemini|google|openai|an? (ai|llm|model|"
+        r"third part\w*)|the cloud|a server|third parties)|\bwho (can )?sees? (my|what i)\b|"
+        r"\bare my (questions|data|chats)\b|\bis (my|this|the) (data|conversation|information|question) "
+        r"(safe|private|secure|stored|saved|recorded|logged)\b|"
+        r"\b(rastrea|guarda|almacena|registra)\w* (mis|nuestros) (datos|preguntas)\b", re.IGNORECASE)
+    MODEL_WORDS = re.compile(
+        r"\b(which|what) (ai |llm )?(ai|llm|language model|model|chatbot) (do you|does (this|the app|it)|is (this|used|"
+        r"behind|powering)|are you|powers|runs)\b|\b(are you|is this|is it) (chatgpt|gemini|gpt|claude|"
+        r"an? (ai|llm|bot|chatbot|language model))\b|"
+        r"\b(chatgpt|gemini|gpt-?\d|claude|openai|llm|large language model)\b.{0,30}\b(used|use|behind|"
+        r"power\w*|based|built|running)\b|\b(built|based|powered|running) (on|with|by) (chatgpt|gemini|gpt|"
+        r"claude|openai|an? (llm|ai|language model))\b|\bwhat (ai|model|llm) (is|do you|does it) use\b|"
+        r"\bhow (does|do) (the|this) (ai|tool|app) work\b|\bdo you use (ai|an llm|a language model|gemini|chatgpt)\b",
+        re.IGNORECASE)
+    ATTRIBUTION_WORDS = re.compile(
+        r"\b(give|gives|giving|provide|provides) (proper |due )?credits?\b|\bcredits? (to|the) (oecd|pisa)\b|"
+        r"\backnowledg\w*\b|\battribut(ion|e|ed|ing)\b|"
+        r"\b(how|should|can|do|must) (do |should |can |must )?(i|we|one|you|users?) (cite|reference|acknowledge|"
+        r"credit|quote)\b|\bcitation\b|\bcite (this|the|it|these|your|results?|data|numbers?|figures?|app|"
+        r"tool)\b|\bciting\b|\blicen[cs]e[ds]?\b|\bcopyright\b|\bterms of (use|service)\b|"
+        r"\baffiliat\w*\b|\bendorse\w*\b|\b(is|are) (this|it|the tool|the app|you|pisa explorer) (an? )?"
+        r"(official|oecd)\b|\bpermission to (use|publish|reuse)\b|"
+        r"\bcan (i|we) (use|publish|share|reuse|reproduce) (the|these|your|its|this) (results?|numbers?|data|"
+        r"outputs?|figures?|charts?|tables?)\b|\bwho (made|built|created|developed|owns|runs|maintains) "
+        r"(this|it|the (app|tool|site))\b|\b(source|sources) of (the|your|this) data\b|"
+        r"\bwhere (does|do) (the|your|this) data come from\b|\bdata source\b", re.IGNORECASE)
+    # "pisa 2018", "PISA 2025 data", "2022 results": the cycle overview, not a
+    # keyword search on the words "PISA 2018" (which listed PISADIFF …)
+    BARE_FILLER = {"pisa", "oecd", "data", "dataset", "database", "db", "results", "result",
+                   "cycle", "survey", "assessment", "test", "the", "show", "me", "give", "tell",
+                   "about", "info", "information", "on", "of", "from", "in", "for", "datos",
+                   "resultados", "base", "de", "la", "el", "los", "del", "please", "i", "want",
+                   "need", "see", "look", "at", "explore", "open", "load", "get", "all",
+                   "everything", "overview", "summary", "what", "is", "there", "whats",
+                   "what's", "have", "has", "you", "do", "does", "which", "how", "any",
+                   "available", "loaded", "here", "this", "app", "tool", "contain", "contains",
+                   "include", "includes", "hold", "holds", "a", "an", "and", "or", "year"}
+    QUESTION_FILLER = {"what", "is", "there", "whats", "what's", "how", "which", "tell", "about",
+                       "info", "information", "explain", "define"}
+    MAJOR_DOMAIN = {"2018": "reading", "2022": "mathematics", "2025": "science"}
+    INSTRUMENT_DESC = {
+        "stu_qqq": "student questionnaire with the plausible values, ESCS, every derived index and the weights",
+        "sch_qqq": "school questionnaire (principals)",
+        "tch_qqq": "teacher questionnaire (participating economies only)",
+        "stu_cog": "scored cognitive test items",
+        "stu_tim": "questionnaire timing",
+        "stu_ttm": "test-item timing and process data",
+        "flt_qqq": "financial-literacy questionnaire and plausible values (subsample)",
+        "flt_cog": "financial-literacy scored items",
+        "flt_tim": "financial-literacy questionnaire timing",
+        "flt_ttm": "financial-literacy item timing",
+        "crt_cog": "creative-thinking scored items and plausible values",
+        "ldw_cog": "Learning in the Digital World items and process data",
+        "stu_sch": "students joined to their school (view)",
+        "stu_crt": "students joined to creative thinking (view)",
+    }
+
+    def _bare_cycle(self, text: str) -> list[str] | None:
+        """['2018'] for 'pisa 2018' / 'the 2018 dataset'; [] for 'pisa data';
+        None when the question says anything more than that."""
+        words = re.findall(r"[a-záéíóúñ']+|\d{4}", (text or "").lower())
+        if not words:
+            return None
+        years = [w for w in words if re.fullmatch(r"\d{4}", w)]
+        rest = [w for w in words if not re.fullmatch(r"\d{4}", w)]
+        if any(w not in self.BARE_FILLER for w in rest):
+            return None
+        if any(y not in CYCLES for y in years):
+            return None
+        if not years and ("pisa" not in rest or any(w in self.QUESTION_FILLER for w in rest)):
+            return None
+        return sorted(set(years))
+
+    def _cycle_tables(self, cycle: str) -> list[str]:
+        try:
+            names = [r[0] for r in self.con.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_name LIKE ?",
+                [f"%_{cycle}"]).fetchall() if str(r[0]).endswith(f"_{cycle}")]
+        except Exception:  # noqa: BLE001 — no connection (tests)
+            names = []
+        if not names:
+            names = [f"{i}_{cycle}" for i in INSTRUMENTS if not i.startswith("stu_s") and i != "stu_crt"]
+        order = {i: n for n, i in enumerate(INSTRUMENTS)}
+        return sorted(set(names), key=lambda t: order.get(t.rsplit("_", 1)[0], 99))
+
+    def _cycle_answer(self, years: list[str]) -> str:
+        if not years:
+            return self._coverage_answer()
+        paras = []
+        for y in years:
+            cov = (getattr(self, 'coverage', None) or {}).get(y)
+            head = (f"PISA {y}: {cov['economies']} economies, {cov['students']:,} students in the "
+                    f"student file" if cov else f"PISA {y}")
+            tables = self._cycle_tables(y)
+            files = "; ".join(f"{t} — {self.INSTRUMENT_DESC.get(t.rsplit('_', 1)[0], 'file')}"
+                              for t in tables)
+            release = (" The OECD released the 2025 database on 8 September 2026; not loaded: the "
+                       "2025 Foreign Language Assessment (OECD release expected 2027)." if y == "2025" else "")
+            paras.append(
+                f"{head}. Core domains mathematics, reading and science (major domain: "
+                f"{self.MAJOR_DOMAIN[y]}); innovative domain: {self.INNOVATIVE[y]}. "
+                f"Files loaded: {files}.{release}")
+        return (" ".join(paras) + " Ask a data question — \u201cmean "
+                f"{self.MAJOR_DOMAIN[years[-1]]} score by country in {years[-1]}\u201d, "
+                f"\u201cgender gap in reading in Italy in {years[-1]}\u201d — or a variable question "
+                f"— \u201cwhat variables do I use for socio-economic status in {years[-1]}\u201d.")
+
+    def _privacy_answer(self) -> str:
+        model = llm.ROLE_MODELS.get("planner") or llm.DEFAULT_MODEL
+        return (
+            "What PISA Explorer records: every question you type, the app's answer, the "
+            "institution or organization name you entered at the gate, a random session id "
+            "(a cookie, so follow-up questions keep their context), timing, which chart "
+            "rendered, your screen size and browser type, and any thumbs-up or thumbs-down "
+            "with its comment. This is kept in the app's own event log for one purpose: "
+            "finding questions the app answered badly and fixing it. No name, email, account "
+            "or IP address is asked for or stored by the app (the hosting platform, Google "
+            "Cloud Run, keeps ordinary web-server request logs, as any website's host does), "
+            "and nothing is sold or shared. What is sent to the language model: your question "
+            "text, the earlier turns of this conversation, the OECD codebook labels the app "
+            f"retrieved for it, and the computed aggregate results (economy means, shares and "
+            f"standard errors) go to Google's Gemini API ({model}) so the model can interpret "
+            "the question and phrase the answer; Google states that prompts to its paid API "
+            "are not used to train its models. The PISA databases themselves never leave the "
+            "server: no student- or school-level record is sent to any model or shown to "
+            "anyone, and your institution name is not sent to the model. On this device the "
+            "browser remembers the institution name so the gate is not shown again "
+            "(\u201cchange\u201d in the header clears it). The code is open source "
+            "(github.com/LuisGaitan/PISA_Explorer): explorer/events.py and explorer/app.py "
+            "are exactly what is recorded.")
+
+    def _model_answer(self) -> str:
+        roles = {r: llm.ROLE_MODELS.get(r) for r in ("router", "planner", "summary")}
+        names = sorted(set(m for m in roles.values() if m))
+        return (
+            f"PISA Explorer uses Google's Gemini models ({', '.join(names)}) for two jobs only: "
+            "turning your question into an analysis plan (which variables, cycles, economies "
+            "and statistic), and phrasing the app's computed result in prose. Every number is "
+            "computed by the app's own code from the OECD public-use databases with the "
+            "official method (final student weights, all ten plausible values, 80 Fay-BRR "
+            "replicate weights, the OECD link errors for trends); the model never sees a "
+            "student record and never computes a statistic. Its draft is checked against the "
+            "result — every number, rank and significance verdict must match the app's "
+            "verified statements — and replaced by the app's own statements when it deviates "
+            "(the provenance card under each answer says which). Only your question text, "
+            "the conversation so far, the codebook labels retrieved and the aggregate results "
+            "are sent to the model; ask \u201chow do you track my data?\u201d for the full "
+            "data-handling description.")
+
+    def _attribution_answer(self) -> str:
+        return (
+            "Yes. The OECD's terms of use for the PISA public-use files require every use of "
+            "results to acknowledge the source, and the app does so in the footer of every "
+            "page, in the \u201cSource\u201d line of every answer's provenance card and in "
+            f"its documentation. The required acknowledgement, verbatim: \u201c{OECD_ACKNOWLEDGEMENT}\u201d "
+            "— databases 2018 (CY07MSU), 2022 (CY08MSP) and 2025 (CY09MS). PISA Explorer is not "
+            "an OECD product and is not affiliated with or endorsed by the OECD; the OECD "
+            "disclaimers apply (oecd.org/en/about/terms-conditions/oecd-disclaimers). When you "
+            "publish a number from here, cite the OECD as the data source and, for the "
+            "computation, \u201cPISA Explorer (" + stamp() + ")\u201d as shown under each "
+            "answer (the build and method stamps make the figure reproducible). The software "
+            "is open source under the MIT licence (github.com/LuisGaitan/PISA_Explorer), built "
+            "by Luis Gaitan at the University of Pennsylvania Graduate School of Education "
+            "with support from the Penn GSE Learning Analytics and Artificial Intelligence "
+            "program; it returns aggregates only and never redistributes the data.")
+
     def _intercept(self, text: str, history: list | None = None) -> str | None:
+        if self.PRIVACY_WORDS.search(text):
+            self._fire("intercept:privacy")
+            return self._privacy_answer()
+        if self.MODEL_WORDS.search(text) and not self._economies_in_data(text):
+            self._fire("intercept:model")
+            return self._model_answer()
+        if self.ATTRIBUTION_WORDS.search(text) and not self.RECONCILE_WORDS.search(text):
+            self._fire("intercept:attribution")
+            return self._attribution_answer()
+        bare = self._bare_cycle(text)
+        if bare is not None:
+            self._fire("intercept:bare_cycle")
+            return self._cycle_answer(bare)
         # a follow-up ("why is there no math for 2025?") inherits the economies
         # of the last exchanges — from the answers too, whose codes are in
         # capitals whatever language the questions were asked in
@@ -4907,6 +5256,40 @@ class Agent:
                     "can be computed. Ask “did <economy> participate?” "
                     "for any economy, or name one from the participant lists.", language),
                     route="conversational")
+        viz_default = False
+        if not route.get("data_question") and self.VIZ_WORDS.search(q_en) \
+                and (not any(h.get("explanation") for h in (history or []))
+                     or self.YEAR_RE.search(q_en) or self._economies_in_data(q_en)):
+            # "give me a graph of PISA data from 2025": a chart needs a result,
+            # so the default result is every economy ranked in the cycle's
+            # major domain — the chart tip goes in the notes, not instead
+            self._fire("route:force_analyze:viz_default")
+            year = (self.YEAR_RE.findall(q_en) or [DEFAULT_CYCLE])[-1]
+            major = self.MAJOR_DOMAIN[year]
+            route = {"data_question": True, "intent": "analyze",
+                     "search_terms": [f"{major} score", "mathematics", "reading"]}
+            q_en = (f"{q_en} (no comparison was specified: rank every economy by its mean "
+                    f"{major} score in PISA {year}, with the OECD average — a chart renders with it)")
+            viz_default = True
+        nearest_notes, nearest_hints = self._nearest_answer(q_en)
+        if nearest_notes and not route.get("data_question") \
+                and (self._economies_in_data(q_en) or self.ANALYSIS_WORDS.search(q_en)
+                     or re.search(r"\boecd\b", q_en, re.I)):
+            # a forecast, a year with no cycle, an age PISA does not test: the
+            # nearest real answer with the caveat, not a refusal
+            self._fire("route:force_analyze:nearest")
+            route = {**route, "data_question": True, "intent": "analyze",
+                     "search_terms": route.get("search_terms") or ["mathematics", "reading", "science"]}
+        if nearest_notes and route.get("data_question") and route.get("intent") != "explore":
+            self._fire("hook:nearest_answer")
+            q_en = q_en + " " + " ".join(nearest_hints)
+        if self.VARIABLE_ASK_WORDS.search(q_en) and not (route.get("data_question") and route.get("intent") == "explore") \
+                and not self._economies_in_data(q_en):
+            # "what variables do I use for math scores and SEL in 2022": the
+            # verified variable map, never a statistic or the model's memory
+            self._fire("route:force_explore:variables")
+            route = {**route, "data_question": True, "intent": "explore",
+                     "search_terms": route.get("search_terms") or [q_en]}
         if not route.get("data_question"):
             if self.VIZ_WORDS.search(q_en):
                 self._fire("intercept:viz")
@@ -5050,6 +5433,21 @@ class Agent:
                     "difference, the change in a difference and ties itself.")
             except llm.LLMError:
                 pass
+        if plan.get("action") == "clarify" and (nearest_notes or viz_default):
+            # the planner refused a forecast / an off-cycle year / a default
+            # chart: one re-plan with the rule spelled out
+            self._fire("hook:replan_nearest")
+            try:
+                plan = self._plan(
+                    plan_prompt + "\n\nDO NOT CLARIFY: " + " ".join(nearest_hints or
+                    ["plan the ranking of every economy by its mean score in the cycle's major "
+                     "domain, grouped by CNT, sorted by estimate, with the OECD average"]) +
+                    " — the caveat is stated by the app in the notes.")
+            except llm.LLMError:
+                pass
+        if plan.get("action") != "clarify" and (nearest_notes or viz_default):
+            # the app's own caveat, stated as a NOTE before the planner's
+            plan["_app_notes"] = list(nearest_notes) + ([self.VIZ_DEFAULT_NOTE] if viz_default else [])
         plan["_question"] = q_en
         plan["_language"] = language
         if plan.get("limitation_note") and plan.get("template") != "raw_sql":
