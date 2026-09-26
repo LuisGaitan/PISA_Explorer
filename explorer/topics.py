@@ -168,9 +168,12 @@ TOPICS: list[Topic] = [
                "all 90 and is the 2025 convention"),
     Topic("immigrant background and home language",
           re.compile(r"immigra|migrant|native[- ]born|foreign[- ]born|language (spoken )?at home|home language", re.I),
-          _all("IMMIG", "ST022Q01TA", "LANGN"),
+          {"2018": ("IMMIG", "ST022Q01TA", "LANGN", "ST177Q01HA", "LANGMOTHER", "LANGFATHER"),
+           "2022": ("IMMIG", "ST022Q01TA", "LANGN"), "2025": ("IMMIG", "ST022Q01TA", "LANGN")},
           note="IMMIG: 1 native, 2 second-generation, 3 first-generation (immigrant = 2 or 3); "
-               "ST022Q01TA: 1 = language of the test at home, 2 = another language"),
+               "ST022Q01TA: 1 = language of the test at home, 2 = another language; 2018 also "
+               "asked how many languages the student and parents speak (ST177Q01HA) and which "
+               "language is spoken with mother / father (LANGMOTHER, LANGFATHER)"),
     Topic("grade repetition",
           re.compile(r"repeat(ed|ing)? (a |the )?(grade|year|class)|grade repetition|repeaters?", re.I),
           _all("REPEAT"), note="1 = repeated a grade at least once, 0 = never"),
@@ -306,16 +309,25 @@ TOPICS: list[Topic] = [
                "questionnaire has FEEDBINSTR (feedback provided by teachers, tch_qqq 2018 and 2022) "
                "and the school questionnaire TEAFDBK (feedback to teachers, sch_qqq_2022)"),
     Topic("parental involvement and support",
-          re.compile(r"\bparent\w* (involve\w*|support|engag\w*|expectation\w*|participat\w*)|"
-                     r"\b(family|home) (support|involve\w*)|\bparents?'? questionnaire|\bparent questionnaire|"
-                     r"\bpq\b", re.I),
-          {"2018": ("PASCHPOL", "CURSUPP", "EMOSUPS", "PQSCHOOL"),
-           "2022": ("PARINVOL", "PASCHPOL", "PAREXPT", "CURSUPP", "FAMSUP", "PQSCHOOL"),
-           "2025": ("PARINVOL", "PAREXPT", "FAMSUP", "PQSCHOOL", "PQFEED", "PQGENSCI", "PQDIGEFF")},
-          note="the parent questionnaire is optional (a subset of economies; its PA*/PQ* items and "
-               "indices sit in the student file); FAMSUP, CURSUPP and EMOSUPS are the students' own "
-               "reports of family support; ENCOURPG (school encouragement of parent involvement) is "
-               "in sch_qqq 2022 and 2025"),
+          re.compile(r"\bparent\w* (involve\w*|support|engag\w*|expectation\w*|participat\w*|attend\w*|"
+                     r"meeting\w*|volunteer\w*|council)|\b(family|home) (support|involve\w*)|"
+                     r"\bparents?'? questionnaire|\bparent questionnaire|\bpq\b|\bpa008|"
+                     r"\bschool meetings?\b|parent-teacher (meeting|conference)", re.I),
+          {"2018": ("PASCHPOL", "CURSUPP", "EMOSUPS", "PQSCHOOL", "PA008Q01TA", "PA008Q03TA", "PA008Q05TA"),
+           "2022": ("PARINVOL", "PASCHPOL", "PAREXPT", "CURSUPP", "FAMSUP", "PQSCHOOL", "PQMIMP", "SOCONPA"),
+           "2025": ("PARINVOL", "PAREXPT", "FAMSUP", "PQSCHOOL", "PQFEED", "PQGENSCI", "PQDIGEFF", "PQSELFREG")},
+          note="the parent questionnaire is optional (17 economies in 2018 and 2022, 18 in 2025; "
+               "Option_PQ flags them); its PA*/PQ* items and indices sit in the student file. "
+               "2018 items PA008Q01TA-Q05TA ask whether parents discussed their child with a "
+               "teacher or took part in school government last year; FAMSUP, CURSUPP and EMOSUPS "
+               "are the students' own reports of family support; ENCOURPG (school encouragement of "
+               "parent involvement) is in sch_qqq 2022 and 2025"),
+    Topic("online distress and digital distraction",
+          re.compile(r"\bdistract\w*|\bdistress\w*|cyber-?bully\w*|online (harassment|content)|"
+                     r"\bictdistr\b", re.I),
+          {"2022": ("ICTDISTR",), "2025": ("ICTDISTR",)},
+          note="ICTDISTR = distress from online content and cyberbullying (2022, 2025); the 2022 "
+               "ICT questionnaire also asks about digital distraction in lessons (IC* items)"),
     Topic("AI use",
           re.compile(r"\b(ai|a\.i\.|artificial intelligence|chatgpt|chatbots?|generative ai)\b", re.I),
           {"2025": ("ST438Q01DA", "ST438Q02DA", "ST438Q03DA", "ST438Q04DA", "AIUSESCH", "IC170Q10DA")},
@@ -331,6 +343,53 @@ TOPICS: list[Topic] = [
           note="most ICT indices come from the optional ICT familiarity questionnaire, "
                "administered by a subset of economies in each cycle (the app's coverage "
                "notes say which); ICTRES (ICT resources at home) is in the core questionnaire"),
+    Topic("teacher self-efficacy",
+          re.compile(r"\bteachers?'? self-?efficacy|self-?efficacy (of|among|for) teachers|"
+                     r"\bseff(cm|rel|ins)\b|teachers?'? confidence", re.I),
+          {"2018": ("SEFFCM", "SEFFREL", "SEFFINS", "GCSELF"),
+           "2022": ("SEFFCM", "SEFFREL", "SEFFINS"),
+           "2025": ("SEFFCM", "SEFFREL", "SEFFINS", "SETEACH", "CONEXSCI", "TCSELFATT", "TCSELFUSE")},
+          instrument="tch_qqq",
+          note="teacher questionnaire (tch_qqq), an option taken by 19 economies in 2018, 18 in 2022 "
+               "and 19 in 2025: classroom management, relations with students and instruction; 2018 "
+               "adds self-efficacy in multicultural environments (GCSELF), 2025 science-content "
+               "self-efficacy (SETEACH, CONEXSCI) and the English-teacher scales"),
+    Topic("teacher job satisfaction and well-being",
+          re.compile(r"\bteachers?'? (job )?satisfaction|\bjob satisfaction|teachers?'? (well-?being|stress|"
+                     r"burnout|morale|workload|work overload|autonomy|trust)|occupational stress|"
+                     r"satisfaction with (the )?teaching", re.I),
+          {"2018": ("SATJOB", "SATTEACH"),
+           "2022": ("SATJOB", "SATTEACH", "OCSTRESS", "OVERLOAD", "AUTONOMY", "TRUST", "CAPCON", "LEADSHIP"),
+           "2025": ("JOBSATENG", "POSLEAD")},
+          instrument="tch_qqq",
+          note="teacher questionnaire (tch_qqq, optional): SATJOB (job environment) and SATTEACH "
+               "(the profession) in 2018 and 2022; 2022 adds the teacher well-being module (stress, "
+               "overload, autonomy, trust, capacity to concentrate, leadership); in 2025 only the "
+               "English-teacher job-satisfaction scale JOBSATENG and positive leadership POSLEAD"),
+    Topic("teacher professional development and training",
+          re.compile(r"professional development|\bpd\b|in-?service training|teacher(s'?)? (training|education|"
+                     r"qualification|certification)|initial teacher", re.I),
+          {"2018": ("GCTRAIN", "TC045Q01NA"), "2022": ("PRPDT", "DEVNEED", "TC045Q01NA"),
+           "2025": ("DEVNEED", "TC045Q01")},
+          instrument="tch_qqq",
+          note="teacher questionnaire (tch_qqq, optional): the TC045 block (36 items in 2018, 39 in "
+               "2022, 57 in 2025) asks which topics were part of initial education and of professional "
+               "development; PRPDT (2022) is the proportion of those topics covered by professional "
+               "development, DEVNEED the need for it; PROATCE in sch_qqq is the share of certified teachers"),
+    Topic("teachers' use of digital resources",
+          re.compile(r"\bteachers?'? (use of )?(ict|digital|technology)|digital (tools|resources) (in|for) "
+                     r"(teaching|lessons|class)|how often (do )?teachers use|\btcictuse\b|\btcdigres\b", re.I),
+          {"2018": ("TCICTUSE",), "2022": ("TCICTUSE", "TCDIGRES", "ICTMATTC", "ICTCOMP", "ICTOTL"),
+           "2025": ("TCDIGRES", "DRUSESCT", "ICTSCIETC", "PERSDIGRES")},
+          instrument="tch_qqq",
+          note="teacher questionnaire (tch_qqq, optional); students' own ICT use is in the ICT topic"),
+    Topic("administration mode (paper or computer)",
+          re.compile(r"administration mode|\badmin ?mode\b|paper[- ]based|computer[- ]based|\bon paper\b|"
+                     r"mode of (the )?(test|respondent|administration|delivery)|paper or computer|"
+                     r"computer or paper", re.I),
+          _all("ADMINMODE"),
+          note="ADMINMODE (mode of respondent) is in every file: 1 = paper, 2 = computer; the "
+               "paper-based economies are listed by the app's test-mode answer"),
     Topic("educational and career expectations",
           re.compile(r"expectations?|aspirations?|expected (education|occupation)|career|future job", re.I),
           {"2018": ("BSMJ",), "2022": ("EXPECEDU", "BSMJ", "SISCO"), "2025": ("EXPECEDU", "BSMJ", "SISCO")},

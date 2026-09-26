@@ -4131,8 +4131,12 @@ class Agent:
             if own_words:
                 # a row found only through the router's synonyms is not
                 # "data on X": the user's own word must be in its label or code
+                # — two of them when no verified topic answered and the
+                # question has several ("top performers in science" is not
+                # answered by every label containing "science")
                 hit_words = own_match(str(latest.label), var)
-                if not hit_words:
+                need = 2 if (not std_rows and len(own_words) >= 2) else 1
+                if len(hit_words) < need:
                     continue
                 words_matched.update(hit_words)
             desc = catalog.describe(var, cycle=latest.cycle)
@@ -4390,23 +4394,67 @@ class Agent:
                         "economies, groups (gender, immigrant background, school type …) or "
                         "cycles (2018, 2022, 2025) — ask for the one you want.")
     VARIABLE_ASK_WORDS = re.compile(
-        r"\b(which|what) ([\w-]+ ){0,4}(variables?|columns?|fields?|indices|indexes|index|codes?|measures?|scales?) "
-        r"(do|should|can|could|would|to|for|is|are|hold|holds|contain|contains|measure|measures|"
-        r"capture|represent|exist|in|of|on|about)\b|\bvariables? (do|should|can|could|would) (i|we|one) use\b|"
+        r"\b(which|what|what's|whats) (are |is |were |would be )?(the |all |some |any )?([\w-]+ ){0,4}"
+        r"(variables?|columns?|fields?|indices|indexes|index|codes?|measures?|scales?|subscales?)\b|"
+        r"\bis there (a |an |any |some )?([\w-]+ ){0,4}(variables?|index|indices|scales?|subscales?)\b|"
+        r"\b(does|do) .{0,40}\bhave (a |an |any )?([\w-]+ ){0,3}(variables?|index|scales?|subscales?)\b|"
+        r"\bvariables? (do|should|can|could|would) (i|we|one) use\b|"
         r"\bvariables? to use\b|\bvariable (holds|contains|for|name|names|code|codes)\b|"
-        r"\bwhat (is|are) the (variables?|columns?|codes?)\b|\bvariable names?\b|"
-        r"\bwhich (variables?|columns?|indices)\b|\bname of the variables?\b|"
+        r"\bvariable names?\b|\bname of the variables?\b|"
+        r"^\W*([\w-]+ ){0,4}variables?\b|^\W*variables? (on|for|about|of|to)\b|"
         r"\b(qué|cuáles|cuál) ([\wáéíóúñ-]+ ){0,3}variables?\b|\bvariables? (para|de|sobre)\b|"
         r"\bvari[aá]veis\b", re.IGNORECASE)
     # "what's the senate weight?", "how do I merge student and school files?":
     # a data-file question without the word "variable" — the verified map,
     # never the model's memory (it invented SCHOOLID and W_FSCHWT once)
     DATA_TERM_ASK_WORDS = re.compile(
-        r"\b(what|which|what's|whats|how do (i|we)|how to|is there|where (is|are)|name of|called)\b.{0,50}"
+        r"\b(what|which|what's|whats|how do (i|we)|how to|is there|where (is|are)|name of|called|"
+        r"cu[aá]les?|qu[eé]|quais|qual|d[oó]nde|onde|c[oó]mo|como)\b.{0,50}"
         r"\b(senate weight|replicate weights?|student weights?|school weights?|final weights?|"
         r"sampling weights?|weight variables?|identifiers?|student ids?|school ids?|country codes?|"
         r"merge|merging|join (the )?(student|school|files)|link (the )?(student|school|files)|"
-        r"plausible values?|\bpvs?\b|escs|w_fstuwt|senwt|cntschid|cntstuid)\b", re.IGNORECASE)
+        r"plausible values?|\bpvs?\b|escs|w_fstuwt|senwt|cntschid|cntstuid|"
+        r"ponderaci[oó]n|pesos (muestrales|de muestreo|para|del)|variables? de peso|identificador\w*|"
+        r"valores plausibles|pondera[çc][aã]o)\b", re.IGNORECASE)
+    # the words students misspell most, for the one-edit correction of a
+    # question ("weigth varaibles", "finantial literasy")
+    SPELL_VOCAB = {
+        "variables", "variable", "weights", "weight", "weighting", "replicate", "financial",
+        "literacy", "mathematics", "maths", "reading", "science", "scores", "score", "bullying",
+        "belonging", "anxiety", "immigrant", "immigration", "gender", "socioeconomic", "status",
+        "wellbeing", "satisfaction", "students", "student", "teacher", "teachers", "parents",
+        "parental", "questionnaire", "identifiers", "identifier", "merge", "school", "schools",
+        "curiosity", "perseverance", "cooperation", "empathy", "mindset", "growth", "creative",
+        "thinking", "global", "competence", "digital", "resources", "expectations", "repetition",
+        "analysis", "proficiency", "levels", "subscale", "subscales", "plausible", "values",
+        "emotional", "social", "learning", "measure", "measures", "motivation", "enjoyment",
+        "climate", "discipline", "truancy", "skipping", "language", "environment", "environmental",
+        "feedback", "development", "professional", "efficacy", "assertiveness", "resilience",
+        "achievement", "performance", "country", "countries", "economies", "average", "background",
+        "possessions", "education", "occupation", "private", "public", "rural", "urban",
+        "sampling", "senate", "correlation", "regression", "percentage", "proportion", "share",
+    }
+
+    def _spell(self, text: str) -> str:
+        """One-edit correction of words no codebook, economy or vocabulary
+        word matches: 'varaibles' -> 'variables'. Codes and names are kept."""
+        import difflib
+        every = set().union(*self.present.values()) if getattr(self, "present", None) else set()
+        names = {n.lower() for n in (getattr(self, "economy_names", None) or {}).values()}
+
+        def fix(m):
+            w = m.group(0)
+            low = w.lower()
+            if len(low) < 5 or low in self.SPELL_VOCAB or w.upper() in every or low in names \
+                    or not w.islower() or low in catalog.STOPWORDS:
+                return w
+            best = difflib.get_close_matches(low, self.SPELL_VOCAB, n=1, cutoff=0.8)
+            return best[0] if best and best[0] != low else w
+
+        fixed = re.sub(r"[A-Za-z][a-z]{4,}", fix, text or "")
+        if fixed != text:
+            self._fire("hook:spell")
+        return fixed
     FORECAST_WORDS = re.compile(
         r"\b(forecast\w*|predict(s|ed|ion|ions|ing)?\b|projections?|projected|project(ed)? (to|for|into|forward)|extrapolat\w*|"
         r"trajectory|expected .{0,40}\b(next|future|coming|20[3-9]\d|202[7-9])|next (\d+|two|three|five|ten) "
@@ -4605,6 +4653,67 @@ class Agent:
                 out.append(tok)
         return out
 
+    INSTRUMENT_ASK_WORDS = re.compile(
+        r"\b(?:what|which|is there|does|do you have|what's|whats|where|tell me about|describe|explain)\b.{0,50}"
+        r"\b(?P<kind>teacher|parent|school|principal|student|financial literacy|ict|well-?being)s?'?s? "
+        r"(?:questionnaire|survey|file|table)\b|"
+        r"\b(?P<kind2>teacher|parent|school|principal|student|financial literacy|ict|well-?being)s?'?s? "
+        r"(?:questionnaire|survey|file|table)\b.{0,50}\b(?:table|file|called|contain\w*|include\w*|variables|"
+        r"cover\w*|have|has|exist\w*|every cycle|which cycles|what's in|in it|hold\w*)\b", re.IGNORECASE)
+    INSTRUMENT_KIND = {
+        "teacher": ("tch_qqq", "teacher questionnaire", "an option: 19 economies in 2018, 18 in 2022, 19 in 2025; "
+                    "one row per teacher (107,367 / 68,054 / 25,776 teachers)"),
+        "school": ("sch_qqq", "school questionnaire", "answered by every school's principal in every economy; "
+                   "one row per school, joined to students on CNT + CNTSCHID (the stu_sch view)"),
+        "principal": ("sch_qqq", "school questionnaire", "answered by every school's principal in every economy; "
+                      "one row per school, joined to students on CNT + CNTSCHID (the stu_sch view)"),
+        "student": ("stu_qqq", "student questionnaire", "every student in every economy; the file also carries "
+                    "the plausible values, ESCS, all derived indices, the weights and the optional "
+                    "parent, ICT, well-being and educational-career items"),
+        "parent": ("stu_qqq", "parent questionnaire", "an option: 17 economies in 2018 and 2022, 18 in 2025 "
+                   "(Option_PQ = 1); its PA*/PQ* items and indices are columns of the student file"),
+        "financial literacy": ("flt_qqq", "financial-literacy questionnaire", "the financial-literacy "
+                               "subsample (2018 and 2022 only) with its own weights and PV1-10FLIT"),
+        "ict": ("stu_qqq", "ICT familiarity questionnaire", "an option (a subset of economies each cycle; "
+                "44 in 2025); its IC* items and ICT* indices are columns of the student file"),
+        "well-being": ("stu_qqq", "well-being questionnaire", "a 2022 option (Option_WBQ = 1); its WB* "
+                       "items and EXPWB are columns of the student file"),
+        "wellbeing": ("stu_qqq", "well-being questionnaire", "a 2022 option (Option_WBQ = 1); its WB* "
+                      "items and EXPWB are columns of the student file"),
+    }
+
+    def _instrument_answer(self, kind: str, years: list[str]) -> str:
+        table, name, who = self.INSTRUMENT_KIND.get(kind, self.INSTRUMENT_KIND["student"])
+        cycles = years or [c for c in CYCLES if c in (getattr(self, "coverage", None) or {})] or list(CYCLES)
+        if kind == "financial literacy":
+            cycles = [c for c in cycles if c != "2025"] or ["2018", "2022"]
+        if kind in ("well-being", "wellbeing"):
+            cycles = ["2022"]
+        parts = []
+        for c in cycles:
+            try:
+                d = catalog.describe_table(f"{table}_{c}")
+            except AttributeError:
+                d = None
+            if d is None or d.empty:
+                cat = catalog._load()
+                d = cat[(cat.table_name == f"{table}_{c}")]
+            if kind == "parent":
+                d = d[d.variable.str.match(r"^(PA|PQ)") | d.label.str.contains("parent", case=False)]
+            elif kind == "ict":
+                d = d[d.variable.str.match(r"^(IC\d|ICT)")]
+            elif kind in ("well-being", "wellbeing"):
+                d = d[d.variable.str.match(r"^WB\d") | d.variable.isin(["EXPWB", "LIFESAT", "Option_WBQ"])]
+            idx = d[d.label.str.contains(r"\(WLE\)", regex=True)].drop_duplicates("variable")
+            n_items = int(d.variable.nunique())
+            shown = "; ".join(f"{v} ({l.replace(' (WLE)', '')[:45]})" for v, l in zip(idx.variable, idx.label))
+            parts.append(f"{c}: {n_items} variables in {table}_{c}" +
+                         (f", derived indices: {shown}" if shown else "") + ".")
+        return (f"The {name} is the file {table}_<cycle> — {who}. " + " ".join(parts) +
+                f" Ask \u201cwhat variables do I use for <topic> in {cycles[-1]}\u201d to get the ones for a "
+                "construct, or a statistic such as \u201cmean SEFFCM by country in "
+                f"{cycles[-1]}\u201d (teacher and school statistics use that file's own weights).")
+
     def _bare_cycle(self, text: str) -> list[str] | None:
         """['2018'] for 'pisa 2018' / 'the 2018 dataset'; [] for 'pisa data';
         None when the question says anything more than that."""
@@ -4728,6 +4837,10 @@ class Agent:
         if bare is not None:
             self._fire("intercept:bare_cycle")
             return self._cycle_answer(bare)
+        inst = self.INSTRUMENT_ASK_WORDS.search(text)
+        if inst and not self._economies_in_data(text) and not topics.matching(text):
+            self._fire("intercept:instrument")
+            return self._instrument_answer(inst.group("kind").lower(), sorted(set(self.YEAR_RE.findall(text))))
         # a follow-up ("why is there no math for 2025?") inherits the economies
         # of the last exchanges — from the answers too, whose codes are in
         # capitals whatever language the questions were asked in
@@ -4761,7 +4874,8 @@ class Agent:
         if self.COVERAGE_RATE_WORDS.search(text):
             self._fire("intercept:coverage_rate")
             return self._coverage_rate_answer()
-        if self.MODE_WORDS.search(text) and not re.search(r"\b(score|scores|mean|average|gap|share|percent)\b.{0,40}\b(by|per|for) (paper|computer)", text, re.I):
+        if self.MODE_WORDS.search(text) and not self.VARIABLE_ASK_WORDS.search(text) \
+                and not re.search(r"\b(score|scores|mean|average|gap|share|percent)\b.{0,40}\b(by|per|for) (paper|computer)", text, re.I):
             self._fire("intercept:test_mode")
             return self._mode_answer(named_recent, text)
         if self.COMPARABLE_WORDS.search(text) and not self.INDEX_QUESTION_WORDS.search(text) \
@@ -5334,7 +5448,7 @@ class Agent:
             # rank among all") — an English question gets an English answer
             self._fire("route:language_forced_english")
             language = "English"
-        q_en = str(route.get("question_en") or question).strip() or question
+        q_en = self._spell(str(route.get("question_en") or question).strip() or question)
         reconcile = bool(self.RECONCILE_WORDS.search(q_en)) and \
             (bool(self._economies_in_data(q_en)) or re.search(r"\boecd (average|mean)\b", q_en, re.I))
         if reconcile and not route.get("data_question") and not self._intercept(q_en, history):

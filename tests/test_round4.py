@@ -209,6 +209,10 @@ def test_variable_asks_tolerate_modifiers_and_missing_word():
     assert Agent.DATA_TERM_ASK_WORDS.search("how do I merge student and school files")
     assert Agent.DATA_TERM_ASK_WORDS.search("where are the plausible values")
     assert not Agent.DATA_TERM_ASK_WORDS.search("mean science score in Finland in 2025")
+    assert Agent.VARIABLE_ASK_WORDS.search("what's the exact score cutoff variable for level 2 math?")
+    assert Agent.VARIABLE_ASK_WORDS.search("is there a global competence variable in 2022 or 2025?")
+    assert Agent.VARIABLE_ASK_WORDS.search("what science competency subscales exist in 2025?")
+    assert Agent.VARIABLE_ASK_WORDS.search("does the school questionnaire have a class size variable?")
     assert Agent.VARIABLE_ASK_WORDS.search("qué variables mido para el bienestar")
     assert Agent.VARIABLE_ASK_WORDS.search("quais variáveis medem bullying")
 
@@ -262,3 +266,57 @@ def test_latest_cycle_means_2025():
     import re
     assert re.search(r"\b(latest|most recent|newest|current|last) (cycle|round|pisa|year|assessment|data|edition)\b",
                      "variables on bullying in the latest cycle", re.I)
+
+
+# ---------- round 4c: teacher / parent topics, typos, instrument overview ----------
+
+def test_spelling_correction_touches_only_misspelled_common_words():
+    a = _agent()
+    assert a._spell("weigth varaibles for anaylsis") == "weight variables for analysis"
+    assert a._spell("finantial literasy varibales pls") == "financial literacy variables pls"
+    assert "hook:spell" in a._fired
+    a._fired.clear()
+    assert a._spell("mean science score in Finland in 2025") == "mean science score in Finland in 2025"
+    assert a._spell("what is SENWT") == "what is SENWT"          # codes and capitals are kept
+    assert a._fired == []
+
+
+def test_instrument_overview_detection_and_answer():
+    a = _agent()
+    for q, kind in [("what's the teacher questionnaire table called?", "teacher"),
+                    ("what variables come from the parent questionnaire?", "parent"),
+                    ("is there a parent questionnaire in every cycle?", "parent"),
+                    ("what does the school questionnaire contain?", "school")]:
+        m = Agent.INSTRUMENT_ASK_WORDS.search(q)
+        assert m and (m.group("kind") or m.group("kind2")).lower() == kind, q
+    assert not Agent.INSTRUMENT_ASK_WORDS.search("what variables measure teacher self-efficacy?")
+    assert not Agent.INSTRUMENT_ASK_WORDS.search("mean science score by school type in Chile")
+    if not (CATALOG_DIR / "variables.parquet").exists():
+        pytest.skip("no local catalog (CI)")
+    # a questionnaire mention with a construct is a variable question, not an overview
+    assert a._intercept("does the school questionnaire have a class size variable?") is None
+    assert a._intercept("what variable tells me the administration mode (paper or computer)?") is None
+    assert a._intercept("what's the teacher questionnaire table called?") is not None
+    text = a._instrument_answer("teacher", [])
+    assert "tch_qqq_<cycle>" in text and "19 economies in 2018" in text and "SEFFCM" in text
+    text = a._instrument_answer("parent", ["2025"])
+    assert "Option_PQ" in text and "PARINVOL" in text and "2018:" not in text
+
+
+def test_teacher_parent_and_mode_topics():
+    got = {t.construct for t in topics.matching("what variables measure teacher self-efficacy?")}
+    assert got == {"teacher self-efficacy"}
+    assert "teacher job satisfaction and well-being" in {t.construct for t in topics.matching("teacher job satisfaction variables")}
+    assert "teacher professional development and training" in {t.construct for t in topics.matching("what variables cover teacher professional development?")}
+    assert "teachers' use of digital resources" in {t.construct for t in topics.matching("is there a variable on how often teachers use digital tools?")}
+    assert "administration mode (paper or computer)" in {t.construct for t in topics.matching("what variable tells me the administration mode (paper or computer)?")}
+    assert "parental involvement and support" in {t.construct for t in topics.matching("is there a variable on parents attending school meetings?")}
+    lines = topics.answer_lines(topics.matching("parents attending school meetings in 2018", ("2018",)), ("2018",))
+    assert any("PA008Q05TA" in l for l in lines)
+    lines = topics.answer_lines(topics.matching("teacher self-efficacy in 2025", ("2025",)), ("2025",))
+    assert any("SETEACH" in l and "tch_qqq" in l for l in lines)
+
+
+def test_spanish_and_portuguese_data_asks_route_to_explore():
+    assert Agent.DATA_TERM_ASK_WORDS.search("cuáles son las variables de ponderación (pesos) para el análisis?")
+    assert Agent.DATA_TERM_ASK_WORDS.search("quais são os valores plausiveis? where are the valores plausibles")

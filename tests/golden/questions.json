@@ -889,6 +889,77 @@
       "answer_contains": [
         "AIUSESCH"
       ]
+    },
+    {
+      "name": "typo_financial_literacy",
+      "question": "finantial literasy varibales pls",
+      "route": "explore",
+      "answer_contains": [
+        "PV1FLIT"
+      ]
+    },
+    {
+      "name": "typo_weights",
+      "question": "weigth varaibles for anaylsis",
+      "route": "explore",
+      "answer_contains": [
+        "W_FSTUWT",
+        "W_FSTURWT1"
+      ]
+    },
+    {
+      "name": "spanish_weights",
+      "question": "cuáles son las variables de ponderación (pesos) para el análisis?",
+      "route": "explore",
+      "answer_contains": [
+        "W_FSTUWT"
+      ]
+    },
+    {
+      "name": "teacher_pd_variables",
+      "question": "what variables cover teacher professional development?",
+      "route": "explore",
+      "answer_contains": [
+        "DEVNEED",
+        "tch_qqq"
+      ]
+    },
+    {
+      "name": "teacher_self_efficacy",
+      "question": "what variables measure teacher self-efficacy?",
+      "route": "explore",
+      "answer_contains": [
+        "SEFFCM",
+        "SEFFREL",
+        "SEFFINS"
+      ]
+    },
+    {
+      "name": "teacher_table_name",
+      "question": "what's the teacher questionnaire table called?",
+      "route": "conversational",
+      "answer_contains": [
+        "tch_qqq"
+      ]
+    },
+    {
+      "name": "parent_questionnaire_contents",
+      "question": "what variables come from the parent questionnaire?",
+      "answer_contains": [
+        "PARINVOL"
+      ],
+      "route_any": [
+        "explore",
+        "conversational"
+      ]
+    },
+    {
+      "name": "parents_meetings_2018",
+      "question": "is there a variable on parents attending school meetings in 2018?",
+      "route": "explore",
+      "answer_contains": [
+        "PA008Q05TA"
+      ]
     }
   ]
 }
