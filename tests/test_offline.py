@@ -403,7 +403,7 @@ def test_explore_drops_weak_matches(monkeypatch):
     monkeypatch.setattr(agent, "_retrieve", lambda terms, per_term=12: weak)
     monkeypatch.setattr(catalog, "describe", lambda var, cycle=None: weak.head(0).assign(var_type=[], value_labels=[]))
     res = agent._explore("do you have data on coverage rates?", ["coverage rates"])
-    assert res.route == "explore" and "No catalog variables matched" in res.answer
+    assert res.route == "explore" and ("No catalog variables matched" in res.answer or "No variable in the PISA" in res.answer)
 
 
 # ---------- student + school joined view ----------

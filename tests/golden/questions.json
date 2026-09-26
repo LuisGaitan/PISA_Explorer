@@ -834,6 +834,61 @@
       "answer_numbers": [
         "597.0"
       ]
+    },
+    {
+      "name": "merge_weights_identifiers",
+      "question": "what weight and identifier variables do I need to merge student and school files?",
+      "route": "explore",
+      "answer_contains": [
+        "CNTSCHID",
+        "W_FSTUWT"
+      ],
+      "answer_forbid": [
+        "SCHOOLID",
+        "W_FSCHWT"
+      ]
+    },
+    {
+      "name": "senate_weight",
+      "question": "what's the senate weight?",
+      "route": "explore",
+      "answer_contains": [
+        "SENWT"
+      ],
+      "answer_forbid": [
+        "does not exist",
+        "no senate"
+      ]
+    },
+    {
+      "name": "no_sleep_variables",
+      "question": "variables on students' sleep",
+      "route": "explore",
+      "answer_contains": [
+        "No variable"
+      ],
+      "answer_forbid": [
+        "FAMSUP",
+        "PROBSCRI",
+        "EMOSUPP"
+      ]
+    },
+    {
+      "name": "fl_and_sel_2022",
+      "question": "I'm doing a project mixing financial literacy with social emotional learning in 2022, which variables do I need?",
+      "route": "explore",
+      "answer_contains": [
+        "PV1FLIT",
+        "PERSEVAGR"
+      ]
+    },
+    {
+      "name": "ai_specific_before_ict",
+      "question": "is there a variable on AI use at school, from the ICT questionnaire?",
+      "route": "explore",
+      "answer_contains": [
+        "AIUSESCH"
+      ]
     }
   ]
 }

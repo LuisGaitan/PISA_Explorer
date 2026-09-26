@@ -198,3 +198,67 @@ def test_viz_default_note_and_words():
     assert Agent.VIZ_WORDS.search("give me a graph of Pisa data from 2025")
     assert "ranks every economy" in Agent.VIZ_DEFAULT_NOTE
     assert Agent.MAJOR_DOMAIN == {"2018": "reading", "2022": "mathematics", "2025": "science"}
+
+
+# ---------- round 4b: fixes from the variable-question probe ----------
+
+def test_variable_asks_tolerate_modifiers_and_missing_word():
+    assert Agent.VARIABLE_ASK_WORDS.search("what weight and identifier variables do I need to merge student and school files?")
+    assert Agent.VARIABLE_ASK_WORDS.search("which 2022 student questionnaire variables measure curiosity")
+    assert Agent.DATA_TERM_ASK_WORDS.search("what's the senate weight?")
+    assert Agent.DATA_TERM_ASK_WORDS.search("how do I merge student and school files")
+    assert Agent.DATA_TERM_ASK_WORDS.search("where are the plausible values")
+    assert not Agent.DATA_TERM_ASK_WORDS.search("mean science score in Finland in 2025")
+    assert Agent.VARIABLE_ASK_WORDS.search("qué variables mido para el bienestar")
+    assert Agent.VARIABLE_ASK_WORDS.search("quais variáveis medem bullying")
+
+
+def test_invented_codes_are_caught_and_real_codes_are_recognized():
+    if not (CATALOG_DIR / "variables.parquet").exists():
+        pytest.skip("no local catalog (CI)")
+    a = _agent()
+    bad = a._invented_codes("use the school identifier (`SCHOOLID`) and the school weight (`W_FSCHWT`), "
+                            "with W_FSTUWT for students; PISA and the OECD use ISCED levels.")
+    assert bad == ["SCHOOLID", "W_FSCHWT"]
+    assert a._invented_codes("The OECD average in PISA 2025 was 481.9 (SE 0.44).") == []
+    assert a._invented_codes("Finland (FIN) and the USA are in the data.") == []
+    assert a._catalog_codes_in("what is SENWT and how does it differ from W_FSTUWT?") == ["SENWT", "W_FSTUWT"]
+    assert a._catalog_codes_in("how did FIN do in PISA") == []
+
+
+def test_topic_guards_and_ordering():
+    got = {t.construct for t in topics.matching("variables on height or weight (BMI)")}
+    assert "weights" not in got
+    assert "weights" in {t.construct for t in topics.matching("which variables hold the student weights")}
+    assert "mathematics anxiety and self-efficacy" not in {t.construct for t in topics.matching("anxiety disorders")}
+    assert "mathematics anxiety and self-efficacy" in {t.construct for t in topics.matching("math anxiety in 2022")}
+    assert "classroom climate and teacher support" not in {t.construct for t in topics.matching("disciplinary action against students")}
+    assert "enjoyment and motivation" not in {t.construct for t in topics.matching("interest in politics")}
+    # the specific topic comes before the broad one
+    order = [t.construct for t in topics.matching("is there a variable on AI use at school, from the ICT questionnaire?", ("2025",))]
+    assert order.index("AI use") < order.index("ICT and digital devices")
+    order = [t.construct for t in topics.matching("financial literacy and social emotional learning in 2022", ("2022",))]
+    assert order[0] == "financial literacy"
+
+
+def test_new_topics_exist():
+    names = {t.construct for t in topics.TOPICS}
+    for c in ("school staff composition", "remote instruction and the pandemic (2022)",
+              "environmental education (2025)", "feedback from teachers", "parental involvement and support"):
+        assert c in names
+    assert "parental involvement and support" in {t.construct for t in topics.matching("what variables exist on parental involvement in 2025")}
+    assert "environmental education (2025)" in {t.construct for t in topics.matching("environmental awareness variables 2025")}
+
+
+def test_own_words_strip_ask_filler():
+    a = _agent()
+    assert a._own_words("variables on students' sleep") == ["sleep"]
+    assert a._own_words("I need variables for a project on financial literacy and growth mindset in 2022") == \
+        ["financial", "literacy", "growth", "mindset"]
+    assert a._own_words("what variables do I use for math scores") == ["math", "scores"]
+
+
+def test_latest_cycle_means_2025():
+    import re
+    assert re.search(r"\b(latest|most recent|newest|current|last) (cycle|round|pisa|year|assessment|data|edition)\b",
+                     "variables on bullying in the latest cycle", re.I)

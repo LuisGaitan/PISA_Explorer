@@ -4034,9 +4034,40 @@ class Agent:
                                r"not applicable|invalid|no response|not reached|"
                                r"^missing", re.IGNORECASE)
     MAX_EXPLORE_ROWS = 40
-    EXPLORE_MIN_SCORE = 3.5     # a whole-word label match on a synonym term (8 x 0.5)
+    EXPLORE_MIN_SCORE = 4.5     # more than one whole-word match on a synonym term (8 x 0.5)
                                 # passes; entity-only and substring noise does not
 
+    def _own_words(self, question: str) -> list[str]:
+        """The user's own content words (no stopwords, no ask-filler, no
+        years, no economy names): what a label must match for the catalog
+        to count as having data on the topic."""
+        text = re.sub(r"[“”\"']", " ", question or "")
+        words = [w for w in re.split(r"[^a-z0-9-]+", text.lower()) if len(w) >= 3]
+        return [w for w in dict.fromkeys(words)
+                if w not in catalog.STOPWORDS and w not in self.EXPLORE_FILLER
+                and not re.fullmatch(r"\d{4}", w)]
+
+    EXPLORE_FILLER = {"variable", "variables", "column", "columns", "field", "fields", "code",
+                      "codes", "index", "indices", "measure", "measures", "measuring", "data",
+                      "dataset", "database", "find", "give", "show", "list", "tell", "need",
+                      "needed", "use", "used", "using", "want", "looking", "look", "there",
+                      "exist", "exists", "available", "related", "relating", "about", "regarding",
+                      "pisa", "oecd", "cycle", "cycles", "year", "years", "student", "students",
+                      "school", "schools", "teacher", "teachers", "parent", "parents", "country",
+                      "countries", "project", "analysis", "analyze", "research", "paper", "thesis",
+                      "study", "hold", "holds", "contain", "contains", "should", "could", "would",
+                      "can", "please", "hello", "thanks", "what", "which", "where", "when", "how",
+                      "does", "questionnaire", "file", "files", "topic", "topics", "information",
+                      "info", "anything", "something", "some", "any", "all", "one", "get", "got",
+                      "know", "the", "and", "for", "with", "from", "into", "also", "both", "like",
+                      "mixing", "mix", "combine", "combining", "between", "level", "levels",
+                      "exists", "existen", "existe", "gives", "shows", "records", "record", "called",
+                      "has", "have", "does", "there", "identifies", "identify", "name", "named",
+                      "hold", "holds", "keep", "keeps", "stored", "store", "provide", "provides",
+                      "cual", "cuál", "cuáles", "que", "qué", "para", "sobre", "las", "los", "del",
+                      "existem", "quais", "qual", "variáveis", "variaveis", "medem", "mide", "miden"}
+
+    @staticmethod
     @staticmethod
     def _family_of(var: str) -> str | None:
         """PV6MATH -> 'PV1-10MATH'; W_FSTURWT23 -> 'W_FSTURWT1-80'; else None."""
@@ -4057,10 +4088,19 @@ class Agent:
         weights) are one row each."""
         years = sorted(set(self.YEAR_RE.findall(question)))
         loaded = tuple(c for c in CYCLES if c in (getattr(self, 'coverage', None) or {})) or CYCLES
+        if not years and re.search(r"\b(latest|most recent|newest|current|last) (cycle|round|pisa|year|"
+                                   r"assessment|data|edition)\b", question, re.I):
+            years = [loaded[-1]]
         cycles = tuple(years) if years else loaded
-        matched = topics.matching(question)
+        matched = topics.matching(question, cycles)
         if matched:
             self._fire("explore:topics")
+        own_words = self._own_words(question)
+        own_rx = {w: re.compile(r"\b" + re.escape(w) + r"(s|es|ed|ing|al|ical|ation|ions?|ies|y)?\b", re.I)
+                  for w in own_words}
+
+        def own_match(label: str, var: str) -> list[str]:
+            return [w for w, rx in own_rx.items() if rx.search(label or "") or w in var.lower()]
 
         def label_of(code, cycle):
             d = catalog.describe(code, cycle=cycle)
@@ -4079,7 +4119,7 @@ class Agent:
         if not hits.empty and not self.ITEM_WORDS.search(question):
             questionnaire = hits.table_name.str.split("_").str[1].eq("qqq")
             hits = hits[questionnaire] if questionnaire.any() else hits
-        rows, seen = [], set()
+        rows, seen, words_matched = [], set(), set()
         for var, group in hits.groupby("variable", sort=False):
             family = self._family_of(var)
             key = family or var
@@ -4088,6 +4128,13 @@ class Agent:
             seen.add(key)
             group = group.sort_values("table_name")
             latest = group.sort_values("cycle").iloc[-1]
+            if own_words:
+                # a row found only through the router's synonyms is not
+                # "data on X": the user's own word must be in its label or code
+                hit_words = own_match(str(latest.label), var)
+                if not hit_words:
+                    continue
+                words_matched.update(hit_words)
             desc = catalog.describe(var, cycle=latest.cycle)
             values = ""
             if not desc.empty and desc.iloc[0].value_labels:
@@ -4120,6 +4167,11 @@ class Agent:
         scope = f"PISA {', '.join(cycles)}" if years else "PISA 2018, 2022 and 2025"
         topic = ", ".join(t for t in terms if not self.YEAR_RE.fullmatch(t)) or "that topic"
         example_cycle = cycles[-1]
+        own_hit = bool(matched) or not own_words or not related.empty
+        unmatched = [w for w in own_words if w not in words_matched] if not related.empty else []
+        if unmatched and not matched:
+            # some of the user's words match no label at all: say which
+            self._fire("explore:unmatched_words")
         if matched:
             lines = topics.answer_lines(matched, cycles)
             first = std_rows[0] if std_rows else None
@@ -4135,19 +4187,32 @@ class Agent:
                          if not related.empty else
                          " The table lists each with its codebook label and the tables it is in.")
                       + f" To analyze one, ask for a statistic — for example \u201c{example}\u201d.")
-        elif table.empty:
-            answer = (f"No catalog variables matched \u201c{topic}\u201d in {scope}. The "
-                      "public-use files hold questionnaire responses, derived "
-                      "indices and test results — not the published report tables "
-                      "(coverage or exclusion rates, OECD averages, trend tables). "
-                      "Try other words for the construct (PISA labels use the "
-                      "OECD's wording, e.g. \u201csense of belonging\u201d, \u201cbullying\u201d, "
-                      "\u201clife satisfaction\u201d).")
+        elif table.empty or not own_hit:
+            # the user's own words match no codebook label (only the router's
+            # synonyms did): say so — never a list of look-alikes
+            if not table.empty:
+                self._fire("explore:no_own_match")
+            synonyms = [t for t in terms if t.lower() not in own_words and not self.YEAR_RE.fullmatch(t)]
+            table = pd.DataFrame(columns=columns)
+            answer = (f"No variable in the PISA {', '.join(cycles)} public-use files loaded here has a "
+                      f"label matching \u201c{', '.join(own_words) or topic}\u201d"
+                      + (f" (also tried: {', '.join(synonyms[:6])})" if synonyms else "") + ". "
+                      "That is a statement about the codebook labels, not about what PISA asked: "
+                      "labels use the OECD's wording (e.g. \u201csense of belonging\u201d, "
+                      "\u201cbullying\u201d, \u201clife satisfaction\u201d), so try the OECD's term for "
+                      "the construct, or ask \u201cwhat does PISA measure?\u201d for the list of "
+                      "questionnaire areas. The files hold questionnaire responses, derived indices "
+                      "and test results — not report tables, and nothing students did not answer.")
         else:
             top = "; ".join(f"{r.variable} ({r.label[:60]}{'…' if len(r.label) > 60 else ''})"
                             for r in table.head(5).itertuples())
             first_var = table.variable.iloc[0].split(" ")[0]
-            answer = (f"{len(table)} catalog variables relate to \u201c{topic}\u201d in {scope}; "
+            caveat = ""
+            if unmatched:
+                caveat = (f"No variable label in {scope} matches \u201c{', '.join(unmatched)}\u201d; "
+                          f"the variables below match \u201c{', '.join(sorted(words_matched))}\u201d only, "
+                          "so check that they are the construct you mean. ")
+            answer = (caveat + f"{len(table)} catalog variables relate to \u201c{topic}\u201d in {scope}; "
                       f"the closest matches: {top}. The table lists each one with "
                       "its codebook label, the tables it exists in, and its response "
                       "codes. To analyze one, ask for a statistic — for example "
@@ -4325,13 +4390,23 @@ class Agent:
                         "economies, groups (gender, immigrant background, school type …) or "
                         "cycles (2018, 2022, 2025) — ask for the one you want.")
     VARIABLE_ASK_WORDS = re.compile(
-        r"\b(which|what) (variables?|columns?|fields?|indices|indexes|index|codes?|measures?|scales?) "
+        r"\b(which|what) ([\w-]+ ){0,4}(variables?|columns?|fields?|indices|indexes|index|codes?|measures?|scales?) "
         r"(do|should|can|could|would|to|for|is|are|hold|holds|contain|contains|measure|measures|"
         r"capture|represent|exist|in|of|on|about)\b|\bvariables? (do|should|can|could|would) (i|we|one) use\b|"
         r"\bvariables? to use\b|\bvariable (holds|contains|for|name|names|code|codes)\b|"
         r"\bwhat (is|are) the (variables?|columns?|codes?)\b|\bvariable names?\b|"
         r"\bwhich (variables?|columns?|indices)\b|\bname of the variables?\b|"
-        r"\b(qué|cuáles|cuál) variables?\b", re.IGNORECASE)
+        r"\b(qué|cuáles|cuál) ([\wáéíóúñ-]+ ){0,3}variables?\b|\bvariables? (para|de|sobre)\b|"
+        r"\bvari[aá]veis\b", re.IGNORECASE)
+    # "what's the senate weight?", "how do I merge student and school files?":
+    # a data-file question without the word "variable" — the verified map,
+    # never the model's memory (it invented SCHOOLID and W_FSCHWT once)
+    DATA_TERM_ASK_WORDS = re.compile(
+        r"\b(what|which|what's|whats|how do (i|we)|how to|is there|where (is|are)|name of|called)\b.{0,50}"
+        r"\b(senate weight|replicate weights?|student weights?|school weights?|final weights?|"
+        r"sampling weights?|weight variables?|identifiers?|student ids?|school ids?|country codes?|"
+        r"merge|merging|join (the )?(student|school|files)|link (the )?(student|school|files)|"
+        r"plausible values?|\bpvs?\b|escs|w_fstuwt|senwt|cntschid|cntstuid)\b", re.IGNORECASE)
     FORECAST_WORDS = re.compile(
         r"\b(forecast\w*|predict(s|ed|ion|ions|ing)?\b|projections?|projected|project(ed)? (to|for|into|forward)|extrapolat\w*|"
         r"trajectory|expected .{0,40}\b(next|future|coming|20[3-9]\d|202[7-9])|next (\d+|two|three|five|ten) "
@@ -4494,6 +4569,41 @@ class Agent:
         "stu_sch": "students joined to their school (view)",
         "stu_crt": "students joined to creative thinking (view)",
     }
+
+    # acronyms the model may write in capitals that are not variable codes
+    NOT_CODES = {"OECD", "PISA", "WLE", "ISCED", "ISEI", "BRR", "FAY", "PVS", "ICT", "LDW", "FLA",
+                 "MIT", "GSE", "NCES", "CSV", "SQL", "JSON", "HTML", "API", "STEM", "GDP", "UNESCO",
+                 "COVID", "SES", "SEL", "NOTE", "NOT", "DONE", "AND", "THE", "FOR", "WITH", "PUF",
+                 "PUFS", "SPSS", "SAS", "IRT", "TIMSS", "PIRLS", "EU", "UK", "US", "USA", "UAE",
+                 "GBR", "MENA", "LAC", "OECD's", "ESCS", "CNT", "ID", "IDS", "URL", "PDF", "FAQ",
+                 "AI", "IQ", "BMI", "MAT", "READ", "SCIE", "MATH", "OK"}
+
+    def _invented_codes(self, text: str) -> list[str]:
+        """Variable-looking tokens in a model answer that exist in no
+        codebook: a digit or underscore inside, or written like a code
+        (in backticks, quotes or parentheses), and not an economy code."""
+        every = set().union(*self.present.values()) if getattr(self, "present", None) else set()
+        out = []
+        for m in re.finditer(r"(?<![A-Za-z])([A-Z][A-Z0-9_]{3,})(?![A-Za-z])", text or ""):
+            tok = m.group(1)
+            if tok in self.NOT_CODES or tok in every or tok in out:
+                continue
+            code_like = bool(re.search(r"[0-9_]", tok)) or \
+                bool(re.search(r"[`'\"(]" + re.escape(tok) + r"[`'\")]", text))
+            if code_like and catalog.describe(tok).empty:
+                out.append(tok)
+        return out
+
+    def _catalog_codes_in(self, text: str) -> list[str]:
+        """Codebook variable codes the question spells out (SENWT, ESCS…)."""
+        every = set().union(*self.present.values()) if getattr(self, "present", None) else set()
+        out = []
+        for tok in dict.fromkeys(re.findall(r"(?<![A-Za-z])([A-Z][A-Z0-9_]{3,})(?![A-Za-z])", text or "")):
+            if tok in self.NOT_CODES or tok in every:
+                continue
+            if not catalog.describe(tok).empty:
+                out.append(tok)
+        return out
 
     def _bare_cycle(self, text: str) -> list[str] | None:
         """['2018'] for 'pisa 2018' / 'the 2018 dataset'; [] for 'pisa data';
@@ -5283,8 +5393,10 @@ class Agent:
         if nearest_notes and route.get("data_question") and route.get("intent") != "explore":
             self._fire("hook:nearest_answer")
             q_en = q_en + " " + " ".join(nearest_hints)
-        if self.VARIABLE_ASK_WORDS.search(q_en) and not (route.get("data_question") and route.get("intent") == "explore") \
-                and not self._economies_in_data(q_en):
+        if (self.VARIABLE_ASK_WORDS.search(q_en) or self.DATA_TERM_ASK_WORDS.search(q_en)
+                or self._catalog_codes_in(q_en)) \
+                and not (route.get("data_question") and route.get("intent") == "explore") \
+                and not self._economies_in_data(q_en) and not self.ANALYSIS_WORDS.search(q_en):
             # "what variables do I use for math scores and SEL in 2022": the
             # verified variable map, never a statistic or the model's memory
             self._fire("route:force_explore:variables")
@@ -5305,8 +5417,16 @@ class Agent:
             strata = self._strata_hits(q_en)
             best = bool(self.BEST_COUNTRY_WORDS.search(q_en))
             if not named and not ai_data and not strata and not best:
-                return AgentResult(question, route.get("direct_answer")
-                                   or "Could you rephrase that?", route="conversational")
+                answer = route.get("direct_answer") or "Could you rephrase that?"
+                invented = self._invented_codes(answer)
+                if invented:
+                    # the model named variables that do not exist (SCHOOLID,
+                    # W_FSCHWT): the verified map answers instead
+                    self._fire("hook:invented_code")
+                    result = self._explore(q_en, list(route.get("search_terms") or []) or [q_en])
+                    result.answer = self._localize(result.answer, language)
+                    return result
+                return AgentResult(question, answer, route="conversational")
             if best and not named and not ai_data and not strata:
                 # "which country is best": a ranking in the three subjects,
                 # not an opinion about the word "best"

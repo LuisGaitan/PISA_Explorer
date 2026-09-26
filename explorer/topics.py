@@ -51,10 +51,15 @@ class Topic:
     instrument: str = "stu_qqq"
     note: str = ""
     requires: re.Pattern | None = None   # a second pattern that must also match
+    unless: re.Pattern | None = None     # a pattern that switches the topic off
 
     def matches(self, text: str) -> bool:
         return bool(self.pattern.search(text)) and \
-            (self.requires is None or bool(self.requires.search(text)))
+            (self.requires is None or bool(self.requires.search(text))) and \
+            not (self.unless and self.unless.search(text))
+
+    def size(self, cycles) -> int:
+        return sum(len(self.variables.get(c, ())) for c in cycles)
 
 
 def _all(*codes: str) -> dict:
@@ -133,12 +138,14 @@ TOPICS: list[Topic] = [
           re.compile(r"\bweights?\b|\bweighting\b|\breplicates?\b|\bbrr\b|\bfay\b|\bw_fstuwt\b|"
                      r"\bsenate\b|\bsampling (design|variance)\b|\bstandard errors?\b", re.I),
           _all("W_FSTUWT", "W_FSTURWT1-80", "SENWT"),
+          unless=re.compile(r"\b(height|body|bmi|kilo|obes|overweight|diet|birth ?weight)\b", re.I),
           note="W_FSTUWT is the final student weight for every point estimate; the 80 "
                "Fay-BRR replicate weights (k = 0.5) give the sampling variance as the sum of "
                "squared replicate deviations divided by 20; SENWT (senate weight) makes every "
                "economy count equally when pooling. School files carry W_SCHGRNRABWT (2018, 2022)"),
     Topic("identifiers for merging files",
-          re.compile(r"\b(identifiers?|ids?|student id|school id|country code|merge|merging|"
+          re.compile(r"\b(identifiers?|identif\w+ (the |a |each )?(school|student|country)|ids?|"
+                     r"student id|school id|school code|country code|merge|merging|"
                      r"join(ing)?|link(ing)? (the )?(student|school|files?))\b", re.I),
           _all("CNT", "CNTRYID", "CNTSCHID", "CNTSTUID", "STRATUM", "OECD", "ADMINMODE"),
           note="students join their school on CNT + CNTSCHID (the app's stu_sch view does "
@@ -220,22 +227,30 @@ TOPICS: list[Topic] = [
                "(your intelligence is something about you that you cannot change very much); "
                "no growth-mindset measure in 2025"),
     Topic("mathematics anxiety and self-efficacy",
-          re.compile(r"anxiet|anxious|self-?efficacy|confiden(ce|t)\b", re.I),
+          re.compile(r"math\w*[- ]anxiety|anxiety (about|in|towards|over) (math|school|tests?|exams?)|"
+                     r"anxious about (math|school|tests?|exams?)|\banxmat\b|self-?efficacy|"
+                     r"\bconfiden(ce|t)\b.{0,30}\b(math|science|reading|learn|school)|"
+                     r"\b(math|science|reading)\w*\b.{0,30}\bconfiden(ce|t)\b", re.I),
           {"2022": ("ANXMAT", "MATHEFF", "MATHEF21", "SDLEFF", "ICTEFFIC"),
            "2025": ("EFFSCIE",)},
           note="mathematics anxiety and mathematics self-efficacy were collected in 2022 "
                "(major domain mathematics); 2025 has science self-efficacy EFFSCIE; 2018 "
-               "(major domain reading) has neither"),
+               "(major domain reading) has neither",
+          unless=re.compile(r"anxiety disorder|clinical|diagnos|mental (health|illness)|depress|"
+                            r"\bteachers?'? self-?efficacy|multicultural|global (issues|competenc)", re.I)),
     Topic("enjoyment and motivation",
-          re.compile(r"\benjoy|\bmotivat|\binterest(ed)? in\b|\bengag(e|ed|ement)\b", re.I),
+          re.compile(r"\benjoy|\bmotivat|\binterest(ed)? in (math|science|reading|school|learning|the subject)|"
+                     r"\b(school|student|learning) engag(e|ed|ement)\b|\bengagement (in|with) (school|learning|"
+                     r"math|science|reading)\b", re.I),
           {"2018": ("JOYREAD", "MASTGOAL", "WORKMAST", "COMPETE"),
            "2022": ("MATHMOT", "PERSEVAGR"),
            "2025": ("JOYSCIE", "ENPROBS", "ENGSCIPR", "PERSEV")},
           note="each cycle asks about its major domain: enjoyment of reading (2018), "
                "motivation in mathematics (2022), enjoyment of science (2025)"),
     Topic("classroom climate and teacher support",
-          re.compile(r"disciplin|classroom climate|teacher support|cognitive activation|"
-                     r"teacher[- ]student relation", re.I),
+          re.compile(r"disciplinary climate|discipline in (the )?(class|school|lessons?|math|science|reading)|"
+                     r"classroom (climate|discipline|management)|teacher support|cognitive activation|"
+                     r"teacher[- ]student relation|student[- ]teacher relation", re.I),
           {"2018": ("DISCLIMA", "TEACHSUP"),
            "2022": ("TEACHSUP", "COGACMCO", "COGACRCO", "RELATST"),
            "2025": ("DISCLISCI", "TEACHSUP", "COGACSC")},
@@ -250,11 +265,63 @@ TOPICS: list[Topic] = [
                "community size from 1 village to 6 megacity"),
     Topic("school resources and size",
           re.compile(r"school (size|resources)|class size|student-?teacher ratio|shortage|"
-                     r"teacher shortage|teaching staff|educational material", re.I),
+                     r"teacher shortage|teaching staff|educational material|\benrol\w*|"
+                     r"\b(number|total) of students\b", re.I),
           {"2018": ("STAFFSHORT", "EDUSHORT", "PROATCE", "CLSIZE", "SCHSIZE", "STRATIO"),
            "2022": ("STAFFSHORT", "EDUSHORT", "PROATCE", "CLSIZE", "SCHSIZE", "STRATIO"),
            "2025": ("STAFFSHORT", "EDUSHORT", "PROATCE", "CLSIZE")}, instrument="sch_qqq",
           note="principal-reported (sch_qqq); SCHSIZE and STRATIO are not in the 2025 file"),
+    Topic("school staff composition",
+          re.compile(r"\b(staff|teachers?) (composition|numbers?|count|certif\w+|qualif\w+)|"
+                     r"\b(number|proportion|share|percentage) of (teachers|staff|certified|female (science )?teachers)|"
+                     r"\bnon-?teaching staff|\bfully certified|\bteacher certification", re.I),
+          {"2018": ("PROATCE", "TOTAT"), "2022": ("PROATCE", "PROADMIN", "PROOSTAF", "TOTAT"),
+           "2025": ("PROATCE", "PROADMIN", "PROFEMST", "PROWBST")}, instrument="sch_qqq",
+          note="principal-reported (sch_qqq): PROATCE = proportion of fully certified teachers, "
+               "TOTAT = total teachers (not in 2025), PROADMIN = proportion of administrative staff, "
+               "PROOSTAF = other non-teaching staff (2022), PROFEMST = proportion of female science "
+               "teachers and PROWBST = staff focused on well-being (2025)"),
+    Topic("remote instruction and the pandemic (2022)",
+          re.compile(r"\b(remote|distance|online) (instruction|learning|teaching|schooling)|\bpandemic|"
+                     r"\bcovid|\bcoronavirus|\bschool closures?|\blockdown", re.I),
+          {"2022": ("SCHSUST", "PROBSELF")},
+          note="2022 only, student side: SCHSUST (school support during closures) and PROBSELF "
+               "(problems with self-directed learning); the school questionnaire adds SCPREPBP / "
+               "SCPREPAP (preparation for remote instruction before / in response to the pandemic) "
+               "and PROBSCRI (problems providing remote instruction) in sch_qqq_2022"),
+    Topic("environmental education (2025)",
+          re.compile(r"\benvironmental (education|awareness|issues?|learning|science|activit\w+|"
+                     r"responsib\w+|topics?|protection|problems?|change|attitudes?)|\bthe environment\b|"
+                     r"\bclimate change|\bsustainab\w*|\becolog\w*|\bgreen\b", re.I),
+          {"2025": ("ENVAWARE", "ENVCAPCH", "COLLENEFF", "ENVAPART", "OPENVLRN", "PQENVOPT", "PQENPERC")},
+          note="2025 only (science major domain): student environmental awareness, capacity for "
+               "change, collective efficacy, participation and opportunities to learn; PQ* are the "
+               "parent items in the student file; OPPACTENV (school opportunities) is in sch_qqq_2025 "
+               "and TCENWARE (teachers' awareness) in tch_qqq_2025",
+          unless=re.compile(r"school climate|classroom climate|disciplinary", re.I)),
+    Topic("feedback from teachers",
+          re.compile(r"\bfeedback\b", re.I),
+          {"2018": ("PERFEED",)},
+          note="PERFEED (perceived feedback, WLE) is the student-side index, 2018 only; the teacher "
+               "questionnaire has FEEDBINSTR (feedback provided by teachers, tch_qqq 2018 and 2022) "
+               "and the school questionnaire TEAFDBK (feedback to teachers, sch_qqq_2022)"),
+    Topic("parental involvement and support",
+          re.compile(r"\bparent\w* (involve\w*|support|engag\w*|expectation\w*|participat\w*)|"
+                     r"\b(family|home) (support|involve\w*)|\bparents?'? questionnaire|\bparent questionnaire|"
+                     r"\bpq\b", re.I),
+          {"2018": ("PASCHPOL", "CURSUPP", "EMOSUPS", "PQSCHOOL"),
+           "2022": ("PARINVOL", "PASCHPOL", "PAREXPT", "CURSUPP", "FAMSUP", "PQSCHOOL"),
+           "2025": ("PARINVOL", "PAREXPT", "FAMSUP", "PQSCHOOL", "PQFEED", "PQGENSCI", "PQDIGEFF")},
+          note="the parent questionnaire is optional (a subset of economies; its PA*/PQ* items and "
+               "indices sit in the student file); FAMSUP, CURSUPP and EMOSUPS are the students' own "
+               "reports of family support; ENCOURPG (school encouragement of parent involvement) is "
+               "in sch_qqq 2022 and 2025"),
+    Topic("AI use",
+          re.compile(r"\b(ai|a\.i\.|artificial intelligence|chatgpt|chatbots?|generative ai)\b", re.I),
+          {"2025": ("ST438Q01DA", "ST438Q02DA", "ST438Q03DA", "ST438Q04DA", "AIUSESCH", "IC170Q10DA")},
+          note="2025 only: ST438Q01DA-Q04DA (how often students use AI chatbots for schoolwork, "
+               "84 of 90 economies), AIUSESCH (WLE index), IC170Q10DA (ICT questionnaire, 44 "
+               "economies). No PISA cycle has assessed AI literacy"),
     Topic("ICT and digital devices",
           re.compile(r"\bict\b|\bdigital\b|\bcomputers?\b|\binternet\b|\btechnolog|\bdevices?\b|"
                      r"screen time|\bonline\b|\bsmartphones?\b", re.I),
@@ -264,12 +331,6 @@ TOPICS: list[Topic] = [
           note="most ICT indices come from the optional ICT familiarity questionnaire, "
                "administered by a subset of economies in each cycle (the app's coverage "
                "notes say which); ICTRES (ICT resources at home) is in the core questionnaire"),
-    Topic("AI use",
-          re.compile(r"\b(ai|a\.i\.|artificial intelligence|chatgpt|chatbots?|generative ai)\b", re.I),
-          {"2025": ("ST438Q01DA", "ST438Q02DA", "ST438Q03DA", "ST438Q04DA", "AIUSESCH", "IC170Q10DA")},
-          note="2025 only: ST438Q01DA-Q04DA (how often students use AI chatbots for schoolwork, "
-               "84 of 90 economies), AIUSESCH (WLE index), IC170Q10DA (ICT questionnaire, 44 "
-               "economies). No PISA cycle has assessed AI literacy"),
     Topic("educational and career expectations",
           re.compile(r"expectations?|aspirations?|expected (education|occupation)|career|future job", re.I),
           {"2018": ("BSMJ",), "2022": ("EXPECEDU", "BSMJ", "SISCO"), "2025": ("EXPECEDU", "BSMJ", "SISCO")},
@@ -297,9 +358,13 @@ TOPICS: list[Topic] = [
 ]
 
 
-def matching(question: str) -> list[Topic]:
+def matching(question: str, cycles=CYCLES) -> list[Topic]:
+    """Topics the question matches, the most specific (fewest variables in
+    the requested cycles) first, so "AI use" precedes "ICT and digital
+    devices" and a score topic precedes the social-emotional block."""
     text = question or ""
-    return [t for t in TOPICS if t.matches(text)]
+    hits = [t for t in TOPICS if t.matches(text)]
+    return sorted(hits, key=lambda t: (t.size(cycles) == 0, t.size(cycles)))
 
 
 def rows(topics: list[Topic], cycles=CYCLES, label_of=None) -> list[dict]:
