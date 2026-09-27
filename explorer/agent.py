@@ -4316,12 +4316,15 @@ class Agent:
         if not codes:
             return []                     # nothing loaded (CI, offline tests): no catalog read
         names = {}
-        for cycle in ("2025", "2022", "2018"):
-            desc = catalog.describe("CNT", cycle=cycle)
-            desc = desc[desc.table_name.str.startswith("stu_qqq")]
-            if not desc.empty and desc.iloc[0].value_labels:
-                for k, v in json.loads(desc.iloc[0].value_labels).items():
-                    names.setdefault(k, v)
+        try:
+            for cycle in ("2025", "2022", "2018"):
+                desc = catalog.describe("CNT", cycle=cycle)
+                desc = desc[desc.table_name.str.startswith("stu_qqq")]
+                if not desc.empty and desc.iloc[0].value_labels:
+                    for k, v in json.loads(desc.iloc[0].value_labels).items():
+                        names.setdefault(k, v)
+        except Exception:  # noqa: BLE001 — no catalog on disk (CI): the agent's own map, else codes only
+            names = dict(getattr(self, "economy_names", None) or {})
         low = " " + re.sub(r"[^a-z0-9 ]", " ", text.lower()) + " "
         # codes only as written in capitals: ARE, CAN, PER are also English words
         caps = " " + re.sub(r"[^A-Za-z0-9 ]", " ", text) + " "
