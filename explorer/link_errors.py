@@ -71,6 +71,36 @@ def levels_prompt() -> str:
 DOMAIN_RE = re.compile(r"\bPV(?:\{pv\}|\d{1,2})(MATH|READ|SCIE)\b")
 DOMAIN_NAMES = {"MATH": "mathematics", "READ": "reading", "SCIE": "science"}
 
+# Every plausible-value scale in the files, named as the codebook names it
+# (the OECD's own terms: never invented ones). The 2025 science competency
+# subscales and the Learning in the Digital World (LDW) scales carry no link
+# error and appear here only so that user-facing text calls them by their
+# real names; the model saw "PV{pv}CMOD" and made up "Creative Problem
+# Solving: Modelling" and "Science: Earth and Space" before this map existed.
+SCALE_NAMES = {
+    "MATH": "mathematics",
+    "READ": "reading",
+    "SCIE": "science",
+    "GLCM": "global competence",
+    "FLIT": "financial literacy",
+    "CRTH_NC": "creative thinking (number correct)",
+    "CMPS": "Learning in the Digital World: computational problem solving",
+    "CPPK": "Learning in the Digital World: computational practices prior knowledge",
+    "CMOD": "Learning in the Digital World: modelling",
+    "CPRO": "Learning in the Digital World: programming",
+    "SEPS": "science: explain phenomena scientifically",
+    "SEDE": "science: evaluate designs for scientific enquiry",
+    "SEID": "science: evaluate scientific information for decision making",
+    "SENV": "environmental science",
+}
+SCALE_RE = re.compile(r"^\s*PV(?:\{pv\}|\d{1,2})([A-Z_]+?)\s*$")
+
+
+def scale_of(measure: str | None) -> str | None:
+    """The scale code of a plain plausible-value measure (any scale), else None."""
+    m = SCALE_RE.match(str(measure or ""))
+    return m.group(1) if m and m.group(1) in SCALE_NAMES else None
+
 
 def domain_of(measure: str | None) -> str | None:
     """MATH / READ / SCIE when the measure is a plausible-value score."""

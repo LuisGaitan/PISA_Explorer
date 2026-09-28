@@ -355,3 +355,30 @@ def test_translation_that_changes_a_number_is_discarded(monkeypatch):
     assert "localize:numbers_changed" in agent._fired
     monkeypatch.setattr(agent_mod, "generate", lambda *a, **k: "Kosovo obtuvo 357.0 puntos (EE 1.3).")
     assert agent._localize("Kosovo scored 357.0 points (SE 1.3).", "Spanish").startswith("Kosovo obtuvo")
+
+
+def test_prose_cannot_flip_a_pairwise_verdict_the_app_stated():
+    # thinking-free summaries called a significant Colombia-Mexico difference
+    # "not significant" while other pairs in the same table were not
+    # significant, so the verdict SET alone could not catch it
+    t = pd.DataFrame({"CNT": ["FIN", "USA", "BRA"], "estimate": [520.0, 508.0, 400.0],
+                      "se": [2.0, 2.2, 3.0], "n_pv": 10})
+    prov = {"notes": [], "method": "Weighted mean.", "sample": [], "facts": [
+        "Finland (FIN) minus United States (USA) (PISA 2025): 12.0 (SE 2.97, independent samples), statistically significant.",
+        "Finland (FIN) minus Brazil (BRA) (PISA 2025): 120.0 (SE 3.61, independent samples), statistically significant.",
+        "United States (USA) minus Brazil (BRA) (PISA 2025): 108.0 (SE 3.72, independent samples), statistically significant.",
+    ]}
+    plan = {"template": "weighted_mean"}
+    bad = summ.check_prose("Finland scored 520.0 points (SE 2.0). There was no statistically significant "
+                           "difference between Finland and the United States, or between Brazil and Finland.",
+                           t, prov, plan, "", _mentioned, {"FIN", "USA", "BRA"})
+    assert any("FIN-USA" in i and "not significant" in i for i in bad), bad
+    ok = summ.check_prose("Finland scored 520.0 points (SE 2.0), 12.0 points more than the United States "
+                          "(SE 2.97), a statistically significant difference.",
+                          t, prov, plan, "", _mentioned, {"FIN", "USA", "BRA"})
+    assert ok == []
+    # a claim about a pair the app never compared is left to the verdict check
+    prov2 = {**prov, "facts": prov["facts"][1:]}
+    two = summ.check_prose("The difference between Finland and the United States was not statistically significant.",
+                           t, prov2, plan, "", _mentioned, {"FIN", "USA", "BRA"})
+    assert not any("FIN-USA" in i for i in two)

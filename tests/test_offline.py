@@ -722,3 +722,134 @@ def test_false_claims_nested_in_cycle_overrides_are_corrected_too(monkeypatch):
     agent._verify_substitution_claims(plan)
     assert "substitution_note" not in plan["cycle_overrides"]["2025"]
     assert "standard convention" in plan["substitution_note"] and "ST004D01T" in plan["_claim_corrected"]
+
+
+def test_scale_names_come_from_the_codebook_not_the_model():
+    # the model saw "PV{pv}CMOD" and invented "Creative Problem Solving:
+    # Modelling" and "Science: Earth and Space" for a Harvard user
+    from explorer.agent import Agent
+    from explorer import link_errors
+    assert Agent._measure_label("PV{pv}MATH") == "Mathematics score"
+    assert Agent._measure_label("PV{pv}CMOD") == "Learning in the Digital World: modelling score"
+    assert Agent._measure_label("PV{pv}CPRO") == "Learning in the Digital World: programming score"
+    assert Agent._measure_label("PV{pv}SEDE") == "Science: evaluate designs for scientific enquiry score"
+    assert Agent._measure_label("PV{pv}SENV") == "Environmental science score"
+    assert Agent._measure_label("PV{pv}MATH / 100") == "Mathematics divided by 100"
+    assert link_errors.scale_of("PV{pv}SEID") == "SEID" and link_errors.scale_of("PV3CPPK") == "CPPK"
+    assert link_errors.scale_of("ESCS") is None and link_errors.scale_of("PV{pv}XYZW") is None
+    plain = Agent._plain("PV{pv}CMPS and PV1SEPS by country")
+    assert "PV" not in plain and "computational problem solving score" in plain \
+        and "explain phenomena scientifically score" in plain
+    # link errors stay confined to the three core domains
+    assert set(link_errors.DOMAIN_NAMES) == {"MATH", "READ", "SCIE"}
+
+
+def _synthetic_frame(seed=0, n=400, groups=("A", "B", "C")):
+    rng = np.random.default_rng(seed)
+    df = pd.DataFrame({"CNT": rng.choice(list(groups), n), "CNTSCHID": rng.integers(1, 20, n)})
+    for w in ALL_WEIGHTS:
+        df[w] = rng.uniform(0.5, 2.0, n)
+    for i in range(1, 11):
+        df[f"m_{i}"] = rng.normal(500, 90, n)
+    df["m_11"] = rng.normal(0, 1, n)
+    df.loc[rng.choice(n, 40, replace=False), "m_11"] = np.nan   # an index missing for some
+    # a PV missing for a few students only (masks differ between PV columns)
+    df.loc[rng.choice(n, 5, replace=False), "m_3"] = np.nan
+    return df
+
+
+def _reference_replicates(df, cols, by):
+    """The original per-column masked loop, kept as the oracle."""
+    n_pv, n_w = len(cols), len(ALL_WEIGHTS)
+    frames = []
+    for key, g in df.groupby(list(by), dropna=False, observed=True):
+        key = key if isinstance(key, tuple) else (key,)
+        w = g[ALL_WEIGHTS].to_numpy(dtype=float)
+        est = np.empty((n_pv, n_w))
+        for i, c in enumerate(cols):
+            m = g[c].to_numpy(dtype=float)
+            mask = ~np.isnan(m)
+            wm = w[mask]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                est[i] = (wm.T @ m[mask]) / wm.sum(axis=0)
+        fr = pd.DataFrame({"pv": np.repeat(np.arange(1, n_pv + 1), n_w),
+                           "rep": np.tile(np.arange(n_w), n_pv), "value": est.ravel()})
+        for c, v in zip(by, key):
+            fr[c] = v
+        frames.append(fr)
+    return pd.concat(frames, ignore_index=True)
+
+
+def test_estimator_matrix_form_matches_the_masked_loop_and_batches_measures():
+    from explorer.estimator import replicates_from_frame, replicates_from_frame_multi
+    df = _synthetic_frame()
+    pv_cols = [f"m_{i}" for i in range(1, 11)]
+    by = ("CNT",)
+    for cols in (pv_cols, ["m_11"]):
+        got = combine(replicates_from_frame(df, cols, by=by), by=by)
+        ref = combine(_reference_replicates(df, cols, by), by=by)
+        assert np.allclose(got["estimate"].astype(float), ref["estimate"].astype(float), rtol=1e-12)
+        assert np.allclose(got["se"].astype(float), ref["se"].astype(float), rtol=1e-9)
+    # several measures in one pass: each frame equals its single-measure run
+    multi = replicates_from_frame_multi(df, [pv_cols, ["m_11"]], by=by)
+    for cols, reps in zip([pv_cols, ["m_11"]], multi):
+        single = replicates_from_frame(df, cols, by=by)
+        pd.testing.assert_frame_equal(reps.reset_index(drop=True), single.reset_index(drop=True))
+    # n counts the students observed on the FIRST plausible value; n_schools the schools among them
+    one = combine(replicates_from_frame(df, ["m_11"], by=by), by=by)
+    for cnt, grp in df.groupby("CNT"):
+        row = one[one.CNT == cnt].iloc[0]
+        assert row["n"] == int(grp["m_11"].notna().sum())
+        assert row["n_schools"] == grp.loc[grp["m_11"].notna(), "CNTSCHID"].nunique()
+    # a group with nothing observed yields no estimate, no SE
+    df2 = df.copy()
+    df2.loc[df2.CNT == "B", "m_11"] = np.nan
+    out = combine(replicates_from_frame(df2, ["m_11"], by=by), by=by)
+    assert np.isnan(out.loc[out.CNT == "B", "estimate"].iloc[0]) and np.isnan(out.loc[out.CNT == "B", "se"].iloc[0])
+
+
+def test_codes_left_out_by_a_filter_on_the_grouping_column(monkeypatch):
+    from explorer import catalog
+    from explorer.agent import Agent
+    labels = {"1.0": "A village, hamlet or rural area (fewer than 3 000 people)",
+              "2.0": "A small town (3 000 to about 15 000 people)",
+              "3.0": "A town (15 000 to about 100 000 people)",
+              "4.0": "A city (100 000 to about 1 000 000 people)",
+              "5.0": "A large city (1 000 000 to about 10 000 000 people)",
+              "6.0": "A megacity (with over 10 000 000 people)",
+              "95.0": "valid skip (filter rule)", "96.0": "system missing", "99.0": "no response"}
+    desc = pd.DataFrame([{"variable": "SC001Q01TA", "cycle": "2025", "table_name": "sch_qqq_2025",
+                          "label": "community", "value_labels": json.dumps(labels)}])
+    monkeypatch.setattr(catalog, "describe", lambda code, cycle=None: desc if code == "SC001Q01TA" else desc.iloc[0:0])
+    monkeypatch.setattr(Agent, "underlying_tables", staticmethod(lambda t: ["stu_qqq_2025", "sch_qqq_2025"]))
+    kept, out = Agent._codes_left_out("SC001Q01TA", "CNT = 'AUT' AND SC001Q01TA IN (1, 2, 4, 5)", "stu_sch_2025")
+    assert kept == ["1", "2", "4", "5"] and [c for c, _ in out] == ["3", "6"]
+    assert out[0][1].startswith("A town (15 000")
+    # only the codes that occur in the data are named
+    kept, out = Agent._codes_left_out("SC001Q01TA", "CNT = 'AUT' AND SC001Q01TA IN (1, 2, 4, 5)", "stu_sch_2025",
+                                      present={1.0, 2.0, 3.0, 4.0})
+    assert kept == ["1", "2", "4"] and [c for c, _ in out] == ["3"]
+    kept, out = Agent._codes_left_out("SC001Q01TA", "SC001Q01TA NOT IN (3)", "stu_sch_2025")
+    assert [c for c, _ in out] == ["3"] and "95" not in kept
+    kept, out = Agent._codes_left_out("SC001Q01TA", "SC001Q01TA >= 4", "stu_sch_2025")
+    assert kept == ["4", "5", "6"] and [c for c, _ in out] == ["1", "2", "3"]
+    assert Agent._codes_left_out("SC001Q01TA", "CNT = 'AUT' AND ESCS > 0", "stu_sch_2025") == ([], [])
+    assert Agent._codes_left_out("ESCS", "ESCS > 0", "stu_qqq_2025") == ([], [])
+
+
+def test_thinking_budget_per_role(monkeypatch):
+    from explorer import llm
+    monkeypatch.delenv("PISA_THINKING_SUMMARY", raising=False)
+    monkeypatch.delenv("PISA_THINKING_PLANNER", raising=False)
+    assert llm.thinking_budget("translate") == 0
+    # the router, planner and summarizer keep dynamic thinking: without it
+    # the router sent the Ukraine 2018-2025 trend to a clarify in 3 of 8
+    # live runs and the summarizer misstated a significance verdict
+    assert llm.thinking_budget("summary") is None and llm.thinking_budget("router") is None
+    assert llm.thinking_budget("planner") is None and llm.thinking_budget(None) is None
+    monkeypatch.setenv("PISA_THINKING_SUMMARY", "1024")
+    assert llm.thinking_budget("summary") == 1024
+    monkeypatch.setenv("PISA_THINKING_PLANNER", "0")
+    assert llm.thinking_budget("planner") == 0
+    monkeypatch.setenv("PISA_THINKING_PLANNER", "auto")
+    assert llm.thinking_budget("planner") is None

@@ -53,6 +53,18 @@ def test_topics_match_the_questions_students_ask():
     assert "socio-economic status" in {t.construct for t in topics.matching("which variables measure socioeconomic status in 2018?")}
     # a domain word without a score word is not a score question
     assert not [t for t in topics.matching("reading enjoyment") if t.construct == "reading score"]
+    # school tracks and programmes (a Tartu user asked for Mittelschule vs
+    # Gymnasium and was told no variable existed: PROGN and ISCEDP do)
+    for q in ("Is there also classification into Mittelschule and Gymnasium in Austria?",
+              "compare general and vocational programmes in Italy",
+              "what variable gives the ISCED level of the student's programme",
+              "what types of schools are there in Germany's sample"):
+        assert "study programme and school track" in {t.construct for t in topics.matching(q)}, q
+    assert not [t for t in topics.matching("How do you track my data?")
+                if t.construct == "study programme and school track"]
+    track = [t for t in topics.TOPICS if t.construct == "study programme and school track"][0]
+    assert track.variables == {"2018": ("PROGN", "ISCEDL", "ISCEDD", "ISCEDO"),
+                               "2022": ("PROGN", "ISCEDP"), "2025": ("PROGN", "ISCEDP")}
 
 
 def test_topic_answer_lines_name_the_codes_per_cycle():

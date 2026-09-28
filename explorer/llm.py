@@ -28,6 +28,31 @@ ROLE_MODELS = {
 
 def model_for(role: str | None) -> str:
     return ROLE_MODELS.get(role or "", DEFAULT_MODEL)
+
+
+# Gemini 2.5 "thinks" before every reply unless told how much: with no
+# budget the summarizer spent most of its 10-30 s per call thinking about
+# how to phrase statements the app had already verified. A budget of 0
+# turns thinking off for a role; unset keeps the model's dynamic default.
+# The router and planner keep it: without it the router sent "How did
+# Ukraine's reading score change from 2018 to 2025?" to a clarify in 3 of 8
+# runs (7 of 7 to data with it). The summarizer keeps it too: with a budget
+# of 0 it saved 3-5 s per answer but called a significant Colombia-Mexico
+# difference "not significant" in 1 of 3 runs and skipped the pair in the
+# other two (an Opus review of 49 questions, 2026-09-28). Only the
+# translator, which rewrites a finished answer, runs without thinking.
+# PISA_THINKING_<ROLE> (SUMMARY, ROUTER, PLANNER, TRANSLATE) overrides.
+_THINKING_DEFAULTS = {"translate": 0}
+
+
+def thinking_budget(role: str | None) -> int | None:
+    raw = os.environ.get(f"PISA_THINKING_{(role or '').upper()}")
+    if raw is not None and raw.strip() != "":
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return _THINKING_DEFAULTS.get(role or "")
 # Greedy decoding by default. The router and planner are classifiers that
 # fill a schema: at 0.2 the same question produced different search terms,
 # variables and even templates from run to run, which made two users' answers
@@ -132,6 +157,9 @@ def generate(
         body["systemInstruction"] = {"parts": [{"text": system}]}
     if json_mode:
         body["generationConfig"]["responseMimeType"] = "application/json"
+    budget = thinking_budget(role)
+    if budget is not None:
+        body["generationConfig"]["thinkingConfig"] = {"thinkingBudget": budget}
 
     request = urllib.request.Request(
         _ENDPOINT.format(model=model),

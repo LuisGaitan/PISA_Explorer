@@ -261,6 +261,8 @@ def compile_contrast(c) -> dict:
     become a NULL-safe CASE (students in neither set stay out)."""
     if not isinstance(c, dict):
         raise GrammarError("a gap needs a contrast object {variable, minuend, subtrahend, label}")
+    if c.get("school_share_of") is not None:
+        return compile_school_share_contrast(c)
     v = str(c.get("variable") or "").strip()
     a, b = c.get("minuend"), c.get("subtrahend")
     a = a if isinstance(a, list) else [a]
@@ -283,6 +285,71 @@ def compile_contrast(c) -> dict:
     la, lb = ", ".join(_num(x) for x in a), ", ".join(_num(x) for x in b)
     return {"group_col": f"CASE WHEN {v} IN ({la}) THEN 1 WHEN {v} IN ({lb}) THEN 0 END",
             "minuend": 1, "subtrahend": 0, "group_label": label or f"{v} in ({la}) minus {v} in ({lb})"}
+
+
+def school_share_expr(v: str, codes: list) -> str:
+    """The weighted share (%) of a student's schoolmates whose `v` is one of
+    `codes`, computed over every student of the school with a valid value —
+    a window over the school, so a filter on the students compared must be
+    written into the CASE (see compile_school_share_contrast), never into
+    WHERE, which would shrink the school to the filtered students."""
+    lst = ", ".join(_num(c) for c in codes)
+    # ELSE 0 in the numerator: a school with none of these students has a
+    # share of 0, not NULL (NULL silently dropped every all-native school,
+    # 23 of Austria's 256, from the "other schools" side).
+    return (f"100.0 * SUM(CASE WHEN {v} IN ({lst}) THEN W_FSTUWT ELSE 0 END) "
+            f"OVER (PARTITION BY CNT, CNTSCHID) / "
+            f"SUM(CASE WHEN {v} IS NOT NULL THEN W_FSTUWT END) OVER (PARTITION BY CNT, CNTSCHID)")
+
+
+def compile_school_share_contrast(c: dict) -> dict:
+    """{"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 50,
+    "students": [2, 3]|null, "label": ...} -> gap fields comparing students
+    in schools where at least `cut` % of students have one of the codes
+    (minuend) with students in schools below the cut (subtrahend);
+    `students` restricts the students compared (immigrant students only)
+    without touching the school composition itself."""
+    spec = c.get("school_share_of")
+    if not isinstance(spec, dict):
+        raise GrammarError("school_share_of takes an object {variable, codes}")
+    v = str(spec.get("variable") or "").strip()
+    if not _is_variable(v):
+        raise GrammarError(f"{v!r} is not a variable in the catalog (school share)")
+    codes = spec.get("codes")
+    if not isinstance(codes, list) or not codes:
+        raise GrammarError("school_share_of needs the codes that count (a list)")
+    if c.get("cut") is None:
+        raise GrammarError("school_share_of needs \"cut\": the user's threshold as a percentage of "
+                           "the school's students (50 when the question names none)")
+    try:
+        cut = float(c.get("cut"))
+    except (TypeError, ValueError):
+        raise GrammarError("cut must be a number (a percentage of the school's students)")
+    if not 0 < cut <= 100:
+        raise GrammarError("cut must be a percentage between 0 and 100")
+    # a label that names another threshold than the cut would put the user's
+    # words on the wrong numbers ("at least 30%" over a split at 50)
+    named = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s*(?:%|percent|per cent)",
+                                          str(c.get("label") or ""), re.I)]
+    if any(abs(x - cut) > 1e-9 for x in named):
+        raise GrammarError(f"the label names {named[0]:g}% but cut is {cut:g}; make them the same")
+    students = c.get("students")
+    if students is not None:
+        students = students if isinstance(students, list) else [students]
+        if not students:
+            students = None
+    share = school_share_expr(v, codes)
+    who = "CNTSCHID IS NOT NULL"
+    if students:
+        who += f" AND {v} IN ({', '.join(_num(s) for s in students)})"
+    group_col = (f"CASE WHEN {who} AND ({share}) >= {cut:g} THEN 1 "
+                 f"WHEN {who} AND ({share}) < {cut:g} THEN 0 END")
+    label = str(c.get("label") or "").strip() or (
+        f"schools where at least {cut:g}% of students have {v} in ({', '.join(_num(x) for x in codes)}) "
+        f"minus schools below {cut:g}%")
+    return {"group_col": group_col, "minuend": 1, "subtrahend": 0, "group_label": label,
+            "_school_share": {"variable": v, "codes": [_num(x) for x in codes], "cut": cut,
+                              "students": [_num(s) for s in students] if students else None}}
 
 
 def compile_predictors(preds) -> tuple[list[str], list[str]]:
@@ -453,6 +520,12 @@ def compile_plan(g: dict, invented: dict | None = None, present: set | None = No
     plan["by"] = _by(g.get("by"))
     if template in ("gap",):
         plan.update(compile_contrast(g.get("contrast")))
+        share = plan.get("_school_share")
+        if share and re.search(r"\b" + re.escape(share["variable"]) + r"\b", where or ""):
+            raise GrammarError(
+                f"a filter on {share['variable']} would shrink every school to the filtered "
+                "students before its composition is measured; restrict the students compared "
+                "with the contrast's \"students\" list instead")
     if template in ("quartile_means", "quartile_gap", "resilient_share"):
         qv = str(g.get("quart_variable") or "ESCS").strip()
         if not _is_variable(qv):
@@ -614,7 +687,16 @@ column you invent):
             LISTS of codes of ONE variable — immigrant = IMMIG [2, 3] vs
             native [1]; rural = SC001Q01TA [1, 2] vs city [4, 5, 6], with a
             label that names what is left out; variable "CNT" with one economy
-            code on each side for economy A minus economy B),
+            code on each side for economy A minus economy B;
+            SCHOOL COMPOSITION — students in schools with many vs few of a
+            kind of student: {"school_share_of": {"variable": "IMMIG",
+            "codes": [2, 3]}, "cut": 50, "students": [2, 3]|null, "label":
+            "immigrant students in schools where at least half the students
+            have an immigrant background minus those in other schools"} — the
+            app computes each school's weighted share of students with the
+            codes, splits schools at the cut (%), and compares the students
+            listed in "students" (null = every student); never filter on the
+            same variable — put the restriction in "students"),
  "quart_variable": "ESCS"   (quartile_means / quartile_gap / resilient_share;
             also allowed with correlation or regression to run them WITHIN
             each quarter),
@@ -695,6 +777,23 @@ GENDER: contrast ST004D01T minuend [2] (male) subtrahend [1] (female) in
 minuend [2] (private) subtrahend [1] (public), instrument stu_sch.
 Immigrant vs native: IMMIG minuend [1] (native) subtrahend [2, 3], label
 "non-immigrant minus immigrant" (or the reverse, labelled).
+SCHOOL COMPOSITION ("schools with many immigrant students vs few",
+"immigrant students in immigrant schools vs ordinary schools", "schools
+where most students are disadvantaged", "how many schools are X schools")
+=> statistic "gap" with a school_share_of contrast on the student variable
+(IMMIG codes [2, 3]; a questionnaire code otherwise), "cut" = the user's
+threshold in % (50 when none is named — say so in the explanation), and
+"students" = the codes of the students compared when the question is about
+a kind of student (immigrant students => [2, 3]; null for all students);
+the app also reports how many schools fall on each side and how many
+students it sampled per school — never clarify that schools cannot be
+classified, and never plan raw_sql for it.
+A FOLLOW-UP that asks for the levels behind a contrast ("what was the
+result in cities and in villages?", "show me each group") => statistic
+"mean" grouped by the variable with NO filter on that variable: every
+category is shown, including the ones the earlier contrast left out.
+Keep a filter from an earlier turn only when the new question still asks
+for that restriction.
 DIFFERENCES BETWEEN ECONOMIES ("gap in A minus gap in B", "difference between
 A and B and did it change", "which countries are statistically tied with A")
 are never a reason to clarify: plan the statistic for BOTH (or all)

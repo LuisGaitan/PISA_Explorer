@@ -174,6 +174,15 @@ analysis and phrases the result. Four mechanisms keep the seams honest:
   be set (`PISA_ROUTER_MODEL`, `PISA_PLANNER_MODEL`, `PISA_SUMMARY_MODEL`,
   `PISA_TRANSLATE_MODEL`); `scripts/planner_compare.py` runs the live golden
   set per planner model and reports pass rate, latency and tokens.
+- **School composition.** "Immigrant students in immigrant schools vs
+  ordinary schools", "schools where most students are disadvantaged": a gap
+  whose sides are schools above and below a cut in the weighted share of
+  their sampled students with a given code (`school_share_of` in the plan
+  grammar), optionally restricted to one kind of student; the notes state
+  how many sampled schools fall on each side, the spread of the school
+  shares and the students sampled per school. A filter on a grouping
+  variable (a follow-up that inherited "towns excluded") is named in the
+  notes with the categories it leaves out.
 - **More statistics.** Weighted standard deviation; the OECD's academically
   resilient share (bottom ESCS quarter, top performance quarter within the
   economy, per plausible value, or "at or above Level N"); the

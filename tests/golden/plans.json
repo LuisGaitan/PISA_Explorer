@@ -2242,6 +2242,95 @@
           }
         ]
       }
+    },
+    {
+      "name": "aut_immigrant_students_by_school_composition_2025",
+      "verified": "Tartu user, 2026-09-28: immigrant students in majority-immigrant Austrian schools vs immigrant students elsewhere (math, 2025); school share = weighted share of the school's sampled students with IMMIG 2/3, 0 (not NULL) for an all-native school; 50 of 256 schools at or above 50%",
+      "plan": {
+        "template": "gap",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "by": [
+          "CNT"
+        ],
+        "where": "CNT = 'AUT'",
+        "group_col": "CASE WHEN CNTSCHID IS NOT NULL AND IMMIG IN (2, 3) AND (100.0 * SUM(CASE WHEN IMMIG IN (2, 3) THEN W_FSTUWT END) OVER (PARTITION BY CNT, CNTSCHID) / SUM(CASE WHEN IMMIG IS NOT NULL THEN W_FSTUWT END) OVER (PARTITION BY CNT, CNTSCHID)) >= 50 THEN 1 WHEN CNTSCHID IS NOT NULL AND IMMIG IN (2, 3) AND (100.0 * SUM(CASE WHEN IMMIG IN (2, 3) THEN W_FSTUWT END) OVER (PARTITION BY CNT, CNTSCHID) / SUM(CASE WHEN IMMIG IS NOT NULL THEN W_FSTUWT END) OVER (PARTITION BY CNT, CNTSCHID)) < 50 THEN 0 END",
+        "minuend": 1,
+        "subtrahend": 0,
+        "group_label": "immigrant students in schools where at least half the students have an immigrant background minus those in other schools",
+        "_school_share": {
+          "variable": "IMMIG",
+          "codes": [
+            "2",
+            "3"
+          ],
+          "cut": 50.0,
+          "students": [
+            "2",
+            "3"
+          ]
+        },
+        "_question": "immigrant students in immigrant schools vs ordinary schools in Austria"
+      },
+      "expect": {
+        "rows": 1,
+        "cells": [
+          {
+            "match": {
+              "CNT": "AUT"
+            },
+            "estimate": -68.8,
+            "se": 8.47
+          }
+        ],
+        "notes_contain": [
+          "50 of 256 sampled schools have at least 50% of students",
+          "3% at the 10th percentile, 21% at the median and 70% at the 90th",
+          "Students sampled per school in Austria (AUT), PISA 2025: a median of 33"
+        ],
+        "notes_forbid": [
+          "of 233 sampled schools"
+        ]
+      }
+    },
+    {
+      "name": "aut_location_means_with_inherited_filter_2025",
+      "verified": "Tartu user, 2026-09-28: the follow-up to a city-vs-village gap inherited the gap's exclusion of towns (SC001Q01TA IN (1, 2, 4, 5)); the table must say code 3 is left out (and not list a megacity Austria has none of)",
+      "plan": {
+        "template": "weighted_mean",
+        "measure": "PV{pv}MATH",
+        "cycles": [
+          "2025"
+        ],
+        "instrument": "stu_sch",
+        "by": [
+          "CNT",
+          "SC001Q01TA"
+        ],
+        "where": "CNT = 'AUT' AND SC001Q01TA IN (1, 2, 4, 5)",
+        "_question": "what was the result in a city and in a village"
+      },
+      "expect": {
+        "rows": 3,
+        "cells": [
+          {
+            "match": {
+              "CNT": "AUT",
+              "SC001Q01TA": "2.0"
+            },
+            "estimate": 474.95,
+            "se": 5.52
+          }
+        ],
+        "notes_contain": [
+          "the filter keeps codes 1, 2, 4; left out: 3 (A town (15 000 to about 100 000 people))"
+        ],
+        "notes_forbid": [
+          "megacity"
+        ]
+      }
     }
   ]
 }

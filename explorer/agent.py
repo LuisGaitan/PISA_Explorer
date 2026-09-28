@@ -39,6 +39,7 @@ from .analysis import (
     resilient_share,
     trend,
     weighted_mean,
+    weighted_means,
     weighted_proportion,
     weighted_sd,
 )
@@ -194,11 +195,15 @@ linked). Uzbekistan (UZB) took all three tests in 2025 but the OECD released
 only its SCIENCE results (mathematics and reading plausible values are not in
 the public database — its rows show no estimate for those domains; never say
 they were "not collected"). Extra 2025 PVs:
-science competency subscales PV{{pv}}SEPS / PV{{pv}}SEDE / PV{{pv}}SEID,
-environmental science PV{{pv}}SENV, and the new "Learning in the Digital World"
-domain PV{{pv}}CMPS (computational problem solving), PV{{pv}}CPPK
-(computational practices / prior knowledge), PV{{pv}}CMOD, PV{{pv}}CPRO
-(computer-based economies only). The 2025 student file also carries the
+science competency subscales PV{{pv}}SEPS (explain phenomena scientifically),
+PV{{pv}}SEDE (evaluate designs for scientific enquiry), PV{{pv}}SEID (evaluate
+scientific information for decision making), environmental science
+PV{{pv}}SENV, and the new "Learning in the Digital World" (LDW) domain
+PV{{pv}}CMPS (computational problem solving), PV{{pv}}CPPK (computational
+practices prior knowledge), PV{{pv}}CMOD (LDW modelling subscale), PV{{pv}}CPRO
+(LDW programming subscale) (computer-based economies only). Call these scales
+by exactly these codebook names in explanations and labels — there is no
+"Earth and Space", "Living Systems" or "Creative Problem Solving" scale. The 2025 student file also carries the
 ICT-familiarity (IC*) and parent-questionnaire (PA*) items; tch_qqq_2025
 covers 19 economies. stu_ttm = cognitive item process data (2018, 2025);
 stu_tim = questionnaire timing (all cycles); ldw_cog_2025 = LDW item
@@ -1538,7 +1543,7 @@ class Agent:
         # mean score; in a gap or quartile table a blank cell usually means an
         # empty group (no private schools sampled, say)
         release_wording = plan.get("template") == "weighted_mean" and \
-            all(link_errors.is_mean_score(m) for m in measures)
+            all(link_errors.scale_of(m) for m in measures)
         measure = measures[0] if release_wording else None
         """Blank estimates explained: an economy that was not in a cycle is
         said so; anything else is a variable not administered / no valid
@@ -1589,17 +1594,19 @@ class Agent:
                     mask.loc[absent_rows, col] = False
         n_missing = int(mask.any(axis=1).sum())
         if n_missing:
-            domain = link_errors.domain_of(measure)
-            if domain and "CNT" in table.columns:
+            scale = link_errors.scale_of(measure)
+            if scale and "CNT" in table.columns:
                 rows = table["CNT"].astype(str)[mask.any(axis=1)]
                 who = self._names(sorted(c for c in set(rows) if not c.endswith(" avg"))[:12])
+                name = link_errors.SCALE_NAMES[scale]
                 notes.append(
-                    f"{n_missing} row(s) have no {link_errors.DOMAIN_NAMES[domain]} "
+                    f"{n_missing} row(s) have no {name} "
                     f"estimate ({who}): those economies took part, but the OECD did "
-                    f"not release their {link_errors.DOMAIN_NAMES[domain]} results in "
+                    f"not release their {name} results in "
                     "the public database for that cycle (no plausible values — e.g. "
-                    "Uzbekistan 2025 in mathematics and reading). They are listed in "
-                    "the table but excluded from the chart.")
+                    "Uzbekistan 2025 in mathematics and reading, and six economies in the "
+                    "2025 science subscales and Learning in the Digital World). They are "
+                    "listed in the table but excluded from the chart.")
             else:
                 notes.append(
                     f"{n_missing} row(s) have no estimate — the variable was not "
@@ -1981,6 +1988,99 @@ class Agent:
             pass
         return text
 
+    def _codes_present(self, col: str, table: str, where: str) -> set[float] | None:
+        """The codes of `col` that occur in `table` for the economies the
+        filter names (so a note never lists a megacity for Austria); None
+        when that cannot be read."""
+        try:
+            self._check_identifier(col)
+            m = re.search(r"\bCNT\s*(?:=\s*'[A-Z]{3}'|IN\s*\([^)]*\))", where or "")
+            clause = f" AND {m.group(0)}" if m else ""
+            rows = self.con.sql(f"SELECT DISTINCT {col} FROM {table} WHERE {col} IS NOT NULL{clause}").fetchall()
+            return {float(r[0]) for r in rows}
+        except Exception:  # noqa: BLE001 — the note then lists every codebook code
+            return None
+
+    @staticmethod
+    def _codes_left_out(col: str, where: str, table: str,
+                        present: set[float] | None = None) -> tuple[list[str], list[tuple[str, str]]]:
+        """(codes the filter keeps, [(code, label)] of the valid codes it drops)
+        for a grouping column that `where` also filters; ([], []) when the
+        column is not filtered or has no codebook codes. `present` limits the
+        codes considered to those that occur in the data."""
+        try:
+            desc = catalog.describe(col, cycle=table.rsplit("_", 1)[-1])
+            desc = desc[desc.table_name.isin(Agent.underlying_tables(table))]
+            if desc.empty or not desc.iloc[0].value_labels:
+                return [], []
+            labels = json.loads(desc.iloc[0].value_labels)
+        except Exception:  # noqa: BLE001 — a note is a nicety
+            return [], []
+        valid: dict[float, tuple[str, str]] = {}
+        for code, text in labels.items():
+            try:
+                num = float(code)
+            except (TypeError, ValueError):
+                continue
+            if Agent.MISSING_LABEL.search(str(text or "")):
+                continue
+            if present is not None and num not in present:
+                continue
+            valid[num] = (f"{num:g}", str(text or "")[:70])
+        if not valid:
+            return [], []
+        col_rx = re.escape(col)
+        m = re.search(rf"\b{col_rx}\s+(NOT\s+IN|IN)\s*\(([^)]*)\)", where, re.I)
+        kept: set[float] | None = None
+        if m:
+            listed = {float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", m.group(2))}
+            kept = listed if m.group(1).upper() == "IN" else set(valid) - listed
+        else:
+            m = re.search(rf"\b{col_rx}\s*(=|!=|<>|<=|>=|<|>)\s*(-?\d+(?:\.\d+)?)", where)
+            if not m:
+                return [], []
+            op, val = m.group(1), float(m.group(2))
+            test = {"=": lambda c: c == val, "!=": lambda c: c != val, "<>": lambda c: c != val,
+                    "<=": lambda c: c <= val, ">=": lambda c: c >= val,
+                    "<": lambda c: c < val, ">": lambda c: c > val}[op]
+            kept = {c for c in valid if test(c)}
+        left_out = [valid[c] for c in sorted(valid) if c not in kept]
+        kept_codes = [valid[c][0] for c in sorted(valid) if c in kept]
+        return kept_codes, left_out
+
+    def _school_split(self, plan: dict, tbl: str, where: str | None, cycle: str) -> None:
+        """For a school-composition contrast: how many sampled schools fall
+        on each side of the cut per economy, the spread of the school shares
+        and the students sampled per school — stored on the plan for the
+        provenance notes (never a school-level record)."""
+        share = plan.get("_school_share") or {}
+        v, codes, cut = share.get("variable"), share.get("codes") or [], share.get("cut")
+        if not v or not codes or cut is None:
+            return
+        self._check_identifier(str(v))
+        lst = ", ".join(str(float(c)) for c in codes)
+        clause = f" AND ({where})" if where else ""
+        sql = (f"WITH s AS (SELECT CNT, CNTSCHID, count(*) AS n, "
+               f"100.0 * sum(CASE WHEN {v} IN ({lst}) THEN W_FSTUWT ELSE 0 END) / "
+               f"sum(CASE WHEN {v} IS NOT NULL THEN W_FSTUWT END) AS share "
+               f"FROM {tbl} WHERE CNTSCHID IS NOT NULL{clause} GROUP BY 1, 2) "
+               f"SELECT CNT, count(*) AS schools, "
+               f"count(*) FILTER (WHERE share >= {float(cut)}) AS schools_at_or_above, "
+               f"quantile_cont(share, 0.1) AS p10, quantile_cont(share, 0.5) AS median, "
+               f"quantile_cont(share, 0.9) AS p90, quantile_cont(n, 0.5) AS students_per_school "
+               f"FROM s WHERE share IS NOT NULL GROUP BY 1 ORDER BY 1")
+        try:
+            rows = self.con.sql(sql).df()
+        except Exception:  # noqa: BLE001 — the note is a nicety, the gap stands
+            return
+        if rows.empty or len(rows) > 12:
+            return      # a note per economy only when a few are named
+        plan.setdefault("_school_split", {})[cycle] = [
+            {"CNT": str(r.CNT), "schools": int(r.schools),
+             "schools_at_or_above": int(r.schools_at_or_above), "p10": float(r.p10),
+             "median": float(r.median), "p90": float(r.p90),
+             "students_per_school": float(r.students_per_school)} for r in rows.itertuples()]
+
     CI_WORDS = re.compile(r"\b(confidence intervals?|95\s*%\s*ci\b|\bci\b|intervalos? de confianza|"
                           r"konfidenzintervall\w*|intervalle de confiance)", re.I)
     CHINA_WORDS = re.compile(r"\b(shanghai|beijing|jiangsu|zhejiang|china|chinese)\b", re.I)
@@ -2106,10 +2206,15 @@ class Agent:
         expr = cls._unwrap_null_safe(str(expr or ""))
         if link_errors.is_mean_score(expr):
             return link_errors.DOMAIN_NAMES[link_errors.domain_of(expr)].capitalize() + " score"
+        scale = link_errors.scale_of(expr)
+        if scale:
+            # a subscale or optional-domain score, named as the codebook names it
+            name = link_errors.SCALE_NAMES[scale]
+            return name[0].upper() + name[1:] + " score"
         m = re.fullmatch(r"\s*PV\{pv\}([A-Z_]+)\s*/\s*([\d.]+)\s*", expr)
         if m and link_errors.domain_of("PV{pv}" + m.group(1)):
             dom = link_errors.DOMAIN_NAMES[link_errors.domain_of("PV{pv}" + m.group(1))]
-            return f"{dom.capitalize()} divided by {m.group(2).rstrip('0').rstrip('.')}"
+            return f"{dom.capitalize()} divided by {float(m.group(2)):g}"
         joint = cls.JOINT_LEVEL.findall(expr)
         if len(joint) >= 2 and re.match(r"^\s*CASE\b", expr, re.I) and \
                 len({op for _, op, _ in joint}) == 1:
@@ -2357,7 +2462,7 @@ class Agent:
     # "What does PISA measure?" — the overview is a fact about the data, not
     # a catalog search.
     OVERVIEW_WORDS = re.compile(
-        r"\bwhat (does|do|is|are|can) (the )?pisa (measur|assess|cover|test|evaluat|includ)|"
+        r"\bwhat (does|do|is|are|can) (the )?(pisa|it) (actually |exactly |really )?(measur|assess|cover|test|evaluat|includ)|"
         r"\bwhat (variables|things|subjects|domains|areas|topics|skills|competenc\w*|"
         r"indicators|dimensions) (does|do|is|are) (the )?pisa (measur|assess|cover|test)|"
         r"what is (measured|assessed) in pisa|what does pisa (look at|examine)",
@@ -2630,14 +2735,7 @@ class Agent:
 
     # User-facing text must not carry the planner's SQL/PV notation.
     PV_CODE = re.compile(r"\bPV(?:\{pv\}|\d{1,2})([A-Z]{4})\b")
-    DOMAIN_NAMES = {"MATH": "mathematics score", "READ": "reading score",
-                    "SCIE": "science score", "CMPS": "Learning in the Digital World score",
-                    "CPPK": "computational practices score", "CMOD": "computational modelling score",
-                    "CPRO": "computational problem-solving score",
-                    "SEPS": "science (explain phenomena) subscale",
-                    "SEDE": "science (design/evaluate) subscale",
-                    "SEID": "science (interpret data) subscale",
-                    "SENV": "environmental science subscale"}
+    DOMAIN_NAMES = {code: name + " score" for code, name in link_errors.SCALE_NAMES.items()}
 
     @classmethod
     def _plain(cls, text: str) -> str:
@@ -3009,6 +3107,17 @@ class Agent:
                           if codes else "FALSE")
                 cwhere = f"({cwhere}) AND {clause}" if cwhere else clause
             parts = []
+            # A profile of several means for the same groups is one pass over
+            # the rows and weights per few measures, not a full scan each
+            # (twelve 2025 scores over 90 economies took over two minutes).
+            batched: dict[str, pd.DataFrame] = {}
+            if multi and template == "weighted_mean" and cycle not in by_per_cycle:
+                todo = [e for _, e in measures_all if not self._unknown_columns(e, tbl)]
+                try:
+                    batched = weighted_means(self.con, tbl, todo, by=by, where=cwhere)
+                    self._fire("hook:batched_measures")
+                except Exception:  # noqa: BLE001 — the one-by-one path below still answers
+                    batched = {}
             for label, expr in (measures_all if multi else [(None, None)]):
                 if expr is not None and self._unknown_columns(expr, tbl):
                     # e.g. GLOBMIND (2018 only) in a 2018-2025 profile: computed
@@ -3017,7 +3126,10 @@ class Agent:
                     continue
                 mplan = {**cplan, "measure": expr} if expr is not None else cplan
                 cby = by_per_cycle.get(cycle, by)
-                res = self._run_template(template, mplan, tbl, cby, cwhere)
+                res = batched[expr] if expr in batched else \
+                    self._run_template(template, mplan, tbl, cby, cwhere)
+                if template == "gap" and plan.get("_school_share"):
+                    self._school_split(plan, tbl, cwhere, cycle)
                 if cby != by:
                     res = res.rename(columns=dict(zip(cby, by)))
                     for src, dst in zip(cby, by):
@@ -3768,6 +3880,43 @@ class Agent:
                          f"school questionnaire for their school — are excluded from the "
                          f"groups in {cycles_txt}, following OECD practice; there is no "
                          "\"overall\" row in this table.")
+        # A filter on a grouping variable (by SC001Q01TA with "SC001Q01TA IN
+        # (1, 2, 4)" — usually inherited from an earlier contrast that left
+        # towns out): the categories NOT in the table are named, so nobody
+        # reads three rows as the whole variable.
+        for col in plan.get("by") or []:
+            if col == "CNT" or not isinstance(where, str) or not tables:
+                continue
+            kept, left_out = self._codes_left_out(col, where, tables[-1],
+                                                  present=self._codes_present(col, tables[-1], where))
+            if not left_out:
+                continue
+            desc = catalog.describe(col)
+            label = desc.iloc[-1].label if not desc.empty and desc.iloc[-1].label else col
+            notes.append(f"Only some categories of {label} ({col}) are in this table: the filter "
+                         f"keeps codes {', '.join(kept)}; left out: "
+                         + "; ".join(f"{code} ({text})" for code, text in left_out)
+                         + ". Ask for the variable without that filter to see every category.")
+            plan.setdefault("_by_filter_excludes", {})[col] = [c for c, _ in left_out]
+            self._fire("hook:by_filter_excludes")
+        for cycle, rows_ in sorted((plan.get("_school_split") or {}).items()):
+            share = plan.get("_school_share") or {}
+            desc = catalog.describe(str(share.get("variable") or ""))
+            vlabel = desc.iloc[-1].label[:60] if not desc.empty and desc.iloc[-1].label \
+                else str(share.get("variable"))
+            cut = share.get("cut")
+            for r in rows_:
+                notes.append(
+                    f"PISA {cycle}, {self._names([r['CNT']])}: {r['schools_at_or_above']} of "
+                    f"{r['schools']} sampled schools have at least {cut:g}% of students with "
+                    f"{vlabel} in ({', '.join(share.get('codes') or [])}); across schools that "
+                    f"share is {r['p10']:.0f}% at the 10th percentile, {r['median']:.0f}% at the "
+                    f"median and {r['p90']:.0f}% at the 90th.")
+                notes.append(
+                    f"Students sampled per school in {self._names([r['CNT']])}, PISA {cycle}: "
+                    f"a median of {r['students_per_school']:.0f} (this is the figure to quote; each "
+                    f"school's share is estimated from its sampled students, weighted, not from "
+                    f"the whole school).")
         qci = self._qci_note(str(plan.get("_question") or ""), plan)
         if qci:
             notes.append(qci)
@@ -4179,7 +4328,9 @@ class Agent:
         if matched:
             lines = topics.answer_lines(matched, cycles)
             first = std_rows[0] if std_rows else None
-            if first and first["_code"].startswith("PV1-10"):
+            if first and first.get("example"):
+                example = first["example"]
+            elif first and first["_code"].startswith("PV1-10"):
                 example = f"mean {first['construct'].replace(' score', '')} score by country in {example_cycle}"
             elif first:
                 example = f"mean {topics.expand(first['_code'])[0]} by country in {example_cycle}"
@@ -4191,6 +4342,22 @@ class Agent:
                          if not related.empty else
                          " The table lists each with its codebook label and the tables it is in.")
                       + f" To analyze one, ask for a statistic — for example \u201c{example}\u201d.")
+            # a named economy that left a listed variable empty in a cycle
+            # (Austria's PROGN in 2025) is said here, not discovered later
+            named = self._economies_in_data(question)
+            if named:
+                gaps = []
+                for t in matched:
+                    for cycle in cycles:
+                        for code in t.variables.get(str(cycle), ()):
+                            cov = self._coverage_for(topics.expand(code)[0], t.instrument, str(cycle))
+                            miss = sorted(set(named) & (cov.get("missing") or set())) if cov and cov.get("partial") else []
+                            if miss:
+                                gaps.append(f"{code} holds no values for {self._names(miss)} in PISA {cycle}")
+                if gaps:
+                    self._fire("explore:named_coverage")
+                    answer += (" Coverage for the economies named: " + "; ".join(gaps)
+                               + " (the variable is in the file, but empty for that economy in that cycle).")
         elif table.empty or not own_hit:
             # the user's own words match no codebook label (only the router's
             # synonyms did): say so — never a list of look-alikes
@@ -4837,7 +5004,11 @@ class Agent:
             self._fire("intercept:attribution")
             return self._attribution_answer()
         bare = self._bare_cycle(text)
-        if bare is not None:
+        # "what about 2018" / "and 2018?" right after an analysis is a
+        # follow-up for the planner (the same question for that cycle), not
+        # a request for the 2018 file overview
+        after_analysis = bool(history and (history[-1] or {}).get("explanation"))
+        if bare is not None and not (bare and after_analysis):
             self._fire("intercept:bare_cycle")
             return self._cycle_answer(bare)
         inst = self.INSTRUMENT_ASK_WORDS.search(text)

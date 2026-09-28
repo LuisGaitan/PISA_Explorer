@@ -30,6 +30,34 @@ def weighted_mean(con, table, measure, by=(), where=None) -> pd.DataFrame:
     return combine(reps, by=tuple(by))
 
 
+# Measures fetched per query when several are asked for the same groups:
+# each plausible-value measure adds ten columns to the 81 weights, so the
+# frame stays under about 700 MB for every economy in a cycle.
+MEASURES_PER_FETCH = 3
+
+
+def weighted_means(con, table, measures, by=(), where=None) -> dict:
+    """Weighted means of SEVERAL measures for the same groups and filter,
+    each exactly what weighted_mean() returns, keyed by measure. The rows
+    and weights are fetched once per few measures and the groups are
+    walked once, instead of a full scan per measure."""
+    from .estimator import _pv_list, fetch_frame, replicates_from_frame_multi
+    out = {}
+    todo = list(dict.fromkeys(measures))
+    for start in range(0, len(todo), MEASURES_PER_FETCH):
+        chunk = todo[start:start + MEASURES_PER_FETCH]
+        exprs, groups = [], []
+        for m in chunk:
+            pvs = _pv_list(m)
+            groups.append([f"m_{i}" for i in range(len(exprs) + 1, len(exprs) + len(pvs) + 1)])
+            exprs.extend(pvs)
+        df = fetch_frame(con, table, exprs, by=tuple(by), where=where)
+        for m, reps in zip(chunk, replicates_from_frame_multi(df, groups, by=tuple(by))):
+            out[m] = combine(reps, by=tuple(by))
+        del df
+    return out
+
+
 def weighted_proportion(con, table, variable, value, by=(), where=None,
                         valid_values=None) -> pd.DataFrame:
     """Percentage of (valid) respondents with `variable` = `value`.

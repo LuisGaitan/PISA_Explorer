@@ -581,6 +581,40 @@ def check_prose(text: str, table: pd.DataFrame | None, provenance: dict | None,
             issues.append(f"claims '{claim}' but no such verdict is in the result: "
                           f"\"{sentence.strip()[:120]}\"")
             break
+    # 3c. a pairwise verdict the app stated ("Mexico (MEX) minus Colombia
+    # (COL) …, statistically significant") contradicted for that pair: the
+    # verdict set above cannot see WHICH pair a sentence is about
+    pair_lines = [line for line in (prov.get("facts") or [])
+                  if " minus " in line and "statistically significant" in line]
+    if pair_lines:
+        for m in SIG_SENTENCE.finditer(text or ""):
+            sentence = m.group(0)
+            claim_neg = bool(NEGATED_SIG.search(sentence))
+            pairs = []
+            for span in re.finditer(r"between\s+(.+?)\s+and\s+(.+?)(?=[,;.]|\s+or\s+|$)", sentence, re.I):
+                a, b = mentioned(span.group(1)), mentioned(span.group(2))
+                if len(a) == 1 and len(b) == 1 and a[0] != b[0]:
+                    pairs.append((a[0], b[0]))
+            if not pairs:
+                codes = list(dict.fromkeys(mentioned(sentence)))
+                if len(codes) == 2:
+                    pairs.append((codes[0], codes[1]))
+            wrong = None
+            for a, b in pairs:
+                for line in pair_lines:
+                    if f"({a})" in line and f"({b})" in line:
+                        fact_neg = "not statistically significant" in line
+                        if fact_neg != claim_neg:
+                            wrong = (a, b, line)
+                        break
+                if wrong:
+                    break
+            if wrong:
+                a, b, line = wrong
+                issues.append(f"says the {a}-{b} difference is "
+                              f"{'not ' if claim_neg else ''}significant but the result says: "
+                              f"\"{line.strip()[:140]}\"")
+                break
 
     # 3b. a number attributed to the opposite group of the one the app stated
     facts = prov.get("facts") or []

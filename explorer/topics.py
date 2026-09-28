@@ -52,6 +52,8 @@ class Topic:
     note: str = ""
     requires: re.Pattern | None = None   # a second pattern that must also match
     unless: re.Pattern | None = None     # a pattern that switches the topic off
+    example: str = ""                    # a follow-up question that suits these variables
+                                         # (categorical codes: a share, not "mean PROGN")
 
     def matches(self, text: str) -> bool:
         return bool(self.pattern.search(text)) and \
@@ -266,6 +268,26 @@ TOPICS: list[Topic] = [
           note="school-questionnaire variables: join students to schools on CNT + CNTSCHID "
                "(the app's stu_sch view). SC013Q01TA: 1 public, 2 private; SC001Q01TA: "
                "community size from 1 village to 6 megacity"),
+    Topic("study programme and school track",
+          re.compile(r"\b(mittelschule|hauptschule|realschule|gesamtschule|gymnasium|gymnasien|"
+                     r"lyc[eé]e|liceo|lyceum|grammar school|comprehensive school|"
+                     r"(study|school|educational?|national) programme?s?|programme? type|"
+                     r"school track|tracked into|academic track|vocational track|"
+                     r"(academic|vocational|general) (schools?|tracks?|programs?|programmes?|education|streams?)|"
+                     r"isced|(types?|kinds?) of (secondary )?schools?|school types?|"
+                     r"lower secondary|upper secondary|secondary level)\b", re.I),
+          {"2018": ("PROGN", "ISCEDL", "ISCEDD", "ISCEDO"),
+           "2022": ("PROGN", "ISCEDP"),
+           "2025": ("PROGN", "ISCEDP")},
+          note="PROGN = the national study programme the student is enrolled in, with one "
+               "code per economy and programme (the codebook labels them, e.g. 'Austria: "
+               "academic secondary school'); ISCEDP (2022/2025) = the programme's ISCED 2011 "
+               "level and orientation (244 lower secondary general, 344 upper secondary "
+               "general, 354 upper secondary vocational); 2018 splits that into ISCEDL "
+               "(level), ISCEDD (designation) and ISCEDO (orientation: general/vocational). "
+               "Some economies leave PROGN empty in a cycle; the app reports coverage when "
+               "a statistic is asked for",
+          example="mean science score by ISCEDP programme level in Italy in 2025"),
     Topic("school resources and size",
           re.compile(r"school (size|resources)|class size|student-?teacher ratio|shortage|"
                      r"teacher shortage|teaching staff|educational material|\benrol\w*|"
@@ -450,7 +472,7 @@ def rows(topics: list[Topic], cycles=CYCLES, label_of=None) -> list[dict]:
                         "tables": ", ".join(f"{t.instrument}_{c}" for c in cyc),
                         "cycles": ", ".join(cyc),
                         "values": ("%d variables" % len(members)) if len(members) > 1 else "",
-                        "role": "standard", "construct": t.construct})
+                        "role": "standard", "construct": t.construct, "example": t.example})
     return out
 
 

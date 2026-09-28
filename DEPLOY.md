@@ -228,6 +228,14 @@ check with alerting on 5xx, and a custom domain.
   job; the others stay cheap. Compare planner models before switching:
   `python scripts/planner_compare.py gemini-2.5-flash <other model>` runs the
   live golden set per model and prints pass rate, planner latency and tokens.
+- Gemini 2.5 "thinks" before every reply unless given a budget. Only the
+  translator runs with `thinkingBudget` 0; the router, planner and
+  summarizer keep the model's dynamic default. Turning it off for the
+  summarizer saved 3-5 s per answer but misstated a significance verdict
+  in a live review, and without it the router sent the Ukraine 2018-2025
+  trend to a clarify in 3 of 8 runs. `PISA_THINKING_SUMMARY`, `PISA_THINKING_ROUTER`,
+  `PISA_THINKING_PLANNER`, `PISA_THINKING_TRANSLATE` override per role: an
+  integer token budget, `0` to switch thinking off, `auto` for the default.
 - `PISA_PLANNER` (default `grammar`) selects the closed plan grammar of
   `explorer/grammar.py`; `legacy` restores the free-text planner (SQL
   fragments written by the model) for comparison or rollback.

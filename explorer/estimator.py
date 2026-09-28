@@ -112,42 +112,67 @@ def replicates_from_frame(
 ) -> pd.DataFrame:
     """The estimation core, on an already-fetched frame (which may carry
     derived columns, e.g. a weighted-quartile assignment)."""
-    n_pv, n_w = len(measure_cols), len(ALL_WEIGHTS)
-    groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
+    return replicates_from_frame_multi(df, [measure_cols], by=by)[0]
 
-    key_rows, blocks, stats = [], [], []
+
+def _group_estimates(weights: np.ndarray, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(estimates (n_pv, 81), mask of the first PV) for one group: the
+    weighted mean of every PV column under every weight. When the PVs are
+    observed for the same students (the usual case: a student has all ten
+    or none), one masked matrix product covers all of them; otherwise each
+    column is masked on its own. Identical numbers either way."""
+    masks = ~np.isnan(values)                                   # (n, n_pv)
+    first_mask = masks[:, 0]
+    # Unobserved values count as 0 in the numerator and drop out of the
+    # denominator (the weight times the 0/1 mask): two matrix products per
+    # group, no row copies of the 81-column weight matrix per plausible
+    # value. A group with no observed values yields NaN by design (a
+    # question not administered there), so the 0/0 warnings are muted.
+    with np.errstate(invalid="ignore", divide="ignore"):
+        num = weights.T @ np.where(masks, values, 0.0)          # (81, n_pv)
+        den = weights.T @ masks.astype(float)                   # (81, n_pv)
+        return (num / den).T, first_mask
+
+
+def replicates_from_frame_multi(
+    df: pd.DataFrame, measure_groups: list[list[str]], by=()
+) -> list[pd.DataFrame]:
+    """Several measures on one fetched frame in a single pass over the
+    groups: each group's 81-column weight matrix is extracted once and
+    reused for every measure (a profile of twelve scores over 90 economies
+    used to extract it twelve times). One replicate frame per measure group,
+    in the order given — each exactly what replicates_from_frame returns."""
+    n_w = len(ALL_WEIGHTS)
+    groups = df.groupby(list(by), dropna=False, observed=True) if by else [((), df)]
+    per_measure: list[list] = [[] for _ in measure_groups]     # (key, estimates, stats)
     for key, g in groups:
         if not isinstance(key, tuple):
             key = (key,)
         weights = g[ALL_WEIGHTS].to_numpy(dtype=float)      # (n, 81)
-        estimates = np.empty((n_pv, n_w))
-        first_mask = None
-        for i, col in enumerate(measure_cols):
-            m = g[col].to_numpy(dtype=float)                # (n,)
-            mask = ~np.isnan(m)
-            if first_mask is None:
-                first_mask = mask
-            wm = weights[mask]
+        for j, cols in enumerate(measure_groups):
+            values = g[cols].to_numpy(dtype=float)          # (n, n_pv)
             # A group with no observed values yields NaN by design (e.g. a
-            # question not administered there) — suppress the 0/0 warnings.
-            with np.errstate(invalid="ignore", divide="ignore"):
-                estimates[i] = (wm.T @ m[mask]) / wm.sum(axis=0)
-        key_rows.append(key)
-        blocks.append(estimates)
-        stats.append(group_stats(g, first_mask))
+            # question not administered there) — the 0/0 warnings are muted.
+            estimates, first_mask = _group_estimates(weights, values)
+            per_measure[j].append((key, estimates, group_stats(g, first_mask)))
 
-    pv_idx = np.repeat(np.arange(1, n_pv + 1), n_w)
-    rep_idx = np.tile(np.arange(n_w), n_pv)
-    frames = []
-    for key, est, st in zip(key_rows, blocks, stats):
-        frame = pd.DataFrame({"pv": pv_idx, "rep": rep_idx, "value": est.ravel(), **st})
-        for col, val in zip(by, key):
-            frame[col] = val
-        frames.append(frame)
-    if not frames:      # no rows matched (e.g. an economy absent from this cycle)
-        return pd.DataFrame(columns=list(by) + ["pv", "rep", "value"] + GROUP_STATS)
-    out = pd.concat(frames, ignore_index=True)
-    return out[list(by) + ["pv", "rep", "value"] + GROUP_STATS]
+    out = []
+    for cols, rows in zip(measure_groups, per_measure):
+        n_pv = len(cols)
+        pv_idx = np.repeat(np.arange(1, n_pv + 1), n_w)
+        rep_idx = np.tile(np.arange(n_w), n_pv)
+        frames = []
+        for key, est, st in rows:
+            frame = pd.DataFrame({"pv": pv_idx, "rep": rep_idx, "value": est.ravel(), **st})
+            for col, val in zip(by, key):
+                frame[col] = val
+            frames.append(frame)
+        if not frames:      # no rows matched (e.g. an economy absent from this cycle)
+            out.append(pd.DataFrame(columns=list(by) + ["pv", "rep", "value"] + GROUP_STATS))
+            continue
+        frame = pd.concat(frames, ignore_index=True)
+        out.append(frame[list(by) + ["pv", "rep", "value"] + GROUP_STATS])
+    return out
 
 
 def combine(replicates: pd.DataFrame, by: tuple[str, ...] = ()) -> pd.DataFrame:

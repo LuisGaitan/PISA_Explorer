@@ -113,6 +113,50 @@ def test_contrasts_predictors_and_benchmarks():
         compile_({"statistic": "mean", "measures": ["MATH"], "benchmarks": ["Pacific Alliance"]})
 
 
+def test_school_composition_contrast_compiles_to_a_windowed_case():
+    # "immigrant students in immigrant schools vs ordinary schools": the
+    # school's weighted share of immigrant students is a window over the
+    # school, the cut splits schools, and "students" picks who is compared
+    p = compile_({"statistic": "gap", "measures": ["MATH"], "economies": ["AUT"], "cycles": ["2025"],
+                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 50,
+                               "students": [2, 3], "label": "immigrant students, majority-immigrant minus other schools"}})
+    g = p["group_col"]
+    # ELSE 0: a school with no immigrant students has a share of 0, not NULL
+    # (NULL dropped 23 of Austria's 256 schools from the "other" side)
+    assert g.startswith("CASE WHEN CNTSCHID IS NOT NULL AND IMMIG IN (2, 3) AND (100.0 * SUM(CASE WHEN IMMIG IN (2, 3) THEN W_FSTUWT ELSE 0 END) OVER (PARTITION BY CNT, CNTSCHID)")
+    assert ">= 50 THEN 1" in g and "< 50 THEN 0 END" in g
+    assert (p["minuend"], p["subtrahend"]) == (1, 0)
+    assert p["group_label"] == "immigrant students, majority-immigrant minus other schools"
+    assert p["_school_share"] == {"variable": "IMMIG", "codes": ["2", "3"], "cut": 50.0, "students": ["2", "3"]}
+    # every student compared, default label
+    p = compile_({"statistic": "gap", "measures": ["READ"], "economies": ["AUT"],
+                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 30}})
+    assert "IMMIG IN (2, 3) AND (" not in p["group_col"] and ">= 30 THEN 1" in p["group_col"]
+    assert p["_school_share"]["students"] is None
+    assert "at least 30%" in p["group_label"]
+    # the threshold is the planner's to state: a silent default of 50 once
+    # sat under a label saying "at least 30%"
+    with pytest.raises(grammar.GrammarError, match='needs "cut"'):
+        compile_({"statistic": "gap", "measures": ["READ"], "economies": ["AUT"],
+                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}}})
+    with pytest.raises(grammar.GrammarError, match="label names 30% but cut is 50"):
+        compile_({"statistic": "gap", "measures": ["READ"], "economies": ["CHL"],
+                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 50,
+                               "label": "schools with at least 30% immigrant students minus others"}})
+    # a WHERE on the composition variable would shrink each school to the
+    # filtered students before its share is measured: refused, with the fix
+    with pytest.raises(grammar.GrammarError, match='"students" list'):
+        compile_({"statistic": "gap", "measures": ["MATH"], "economies": ["AUT"],
+                  "filters": [{"variable": "IMMIG", "op": "in", "values": [2, 3]}],
+                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 50}})
+    with pytest.raises(grammar.GrammarError, match="percentage"):
+        compile_({"statistic": "gap", "measures": ["MATH"],
+                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 150}})
+    with pytest.raises(grammar.GrammarError, match="not a variable"):
+        compile_({"statistic": "gap", "measures": ["MATH"],
+                  "contrast": {"school_share_of": {"variable": "IMMIGRANT", "codes": [2, 3]}}})
+
+
 def test_overrides_sort_and_new_statistics():
     p = compile_({"statistic": "share", "cycles": ["2018", "2022"], "economies": ["EST"],
                   "measures": [{"code_share": {"variable": "ST184Q01HA", "codes": [1, 2]}}],
