@@ -855,12 +855,16 @@ def test_thinking_budget_per_role(monkeypatch):
     assert llm.thinking_budget("planner") is None
 
 
-def test_school_share_contrast_takes_students_and_cut_from_the_question():
+def test_school_share_contrast_takes_students_and_cut_from_the_question(monkeypatch):
     # live, the planner dropped the "students" list and the cut run to run:
     # "immigrant students in schools where at least half…" then compared
     # every student (492.1 in other schools) under an immigrant label
-    from explorer import grammar
+    from explorer import catalog, grammar
     from explorer.agent import Agent
+    # no catalog on CI: the grammar's variable check is answered here
+    monkeypatch.setattr(catalog, "describe",
+                        lambda code, cycle=None: pd.DataFrame([{"variable": code}]) if code in ("IMMIG", "CNT")
+                        else pd.DataFrame())
     agent = Agent.__new__(Agent)
     q = ("Compare math scores of immigrant students in Austrian schools where at least half the students "
          "are immigrants versus immigrant students in other schools in 2025. How many schools are in each group?")
