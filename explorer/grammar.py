@@ -318,38 +318,64 @@ def compile_school_share_contrast(c: dict) -> dict:
     codes = spec.get("codes")
     if not isinstance(codes, list) or not codes:
         raise GrammarError("school_share_of needs the codes that count (a list)")
-    if c.get("cut") is None:
-        raise GrammarError("school_share_of needs \"cut\": the user's threshold as a percentage of "
-                           "the school's students (50 when the question names none)")
-    try:
-        cut = float(c.get("cut"))
-    except (TypeError, ValueError):
-        raise GrammarError("cut must be a number (a percentage of the school's students)")
+    label_text = str(c.get("label") or "")
+    cut = None
+    if c.get("cut") is not None:
+        try:
+            cut = float(c.get("cut"))
+        except (TypeError, ValueError):
+            raise GrammarError("cut must be a number (a percentage of the school's students)")
+    # The label carries the user's words, so a threshold named there wins:
+    # a planner once split at a silent default of 50 under a label saying
+    # "at least 30%", and once wrote "at least half" with no cut at all
+    # (refusing that reached the user as an error, live).
+    named = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s*(?:%|percent|per cent)", label_text, re.I)]
+    words = {"half": 50.0, "majority": 50.0, "most": 50.0, "quarter": 25.0, "third": 100.0 / 3,
+             "two thirds": 200.0 / 3, "three quarters": 75.0}
+    from_words = [v for w, v in words.items() if re.search(r"\b" + w + r"\b", label_text, re.I)]
+    cut_from_label = None
+    if named:
+        cut_from_label = named[0]
+    elif from_words and cut is None:
+        cut_from_label = from_words[0]
+    if cut_from_label is not None and (cut is None or abs(cut - cut_from_label) > 1e-9):
+        cut = cut_from_label
+    defaulted = cut is None
+    if defaulted:
+        cut = 50.0
     if not 0 < cut <= 100:
         raise GrammarError("cut must be a percentage between 0 and 100")
-    # a label that names another threshold than the cut would put the user's
-    # words on the wrong numbers ("at least 30%" over a split at 50)
-    named = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s*(?:%|percent|per cent)",
-                                          str(c.get("label") or ""), re.I)]
-    if any(abs(x - cut) > 1e-9 for x in named):
-        raise GrammarError(f"the label names {named[0]:g}% but cut is {cut:g}; make them the same")
     students = c.get("students")
     if students is not None:
         students = students if isinstance(students, list) else [students]
         if not students:
             students = None
+    # "immigrant students in schools where …" with no "students" list would
+    # compare EVERY student under a label naming one kind (live: 492.1 for
+    # all students in other Austrian schools, called immigrant students).
+    # A label that opens with a kind of student restricts the comparison to
+    # the students counted in the share.
+    students_from_label = False
+    if students is None and re.match(r"^\s*(?!all\b|students\b|the students\b)[\w-]+(?: [\w-]+)? students\b",
+                                     label_text, re.I):
+        students = list(codes)
+        students_from_label = True
     share = school_share_expr(v, codes)
     who = "CNTSCHID IS NOT NULL"
     if students:
         who += f" AND {v} IN ({', '.join(_num(s) for s in students)})"
     group_col = (f"CASE WHEN {who} AND ({share}) >= {cut:g} THEN 1 "
                  f"WHEN {who} AND ({share}) < {cut:g} THEN 0 END")
-    label = str(c.get("label") or "").strip() or (
+    label = label_text.strip() or (
         f"schools where at least {cut:g}% of students have {v} in ({', '.join(_num(x) for x in codes)}) "
         f"minus schools below {cut:g}%")
+    if defaulted and not re.search(r"\d+(?:\.\d+)?\s*(?:%|percent|per cent)", label, re.I):
+        label += f" (schools split at {cut:g}% — no threshold was named)"
     return {"group_col": group_col, "minuend": 1, "subtrahend": 0, "group_label": label,
             "_school_share": {"variable": v, "codes": [_num(x) for x in codes], "cut": cut,
-                              "students": [_num(s) for s in students] if students else None}}
+                              "students": [_num(s) for s in students] if students else None,
+                              "cut_from_label": cut_from_label is not None, "cut_defaulted": defaulted,
+                              "students_from_label": students_from_label}}
 
 
 def compile_predictors(preds) -> tuple[list[str], list[str]]:
@@ -784,7 +810,10 @@ where most students are disadvantaged", "how many schools are X schools")
 (IMMIG codes [2, 3]; a questionnaire code otherwise), "cut" = the user's
 threshold in % (50 when none is named — say so in the explanation), and
 "students" = the codes of the students compared when the question is about
-a kind of student (immigrant students => [2, 3]; null for all students);
+a kind of student (immigrant students => [2, 3]; null for all students) —
+whenever the label opens with a kind of student ("immigrant students in
+schools where…") "students" MUST hold those codes, and "cut" MUST be the
+number the label names ("at least half" => 50, "30%" => 30);
 the app also reports how many schools fall on each side and how many
 students it sampled per school — never clarify that schools cannot be
 classified, and never plan raw_sql for it.

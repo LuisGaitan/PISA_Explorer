@@ -127,22 +127,47 @@ def test_school_composition_contrast_compiles_to_a_windowed_case():
     assert ">= 50 THEN 1" in g and "< 50 THEN 0 END" in g
     assert (p["minuend"], p["subtrahend"]) == (1, 0)
     assert p["group_label"] == "immigrant students, majority-immigrant minus other schools"
-    assert p["_school_share"] == {"variable": "IMMIG", "codes": ["2", "3"], "cut": 50.0, "students": ["2", "3"]}
+    assert p["_school_share"] == {"variable": "IMMIG", "codes": ["2", "3"], "cut": 50.0, "students": ["2", "3"],
+                                  "cut_from_label": False, "cut_defaulted": False, "students_from_label": False}
+    # a label opening with a kind of student restricts the comparison to
+    # the students counted (live: "immigrant students in schools…" with no
+    # students list described every student as immigrant students)
+    p = compile_({"statistic": "gap", "measures": ["MATH"], "economies": ["AUT"],
+                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 50,
+                               "label": "immigrant students in schools where at least half the students have an immigrant background minus those in other schools"}})
+    assert p["_school_share"]["students"] == ["2", "3"] and p["_school_share"]["students_from_label"] is True
+    assert "IMMIG IN (2, 3) AND (" in p["group_col"]
+    for label in ("students in schools where at least 50% of students have an immigrant background minus others",
+                  "all students in schools with at least 50% immigrants minus the rest"):
+        p = compile_({"statistic": "gap", "measures": ["MATH"], "economies": ["AUT"],
+                      "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 50, "label": label}})
+        assert p["_school_share"]["students"] is None, label
     # every student compared, default label
     p = compile_({"statistic": "gap", "measures": ["READ"], "economies": ["AUT"],
                   "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 30}})
     assert "IMMIG IN (2, 3) AND (" not in p["group_col"] and ">= 30 THEN 1" in p["group_col"]
     assert p["_school_share"]["students"] is None
     assert "at least 30%" in p["group_label"]
-    # the threshold is the planner's to state: a silent default of 50 once
-    # sat under a label saying "at least 30%"
-    with pytest.raises(grammar.GrammarError, match='needs "cut"'):
-        compile_({"statistic": "gap", "measures": ["READ"], "economies": ["AUT"],
-                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}}})
-    with pytest.raises(grammar.GrammarError, match="label names 30% but cut is 50"):
-        compile_({"statistic": "gap", "measures": ["READ"], "economies": ["CHL"],
+    # the label carries the user's words, so its threshold wins: a silent
+    # default of 50 once sat under "at least 30%" (Chile), and "at least
+    # half" with no cut at all reached a user as an error, live
+    p = compile_({"statistic": "gap", "measures": ["READ"], "economies": ["CHL"],
                   "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 50,
                                "label": "schools with at least 30% immigrant students minus others"}})
+    assert p["_school_share"]["cut"] == 30.0 and ">= 30 THEN 1" in p["group_col"]
+    assert p["_school_share"]["cut_from_label"] is True
+    p = compile_({"statistic": "gap", "measures": ["MATH"], "economies": ["AUT"],
+                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]},
+                               "label": "immigrant students in schools where at least half the students are immigrants minus other schools"}})
+    assert p["_school_share"]["cut"] == 50.0 and p["_school_share"]["cut_defaulted"] is False
+    p = compile_({"statistic": "gap", "measures": ["MATH"], "economies": ["AUT"],
+                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]},
+                               "label": "schools with many immigrant students minus few"}})
+    assert p["_school_share"]["cut"] == 50.0 and p["_school_share"]["cut_defaulted"] is True
+    assert p["group_label"].endswith("(schools split at 50% — no threshold was named)")
+    with pytest.raises(grammar.GrammarError, match="percentage between 0 and 100"):
+        compile_({"statistic": "gap", "measures": ["MATH"],
+                  "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 150}})
     # a WHERE on the composition variable would shrink each school to the
     # filtered students before its share is measured: refused, with the fix
     with pytest.raises(grammar.GrammarError, match='"students" list'):

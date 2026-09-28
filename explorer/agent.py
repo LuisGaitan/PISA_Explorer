@@ -2081,6 +2081,54 @@ class Agent:
              "median": float(r.median), "p90": float(r.p90),
              "students_per_school": float(r.students_per_school)} for r in rows.itertuples()]
 
+    # "immigrant students in / at / attending … schools" — the question itself
+    # restricts a school-composition comparison to immigrant students
+    SHARE_STUDENT_WORDS = re.compile(
+        r"\b(immigrants?|migrants?|foreign-born|first-generation|second-generation)"
+        r"(\s+(students?|kids|children|pupils|youth|youngsters))?\s+(in|at|attending|who attend|"
+        r"who are (in|at)|enrolled in)\s+(?:\S+\s+){0,4}schools?\b", re.I)
+    SHARE_CUT_WORDS = re.compile(r"(\d+(?:\.\d+)?)\s*(?:%|percent|per cent)", re.I)
+    SHARE_HALF_WORDS = re.compile(r"\b(half|majority|most|mostly|predominantly|disproportionately)\b", re.I)
+
+    def _school_share_from_question(self, plan: dict, question: str) -> None:
+        """The planner is inconsistent on a school-composition contrast: run
+        to run it drops the "students" list or the "cut" the user named.
+        Whatever the question states is applied here, deterministically, and
+        the contrast is recompiled with a label that says who is compared."""
+        share = plan.get("_school_share")
+        if not share or plan.get("template") != "gap":
+            return
+        contrast = dict((plan.get("_grammar") or {}).get("contrast") or {})
+        contrast.setdefault("school_share_of", {"variable": share["variable"], "codes": list(share["codes"])})
+        changed = []
+        if share.get("students") is None and share["variable"] == "IMMIG" \
+                and self.SHARE_STUDENT_WORDS.search(question or ""):
+            contrast["students"] = list(share["codes"])
+            changed.append("students")
+        if share.get("cut_defaulted"):
+            m = self.SHARE_CUT_WORDS.search(question or "")
+            if m and 0 < float(m.group(1)) <= 100:
+                contrast["cut"] = float(m.group(1))
+                changed.append("cut")
+            elif self.SHARE_HALF_WORDS.search(question or ""):
+                contrast["cut"] = 50.0
+                changed.append("cut")
+        if not changed:
+            return
+        cut = float(contrast.get("cut", share.get("cut") or 50.0))
+        if "students" in changed:
+            contrast["label"] = (f"immigrant students in schools where at least {cut:g}% of students have an "
+                                 f"immigrant background minus immigrant students in other schools")
+        elif contrast.get("label"):
+            contrast["label"] = re.sub(r"\s*\(schools split at [\d.]+% — no threshold was named\)$", "",
+                                       str(contrast["label"]))
+        try:
+            plan.update(grammar.compile_school_share_contrast(contrast))
+        except grammar.GrammarError:
+            return
+        plan["_school_share"]["from_question"] = changed
+        self._fire("hook:school_share_from_question")
+
     CI_WORDS = re.compile(r"\b(confidence intervals?|95\s*%\s*ci\b|\bci\b|intervalos? de confianza|"
                           r"konfidenzintervall\w*|intervalle de confiance)", re.I)
     CHINA_WORDS = re.compile(r"\b(shanghai|beijing|jiangsu|zhejiang|china|chinese)\b", re.I)
@@ -5858,6 +5906,7 @@ class Agent:
             plan["_app_notes"] = list(nearest_notes) + ([self.VIZ_DEFAULT_NOTE] if viz_default else [])
         plan["_question"] = q_en
         plan["_language"] = language
+        self._school_share_from_question(plan, q_en)
         if plan.get("limitation_note") and plan.get("template") != "raw_sql":
             # a caveat that contradicts what the app computes ("the system
             # does not perform significance tests") is dropped

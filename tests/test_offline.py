@@ -853,3 +853,40 @@ def test_thinking_budget_per_role(monkeypatch):
     assert llm.thinking_budget("planner") == 0
     monkeypatch.setenv("PISA_THINKING_PLANNER", "auto")
     assert llm.thinking_budget("planner") is None
+
+
+def test_school_share_contrast_takes_students_and_cut_from_the_question():
+    # live, the planner dropped the "students" list and the cut run to run:
+    # "immigrant students in schools where at least half…" then compared
+    # every student (492.1 in other schools) under an immigrant label
+    from explorer import grammar
+    from explorer.agent import Agent
+    agent = Agent.__new__(Agent)
+    q = ("Compare math scores of immigrant students in Austrian schools where at least half the students "
+         "are immigrants versus immigrant students in other schools in 2025. How many schools are in each group?")
+    plan = grammar.compile_plan({"statistic": "gap", "measures": ["MATH"], "economies": ["AUT"], "cycles": ["2025"],
+                                 "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}}},
+                                {}, {"AUT"})
+    assert plan["_school_share"]["students"] is None and plan["_school_share"]["cut_defaulted"] is True
+    agent._school_share_from_question(plan, q)
+    s = plan["_school_share"]
+    assert s["students"] == ["2", "3"] and s["cut"] == 50.0 and s["from_question"] == ["students", "cut"]
+    assert "IMMIG IN (2, 3) AND (" in plan["group_col"] and ">= 50 THEN 1" in plan["group_col"]
+    assert plan["group_label"].startswith("immigrant students in schools where at least 50%")
+    assert "hook:school_share_from_question" in agent._fired
+    # a percentage in the question sets the cut; "students in schools" names no kind
+    plan = grammar.compile_plan({"statistic": "gap", "measures": ["READ"], "economies": ["SWE"],
+                                 "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]},
+                                              "label": "students in schools with many immigrant students minus others"}},
+                                {}, {"SWE"})
+    agent._school_share_from_question(plan, "In Sweden 2025, do students in schools with at least 30% immigrant "
+                                            "students score lower in reading than students in other schools?")
+    s = plan["_school_share"]
+    assert s["students"] is None and s["cut"] == 30.0 and s["from_question"] == ["cut"]
+    assert plan["group_label"] == "students in schools with many immigrant students minus others"
+    # nothing to take from the question: the plan is left alone
+    plan = grammar.compile_plan({"statistic": "gap", "measures": ["READ"], "economies": ["SWE"],
+                                 "contrast": {"school_share_of": {"variable": "IMMIG", "codes": [2, 3]}, "cut": 25,
+                                              "students": [2, 3], "label": "x"}}, {}, {"SWE"})
+    agent._school_share_from_question(plan, "immigrant students in schools with at least 25% immigrants vs others")
+    assert "from_question" not in plan["_school_share"] and plan["group_label"] == "x"
